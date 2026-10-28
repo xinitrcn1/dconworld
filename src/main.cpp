@@ -1,3 +1,4 @@
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +13,7 @@
 #include "gamestate.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "player_graphics.hpp"
 #include "render.hpp"
 #include "reports.hpp"
 #include "selftest.hpp"
@@ -45,9 +47,12 @@ namespace {
             "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
+            "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
+            "                      U D L R J (N = nothing) held for the given ticks\n"
             "\n"
             "controls: arrows/WASD move, Z/K/Space jump, R respawn, left click teleport,\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
+            "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
             "          1/2/3 slugcat, Esc quit\n",
             argv0);
@@ -81,8 +86,10 @@ namespace {
             auto const cams = camera_positions();
             vec2 const first = cams.empty() ? vec2{0.f, 0.f} : cams[0];
             spawn = selftest::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
-            for (size_t i = 0; i < players.size(); ++i)
+            for (size_t i = 0; i < players.size(); ++i) {
                 player::reset(gs, players[i], rid, spawn + vec2{float(i) * 20.f, 0.f});
+                player_graphics::reset(gs, players[i]);
+            }
             auto const& w = gs.world;
             reports::add_log("room " + std::string{gs.to_string_view(w.room_get_display_name(rid))} + " ("
                 + std::string{gs.to_string_view(w.region_get_name(w.room_get_region_from_region_membership(rid)))} + ") "
@@ -176,6 +183,7 @@ int main(int argc, char* argv[]) {
     std::string start_room = "su_a22";
     std::string screenshot;
     uint32_t screenshot_ticks = 80;
+    std::string script;
     bool selftest_mode = false;
     int32_t fuzz_ticks = -1;
     player::slugcat_name slugcat = player::slugcat_name::white;
@@ -197,6 +205,8 @@ int main(int argc, char* argv[]) {
                 fuzz_ticks = std::atoi(argv[++i]);
         } else if (a == "--screenshot") {
             screenshot = next();
+        } else if (a == "--script") {
+            script = next();
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -252,11 +262,39 @@ int main(int argc, char* argv[]) {
     bool const headless = !screenshot.empty();
     if (!render::init(r, int(gs.screen_width), int(gs.screen_height), "rwcpp", headless))
         return 1;
-    render::load_font(r, gs.fs);
+    render::load_assets(r, gs);
 
     if (headless) {
+        auto const step = [&](player::input_package const& in) {
+            player::update(gs, a.players[0], a.view(), in);
+            player_graphics::update(gs, a.players[0], a.view());
+        };
         for (uint32_t t = 0; t < screenshot_ticks; ++t)
-            player::update(gs, a.players[0], a.view(), player::input_package{});
+            step(player::input_package{});
+        // scripted input: comma separated "<letters><ticks>"
+        size_t pos = 0;
+        while (pos < script.size()) {
+            size_t const end = std::min(script.find(',', pos), script.size());
+            std::string const tok = script.substr(pos, end - pos);
+            pos = end + 1;
+            float ax = 0.f, ay = 0.f;
+            bool jmp = false;
+            size_t i = 0;
+            for (; i < tok.size() && std::isalpha(static_cast<unsigned char>(tok[i])); ++i) {
+                switch (tok[i]) {
+                case 'U': ay += 1.f; break;
+                case 'D': ay -= 1.f; break;
+                case 'L': ax -= 1.f; break;
+                case 'R': ax += 1.f; break;
+                case 'J': jmp = true; break;
+                default: break;
+                }
+            }
+            int const n = i < tok.size() ? std::atoi(tok.c_str() + i) : 1;
+            for (int k = 0; k < n; ++k)
+                step(player::make_input(ax, ay, jmp, false, false));
+        }
+        render::use_room(r, gs, a.room);
         a.update_camera(float(r.width), float(r.height));
         render::draw_frame(r, gs, a.view(), 1.f, a.cam, a.hud(false, false));
         bool const ok = render::save_screenshot(r, screenshot.c_str());
@@ -286,6 +324,7 @@ int main(int argc, char* argv[]) {
                 in = i == 1 ? gamepad_input(pad) : player::input_package{};
             }
             player::update(gs, a.players[i], view, in);
+            player_graphics::update(gs, a.players[i], view);
         }
     };
     while (running) {
@@ -306,8 +345,10 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                if (e.button.button == SDL_BUTTON_LEFT)
+                if (e.button.button == SDL_BUTTON_LEFT) {
                     player::reset(gs, a.players[0], a.room, render::screen_to_room(r, a.cam, e.button.x, e.button.y));
+                    player_graphics::reset(gs, a.players[0]);
+                }
                 break;
             case SDL_EVENT_KEY_DOWN: {
                 if (e.key.repeat)
@@ -329,8 +370,10 @@ int main(int argc, char* argv[]) {
                 switch (e.key.key) {
                 case SDLK_ESCAPE: running = false; break;
                 case SDLK_R:
-                    for (size_t i = 0; i < a.players.size(); ++i)
+                    for (size_t i = 0; i < a.players.size(); ++i) {
                         player::reset(gs, a.players[i], a.room, a.spawn + vec2{float(i) * 20.f, 0.f});
+                        player_graphics::reset(gs, a.players[i]);
+                    }
                     break;
                 case SDLK_PAGEDOWN: a.enter_room(room_at((uint32_t(a.room.index()) + 1) % n)); break;
                 case SDLK_PAGEUP: a.enter_room(room_at((uint32_t(a.room.index()) + n - 1) % n)); break;
@@ -339,6 +382,8 @@ int main(int argc, char* argv[]) {
                 case SDLK_C: a.follow_camera = !a.follow_camera; break;
                 case SDLK_F1: r.show_hud = !r.show_hud; break;
                 case SDLK_F2: r.show_cameras = !r.show_cameras; break;
+                case SDLK_G: r.show_geometry = !r.show_geometry; break;
+                case SDLK_B: r.night_time = r.night_time > 0.5f ? 0.f : 1.f; break;
                 case SDLK_F5:
                     // co-op slots are bounded by the player object's size in dcon
                     if (a.players.size() < 4) {
@@ -385,6 +430,7 @@ int main(int argc, char* argv[]) {
         step_once = false;
 
         a.update_camera(float(r.width) / a.cam.zoom, float(r.height) / a.cam.zoom);
+        render::use_room(r, gs, a.room);
         float const alpha = paused ? 1.f : float(accumulator) / float(tick_ns);
         render::draw_frame(r, gs, a.view(), alpha, a.cam, a.hud(paused, slow));
         render::present(r);

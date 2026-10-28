@@ -12,6 +12,7 @@
 //   exits/dens 2957           -> 8192
 //   room nodes 3393           -> 8192 (+ ~460k connectivity entries pooled)
 //   players: co-op up to 4    -> 8
+//   palettes ~50 files        -> 128
 //
 // Tags: `scenario` = static world data loaded from the game files,
 //       `save` = simulation state.
@@ -27,6 +28,16 @@ make_index{text_key}{uint32_t}
 // World
 //
 
+// A palette PNG ("palettes/palette<number>.png"). Ids are compact (only the
+// palettes rooms/regions use), each one is a layer of the palette texture array
+object{
+	name{palette}
+	storage_type{contiguous}
+	size{128}
+	tag{scenario}
+	property{ name{number} type{uint16_t} }
+}
+
 object{
 	name{region}
 	storage_type{contiguous}
@@ -34,7 +45,7 @@ object{
 	tag{scenario}
 	property{ name{name} type{text_key} }
 	property{ name{display_name} type{text_key} }
-	property{ name{palette} type{uint16_t} }
+	property{ name{palette} type{palette_id} }
 	property{ name{bat_deplete_cycles_min} type{uint16_t} }
 	property{ name{bat_deplete_cycles_max} type{uint16_t} }
 	property{ name{bat_deplete_cycles_max_if_less_than_five_left} type{uint16_t} }
@@ -70,11 +81,11 @@ object{
 	property{ name{first_tile} type{tile_id} }
 	property{ name{preprocessing_generation} type{uint16_t} }
 	property{ name{connectivity_templates} type{uint16_t} }
-	// RoomSettings (template and room file already merged); -1 = unset
-	property{ name{palette} type{int16_t} }
+	// RoomSettings (template and room file already merged); invalid/-1 = unset
+	property{ name{palette} type{palette_id} }
 	property{ name{effect_color_a} type{int16_t} }
 	property{ name{effect_color_b} type{int16_t} }
-	property{ name{fade_palette} type{int16_t} }
+	property{ name{fade_palette} type{palette_id} }
 	property{ name{fade_palette_amount} type{float} }
 	property{ name{danger_type} type{world::danger_type} }
 	property{ name{grime} type{float} }
@@ -395,6 +406,9 @@ object{
 	property{ name{submerged} type{uint8_t} }
 	property{ name{lungs_exhausted} type{uint8_t} }
 	property{ name{drown} type{float} }
+
+	// PlayerGraphics: head, legs and tail body parts, draw positions, blink
+	property{ name{graphics} type{::player::graphics_state} }
 }
 // the physical body a player controls
 relationship{

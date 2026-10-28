@@ -81,9 +81,11 @@ namespace player {
     slugcat_stats make_stats(slugcat_name name) noexcept {
         slugcat_stats s;
         if (name == slugcat_name::yellow) {
+            s.body_color = rw::vec3{1.f, 1.f, 0.4509804f};
             s.body_weight_fac = 0.95f;
             s.lungs_fac = 1.2f;
         } else if (name == slugcat_name::red) {
+            s.body_color = rw::vec3{1.f, 0.4509804f, 0.4509804f};
             s.runspeed_fac = 1.2f;
             s.body_weight_fac = 1.12f;
             s.pole_climb_speed_fac = 1.25f;
@@ -335,6 +337,8 @@ namespace player {
         auto const c1 = physics::add_chunk(state, o, pos, 8.f, mass / 2.f);
         physics::add_connection(state, o, c0, c1, 17.f, physics::connection_type::normal, 1.f, 0.5f);
         state.world.try_create_player_body(id, o);
+        // erasable slots are reused: drop any graphics state left by a previous player
+        state.world.player_set_graphics(id, ::player::graphics_state{});
         p.flip_direction() = p.random().value() < 0.5f ? -1 : 1;
         return id;
     }

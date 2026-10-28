@@ -624,10 +624,15 @@ namespace world {
 
             // RoomSettings, -1 meaning "not set"
             auto const& t = r.settings;
-            dc.room_set_palette(rid, t.palette ? int16_t(*t.palette) : int16_t(-1));
+            // vanilla falls back on the region palette through the settings templates
+            dc.room_set_palette(rid, t.palette ? s.palette_for(*t.palette) : dcon::palette_id{});
+            if (!dc.room_get_palette(rid) && r.region)
+                dc.room_set_palette(rid, dc.region_get_palette(r.region));
+            if (!dc.room_get_palette(rid))
+                dc.room_set_palette(rid, s.palette_for(0));
             dc.room_set_effect_color_a(rid, t.effect_color_a ? int16_t(*t.effect_color_a) : int16_t(-1));
             dc.room_set_effect_color_b(rid, t.effect_color_b ? int16_t(*t.effect_color_b) : int16_t(-1));
-            dc.room_set_fade_palette(rid, t.fade_palette_index ? int16_t(*t.fade_palette_index) : int16_t(-1));
+            dc.room_set_fade_palette(rid, t.fade_palette_index ? s.palette_for(*t.fade_palette_index) : dcon::palette_id{});
             dc.room_set_fade_palette_amount(rid, t.fade_palette_amount.value_or(0.f));
             dc.room_set_danger_type(rid, t.danger_type ? to_danger_type(*t.danger_type) : danger_type::rain);
             dc.room_set_grime(rid, t.grime.value_or(0.f));
@@ -732,7 +737,7 @@ namespace world {
             parsers::token_generator gen(of->to_string_view());
             parsers::region_context ctx{s, uint32_t(region.index())};
             auto const props = parsers::parse_region_properties(gen, ctx, err);
-            dc.region_set_palette(region, uint16_t(props.palette));
+            dc.region_set_palette(region, s.palette_for(props.palette));
             dc.region_set_bat_deplete_cycles_min(region, uint16_t(props.bat_deplete_cycles_min));
             dc.region_set_bat_deplete_cycles_max(region, uint16_t(props.bat_deplete_cycles_max));
             dc.region_set_bat_deplete_cycles_max_if_less_than_five_left(region, uint16_t(props.bat_deplete_cycles_max_if_less_than_five_left));

@@ -37,6 +37,7 @@ namespace sys {
         std::vector<std::string> text;
         std::unordered_map<std::string, dcon::room_id> room_by_name;
         std::unordered_map<std::string, dcon::region_id> region_by_name;
+        std::unordered_map<uint32_t, dcon::palette_id> palette_by_number;
 
         dcon::text_key add_text(std::string_view sv) {
             text.emplace_back(sv);
@@ -46,6 +47,15 @@ namespace sys {
             return k ? std::string_view{text[size_t(k.index())]} : std::string_view{};
         }
         dcon::room_id find_room(std::string_view name) const;
+        // the palette object for "palette<number>.png", created on first use
+        dcon::palette_id palette_for(uint32_t number) {
+            if (auto const it = palette_by_number.find(number); it != palette_by_number.end())
+                return it->second;
+            auto const pid = world.create_palette();
+            world.palette_set_number(pid, uint16_t(number));
+            palette_by_number.emplace(number, pid);
+            return pid;
+        }
     };
 
     std::unique_ptr<game_state> make_game_state();

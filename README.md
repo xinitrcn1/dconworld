@@ -36,7 +36,7 @@ pass several `--root`s and earlier ones take priority (mergedmods over base).
 Controls: arrows/WASD move, Z/K/Space jump, R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
-outlines, F5 adds a co-op player (driven by the gamepad), P pause, N single
+outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
 step, T slow motion, 1/2/3 Survivor/Monk/Hunter. A gamepad (left stick, d-pad,
 south button) also drives player one when playing alone.
 
@@ -55,14 +55,16 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/gamestate.hpp` | `sys::game_state`: the `dcon::data_container world` plus non-SoA globals (constants, strings, lookup maps, filesystem) |
 | `src/dcon_generated.txt` | DataContainer definitions for every object (regions, rooms, tiles, cameras, exits, shortcuts, nodes, physical objects, body chunks, connections, players) with their size bounds |
 | `deps/` | FetchContent scripts for DataContainer, TBB, glm, GLEW and stb |
-| `assets/` | our own assets: anthiel's VGA font for the HUD (copied next to the binary) |
+| `assets/` | our own assets, copied next to the binary: anthiel's VGA font, the room shaders (`shaders/`, from anthiel) and the slugcat sprite atlas (`slugcat.png` + `slugcat.txt`) |
+| `tools/pack_dms.py` | packs DressMySlugcat template atlases into `assets/slugcat.*` (strips the guide markers, transcribes the frames to plain text) |
+| `src/player_graphics.*` | simplified `PlayerGraphics` port: head/legs/tail body parts and vanilla sprite selection |
 | `src/layered_fs.*` | case insensitive, layered, read only view of the game files (RomFS); files are mmap'd |
 | `ParserGenerator/`, `src/parser_defs.txt` | build time generated parsers for `key: value` files (region `properties.txt`, room `_settings.txt` and templates) |
 | `src/parsers.*` | tokenizer and value parsers used by the generated code |
 | `src/world.*` | room file parsing (in parallel with TBB), loading into the data container, `room_view` tile helpers |
 | `src/physics.*` | `BodyChunk` and `BodyChunkConnection` ports over the data container |
 | `src/player.*` | slugcat movement (`Player.cs` port); players are data container objects (co-op ready) |
-| `src/render.*` | OpenGL 3.3 (GLEW, glm) debug renderer in an SDL3 window: geometry, every player in the room and a VGA font HUD |
+| `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/selftest.*` | scripted movement scenarios and the fuzzer |
 | `og/` | decompiled game source used as the reference (not tracked) |
 
@@ -101,3 +103,20 @@ Not ported yet: shortcut travel, items and grasps, creatures and object to
 object collision, zero gravity, climbable vines, Remix (MMF) options,
 Downpour/Watcher slugcat abilities, sand terrain (`TerrainManager`), and the
 `modify/` mod merge system (needed for Downpour/Watcher regions).
+
+### Rendering
+
+Rooms are drawn from their camera images (`<room>_<n>.png`, placed at the
+vanilla camera positions) with anthiel's level shader: every palette a room
+or region uses is a `palette` object in the data container and one layer of a
+palette texture array; `effectcolors.png` provides effect colours A/B and
+grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
+`FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
+anchors, plus the 4 segment tail mesh. Not done yet: arms/hands, skyboxes and
+other room effects, vanilla water.
+
+## License
+
+GPLv3 (see LICENSE), like anthiel which this is based on. The slugcat sprite
+atlas is packed from the DressMySlugcat template sprites
+(github.com/MatheusVigaro/DressMySlugcat), which are derived from Rain World.

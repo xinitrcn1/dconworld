@@ -83,9 +83,36 @@ namespace player {
         float swim_boost_min_air = 0.5f;
         float drown_threshold = 1.f / 3.f;
         float lungs_fac = 1.f;
+        // PlayerGraphics.DefaultSlugcatColor
+        rw::vec3 body_color{1.f, 1.f, 1.f};
     };
     enum class slugcat_name : uint8_t { white, yellow, red };
     slugcat_stats make_stats(slugcat_name name) noexcept;
+
+    // BodyPart (GenericBodyPart / TailSegment) of the PlayerGraphics module
+    struct body_part {
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+        float rad = 1.f;
+        float stretched = 1.f; // TailSegment.stretched
+    };
+
+    // PlayerGraphics state that drives the sprites (purely cosmetic)
+    struct graphics_state {
+        rw::vec2 draw_pos[2];      // drawPositions[i, 0]
+        rw::vec2 last_draw_pos[2]; // drawPositions[i, 1]
+        body_part head;
+        body_part legs;
+        rw::vec2 legs_direction{0.f, -1.f};
+        body_part tail[4];
+        rw::vec2 look_direction{0.f, 0.f};
+        rw::vec2 last_look_direction{0.f, 0.f};
+        int32_t blink = 0;
+        // cosmetic randomness, kept apart from the gameplay rng
+        rw::rng random{0x2545F491u};
+        uint8_t initialized = 0;
+    };
 
     // Player.input: the last 10 ticks of input, [0] is the current one
     struct input_history {

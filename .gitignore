@@ -15,3 +15,9 @@
 !cmake/*.cmake
 !assets/
 !assets/*.png
+!LICENSE
+!assets/*.txt
+!assets/shaders/
+!assets/shaders/*
+!tools/
+!tools/*.py

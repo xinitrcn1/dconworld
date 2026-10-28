@@ -23,11 +23,18 @@ namespace parsers {
     float parse_float(std::string_view contents, error_handler& err) noexcept {
         if (!contents.empty() && contents[0] == '+')
             contents.remove_prefix(1);
-        float v = 0.f;
-        auto const [ptr, ec] = std::from_chars(contents.data(), contents.data() + contents.size(), v);
-        if (ec != std::errc{})
+        //float v = 0.f;
+        //auto const [ptr, ec] = std::from_chars(contents.data(), contents.data() + contents.size(), v);
+        //if (ec != std::errc{})
+        //    err.add_error("expected number got \"" + std::string{contents} + "\"");
+        //return v;
+        std::string token(contents.data(), contents.data() + contents.size());
+        char* end = nullptr;
+        float val = std::strtof(token.c_str(), &end);
+        if (end != token.c_str() + token.size()) {
             err.add_error("expected number got \"" + std::string{contents} + "\"");
-        return v;
+        }
+        return val;
     }
     bool parse_bool(std::string_view contents, error_handler& err) noexcept {
         // settings files use ON/OFF, properties use true/false

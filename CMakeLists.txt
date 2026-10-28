@@ -60,6 +60,7 @@ add_executable(rwcpp
     src/world.cpp
     src/physics.cpp
     src/player.cpp
+    src/player_graphics.cpp
     src/render.cpp
     src/selftest.cpp
     "${GENERATED_DIR}/dcon_generated.hpp"
@@ -80,7 +81,7 @@ target_link_libraries(rwcpp PRIVATE
 )
 target_compile_options(rwcpp PRIVATE -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
 
-# our own assets (the HUD font) are looked up next to the executable
+# our own assets (HUD font, shaders, slugcat atlas) are looked up next to the executable
 add_custom_command(TARGET rwcpp POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:rwcpp>/assets"
     VERBATIM
