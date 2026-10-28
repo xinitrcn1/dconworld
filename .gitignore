@@ -1,0 +1,17 @@
+*
+!.gitignore
+!*.md
+!CMakeLists.txt
+!src/
+!src/*.h
+!src/*.hpp
+!src/*.cpp
+!src/*.txt
+!ParserGenerator/
+!ParserGenerator/*.cpp
+!deps/
+!deps/*/
+!cmake/
+!cmake/*.cmake
+!assets/
+!assets/*.png

@@ -1,0 +1,880 @@
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
+#include "world.hpp"
+#include "parser_defs_generated.hpp"
+#include "reports.hpp"
+#include "text.hpp"
+
+namespace sys {
+    std::unique_ptr<game_state> make_game_state() {
+        return std::make_unique<game_state>();
+    }
+    dcon::room_id game_state::find_room(std::string_view name) const {
+        auto const it = room_by_name.find(text::to_lowercase_native(name));
+        return it == room_by_name.end() ? dcon::room_id{} : it->second;
+    }
+}
+
+namespace world {
+    //
+    // room_view (Room.cs tile helpers)
+    //
+    slope_direction room_view::identify_slope(int32_t x, int32_t y) const noexcept {
+        if (get_terrain(x, y) == terrain::slope) {
+            if (get_terrain(x - 1, y) == terrain::solid) {
+                if (get_terrain(x, y - 1) == terrain::solid)
+                    return slope_direction::up_right;
+                if (get_terrain(x, y + 1) == terrain::solid)
+                    return slope_direction::down_right;
+            } else if (get_terrain(x + 1, y) == terrain::solid) {
+                if (get_terrain(x, y - 1) == terrain::solid)
+                    return slope_direction::up_left;
+                if (get_terrain(x, y + 1) == terrain::solid)
+                    return slope_direction::down_left;
+            }
+        }
+        return slope_direction::broken;
+    }
+
+    bool room_view::visual_contact(rw::vec2 a, rw::vec2 b) const noexcept {
+        if (get_tile(a).solid() || get_tile(b).solid())
+            return false;
+        float const d = rw::distance(a, b);
+        for (float t = 20.f; t < d; t += 20.f)
+            if (get_tile(rw::lerp(a, b, t / d)).solid())
+                return false;
+        return true;
+    }
+
+    rw::ivec2 room_view::shortcut_entrance_hole_direction(rw::ivec2 pos) const noexcept {
+        for (auto const d : rw::custom::four_directions)
+            if (get_terrain(pos.x + d.x, pos.y + d.y) != terrain::solid)
+                return d;
+        return rw::ivec2{0, 0};
+    }
+
+    shortcut_data room_view::get_shortcut_data(rw::ivec2 pos) const noexcept {
+        shortcut_data r{pos, pos, 0, shortcut_type::dead_end, dcon::room_exit_id{}};
+        // Room.shortcutData: note the vanilla quirk where (0, 0) never matches
+        if (s == nullptr || (pos.x == 0 && pos.y == 0))
+            return r;
+        auto const& dc = s->world;
+        auto const range = dc.room_range_of_shortcut_location(id);
+        for (auto it = range.first; it != range.second; ++it) {
+            auto const sc = dc.shortcut_location_get_shortcut(*it);
+            if (dc.shortcut_get_start(sc) == pos) {
+                r.dest = dc.shortcut_get_dest(sc);
+                r.length = dc.shortcut_get_length(sc);
+                r.type = dc.shortcut_get_type(sc);
+                r.dest_exit = dc.shortcut_get_exit_from_shortcut_destination(sc);
+                break;
+            }
+        }
+        return r;
+    }
+
+    room_view get_room_view(sys::game_state const& s, dcon::room_id rid) noexcept {
+        auto const& dc = s.world;
+        room_view v;
+        v.s = &s;
+        v.id = rid;
+        v.width = dc.room_get_width(rid);
+        v.height = dc.room_get_height(rid);
+        auto const first = dc.room_get_first_tile(rid).id;
+        v.terrains = &dc.tile_get_terrain(first);
+        v.flags = &dc.tile_get_flags(first);
+        v.shortcuts = &dc.tile_get_shortcut(first);
+        v.waters = &dc.tile_get_water(first);
+        v.default_water_level = dc.room_get_water_level(rid);
+        v.water = v.default_water_level != -1;
+        if (v.water)
+            v.float_water_level = room_view::middle_of_tile(0, v.default_water_level).y;
+        v.gravity = dc.room_get_gravity(rid);
+        return v;
+    }
+
+    //
+    // Room file parsing (Room.LoadFromDataString, RoomPreprocessor.VersionFix,
+    // RoomPreprocessor.StringToConnMap, ShortcutMapper). Parsing only touches a
+    // parsed_room so that it can run in parallel; commit_room then moves the
+    // result into the data container.
+    //
+    namespace {
+        struct parsed_node {
+            uint16_t type = 0;
+            uint16_t shortcut_length = 0;
+            int16_t viewed_by_camera = 0;
+            uint16_t entrance_width = 0;
+            bool submerged = false;
+        };
+        struct parsed_item {
+            rw::ivec2 tile;
+            item_type type = item_type::rock;
+        };
+        struct parsed_shortcut {
+            rw::ivec2 start;
+            rw::ivec2 dest;
+            uint16_t length = 0;
+            shortcut_type type = shortcut_type::dead_end;
+            int16_t dest_exit = -1; // index into exits
+        };
+
+        struct parsed_room {
+            std::string name;
+            dcon::region_id region;
+            parsers::error_handler err;
+            bool ok = false;
+
+            std::string display_name;
+            int32_t width = 1;
+            int32_t height = 1;
+            int32_t water_level = -1;
+            bool water_in_front = false;
+            bool border_solid = true;
+            rw::vec2 light_angle{0.f, 0.f};
+            uint16_t preprocessing_generation = 0;
+            uint16_t connectivity_templates = 0;
+            std::vector<rw::vec2> cameras;
+            std::vector<parsed_item> items;
+            std::vector<parsed_node> nodes;
+            std::vector<node_connectivity> connectivity; // nodes * templates * nodes
+            std::vector<terrain> terrains;
+            std::vector<uint8_t> flags;
+            std::vector<uint8_t> shortcut_marks;
+            std::vector<uint8_t> waters;
+            std::vector<rw::ivec2> exits;
+            std::vector<parsed_shortcut> shortcuts;
+
+            bool has_settings = false;
+            parsers::room_template settings;
+
+            room_view view() const noexcept {
+                room_view v;
+                v.width = width;
+                v.height = height;
+                v.terrains = terrains.data();
+                v.flags = flags.data();
+                v.shortcuts = shortcut_marks.data();
+                v.waters = waters.data();
+                return v;
+            }
+        };
+
+        // Minimal allocation free scanner over one line of a room file
+        struct scanner {
+            char const* p;
+            char const* end;
+
+            bool done() const noexcept { return p >= end; }
+            bool eat(char c) noexcept {
+                if (p < end && *p == c) {
+                    ++p;
+                    return true;
+                }
+                return false;
+            }
+            void skip_to(char c) noexcept {
+                while (p < end && *p != c)
+                    ++p;
+            }
+            void skip_spaces() noexcept {
+                while (p < end && (*p == ' ' || *p == '\t'))
+                    ++p;
+            }
+            bool read_int(int32_t& out) noexcept {
+                skip_spaces();
+                bool neg = false;
+                if (p < end && (*p == '-' || *p == '+')) {
+                    neg = *p == '-';
+                    ++p;
+                }
+                if (p >= end || *p < '0' || *p > '9')
+                    return false;
+                int64_t v = 0;
+                while (p < end && *p >= '0' && *p <= '9')
+                    v = v * 10 + (*p++ - '0');
+                out = int32_t(neg ? -v : v);
+                return true;
+            }
+            bool read_float(float& out) noexcept {
+                skip_spaces();
+                char buf[64];
+                size_t n = 0;
+                while (p < end && n + 1 < sizeof(buf) && (std::strchr("+-.eE", *p) != nullptr || (*p >= '0' && *p <= '9')))
+                    buf[n++] = *p++;
+                buf[n] = '\0';
+                if (n == 0)
+                    return false;
+                char* e = nullptr;
+                out = std::strtof(buf, &e);
+                return e != buf;
+            }
+        };
+
+        // File.ReadAllLines semantics: \n, \r\n and \r all end a line and a
+        // trailing terminator does not produce an empty last line
+        void split_lines(std::string_view contents, std::vector<std::string_view>& lines) {
+            size_t start = 0;
+            size_t i = 0;
+            while (i < contents.size()) {
+                char const c = contents[i];
+                if (c == '\n' || c == '\r') {
+                    lines.push_back(contents.substr(start, i - start));
+                    if (c == '\r' && i + 1 < contents.size() && contents[i + 1] == '\n')
+                        ++i;
+                    start = i + 1;
+                }
+                ++i;
+            }
+            if (start < contents.size())
+                lines.push_back(contents.substr(start));
+        }
+
+        // ShortcutHandler.NextShortcutPosition
+        rw::ivec2 next_shortcut_position(room_view const& room, rw::ivec2 pos, rw::ivec2 last_pos) noexcept {
+            rw::ivec2 const d = pos - last_pos;
+            if ((d.x != 0 || d.y != 0) && room.get_tile(pos + d).shortcut != 0 && room.inside(pos.x + d.x, pos.y + d.y)) {
+                pos = pos + d;
+            } else {
+                for (auto const fd : rw::custom::four_directions) {
+                    if ((fd.x != -d.x || fd.y != -d.y) && room.get_tile(pos + fd).shortcut != 0 && room.inside(pos.x + fd.x, pos.y + fd.y)) {
+                        pos = pos + fd;
+                        break;
+                    }
+                }
+                if (pos == last_pos)
+                    pos = pos - d;
+            }
+            return pos;
+        }
+
+        // ShortcutMapper.MapShortcut
+        parsed_shortcut map_shortcut(room_view const& room, int32_t x, int32_t y, std::vector<rw::ivec2> const& nodes_index) noexcept {
+            auto const node_of = [&](rw::ivec2 p) -> int16_t {
+                auto const it = std::find(nodes_index.begin(), nodes_index.end(), p);
+                return it == nodes_index.end() ? int16_t(-1) : int16_t(it - nodes_index.begin());
+            };
+            rw::ivec2 const start{x, y};
+            rw::ivec2 cur = start;
+            rw::ivec2 last = cur;
+            uint32_t n = 0;
+            shortcut_type type = shortcut_type::dead_end;
+            int16_t dest = -1;
+            for (;;) {
+                ++n;
+                rw::ivec2 const prev = cur;
+                cur = next_shortcut_position(room, cur, last);
+                if (cur == prev)
+                    break;
+                last = prev;
+                auto const t = room.get_tile(cur);
+                if (t.t == terrain::shortcut_entrance) {
+                    type = shortcut_type::normal;
+                    break;
+                } else if (t.shortcut == 2) {
+                    type = shortcut_type::room_exit;
+                    dest = node_of(cur);
+                    break;
+                } else if (t.shortcut == 3) {
+                    type = shortcut_type::creature_hole;
+                    dest = node_of(cur);
+                    break;
+                } else if (t.shortcut == 4) {
+                    type = shortcut_type::npc_transportation;
+                    break;
+                } else if (t.shortcut == 5) {
+                    type = shortcut_type::region_transportation;
+                    dest = node_of(cur);
+                    break;
+                } else if (n > 1000) {
+                    break;
+                }
+            }
+            return parsed_shortcut{start, cur, uint16_t(std::min<uint32_t>(n, 0xFFFF)), type, dest};
+        }
+
+        void parse_cameras(parsed_room& r, std::string_view line) {
+            scanner sc{line.data(), line.data() + line.size()};
+            while (!sc.done()) {
+                float x = 0.f, y = 0.f;
+                if (!sc.read_float(x)) {
+                    r.err.add_error("bad camera position");
+                    break;
+                }
+                if (sc.eat(','))
+                    sc.read_float(y);
+                // Room.LoadFromDataString flips camera Y into room space
+                r.cameras.push_back(rw::vec2{x, -(800.f - float(r.height) * 20.f + y)});
+                sc.skip_to('|');
+                sc.eat('|');
+            }
+            if (r.cameras.empty()) {
+                r.err.add_warning("no cameras defined");
+                r.cameras.push_back(rw::vec2{0.f, 0.f});
+            }
+        }
+
+        void parse_items(parsed_room& r, std::string_view line) {
+            // "<type>,<x>,<y>|" entries, the trailing (unterminated) element is ignored
+            scanner sc{line.data(), line.data() + line.size()};
+            while (!sc.done()) {
+                char const* entry_end = static_cast<char const*>(std::memchr(sc.p, '|', size_t(sc.end - sc.p)));
+                if (entry_end == nullptr)
+                    break;
+                scanner e{sc.p, entry_end};
+                int32_t type = 0, x = 0, y = 0;
+                if (e.read_int(type) && e.eat(',') && e.read_int(x) && e.eat(',') && e.read_int(y))
+                    r.items.push_back(parsed_item{rw::ivec2{x - 1, r.height - y}, type == 1 ? item_type::spear : item_type::rock});
+                else
+                    r.err.add_error("bad placed item entry");
+                sc.p = entry_end + 1;
+            }
+        }
+
+        void parse_connectivity(parsed_room& r, std::string_view line) {
+            scanner sc{line.data(), line.data() + line.size()};
+            int32_t gen = 0, node_count = 0, templates = 0;
+            sc.read_int(gen);
+            r.preprocessing_generation = uint16_t(gen < 0 ? 0 : gen);
+            // Like WorldLoader, only trust maps from the current preprocessing
+            // generation; older ones (different layout) must be regenerated
+            if (gen < preprocessing_generation)
+                return;
+            if (!(sc.eat('|') && sc.read_int(node_count) && sc.eat('|') && sc.read_int(templates) && sc.eat('|'))
+            || node_count < 0 || templates < 0) {
+                r.err.add_error("bad connectivity map header");
+                return;
+            }
+            r.connectivity_templates = uint16_t(templates);
+            size_t const pairs = size_t(templates) * size_t(node_count);
+            for (int32_t i = 0; i < node_count; ++i) {
+                parsed_node n;
+                int32_t type = 0, sc_len = 0, sub = 0, cam = 0, width = 0;
+                if (!(sc.read_int(type) && sc.eat(',') && sc.read_int(sc_len) && sc.eat(',') && sc.read_int(sub) && sc.eat(',')
+                && sc.read_int(cam) && sc.eat(',') && sc.read_int(width) && sc.eat(','))) {
+                    r.err.add_error("bad connectivity node " + std::to_string(i));
+                    break;
+                }
+                n.type = uint16_t(type);
+                n.shortcut_length = uint16_t(sc_len);
+                n.submerged = sub == 1;
+                n.viewed_by_camera = int16_t(cam);
+                n.entrance_width = uint16_t(width);
+                r.nodes.push_back(n);
+                for (size_t j = 0; j < pairs; ++j) {
+                    int32_t a = 0, b = 0;
+                    if (!(sc.read_int(a) && sc.eat(' ') && sc.read_int(b))) {
+                        r.err.add_error("bad connectivity pair");
+                        a = b = -1;
+                    }
+                    sc.eat(',');
+                    r.connectivity.push_back(node_connectivity{int16_t(a), int16_t(b)});
+                }
+                sc.skip_to('|');
+                sc.eat('|');
+            }
+        }
+
+        bool parse_tiles(parsed_room& r, std::string_view line) {
+            int32_t const w = r.width;
+            int32_t const h = r.height;
+            size_t const total = size_t(w) * size_t(h);
+            r.terrains.assign(total, terrain::air);
+            r.flags.assign(total, 0);
+            r.shortcut_marks.assign(total, 0);
+            r.waters.assign(total, 0);
+            // every tile starts as air with the default water level applied
+            for (int32_t y = 0; y < h; ++y) {
+                uint8_t const wv = uint8_t((y <= r.water_level ? 1 : 0) + (y == r.water_level ? 1 : 0));
+                std::memset(r.waters.data() + size_t(y) * size_t(w), wv, size_t(w));
+            }
+
+            // Column major, starting at the top left; every entry is terminated
+            // by '|' (vanilla ignores whatever follows the last one)
+            int32_t x = 0, y = h - 1;
+            size_t parsed = 0;
+            char const* p = line.data();
+            char const* const end = line.data() + line.size();
+            while (p < end) {
+                char const* entry_end = static_cast<char const*>(std::memchr(p, '|', size_t(end - p)));
+                if (entry_end == nullptr)
+                    break;
+                if (x >= w) {
+                    r.err.add_error("too many geometry tiles");
+                    break;
+                }
+                size_t const i = size_t(y) * size_t(w) + size_t(x);
+                scanner e{p, entry_end};
+                int32_t value = 0;
+                if (!e.read_int(value) || value < 0 || value > 4) {
+                    r.err.add_error("bad terrain value at tile " + std::to_string(x) + "," + std::to_string(y));
+                    value = 0;
+                }
+                r.terrains[i] = terrain(value);
+                uint8_t flags = 0;
+                uint8_t shortcut = 0;
+                while (e.eat(',')) {
+                    if (!e.read_int(value)) {
+                        r.err.add_error("bad tile attribute");
+                        break;
+                    }
+                    switch (value) {
+                    case 1: flags |= tile_vertical_beam; break;
+                    case 2: flags |= tile_horizontal_beam; break;
+                    case 3: if (shortcut < 1) shortcut = 1; break;   // shortcut path
+                    case 4: shortcut = 2; break;                     // room exit
+                    case 5: shortcut = 3; break;                     // creature den
+                    case 6: flags |= tile_wall_behind; break;
+                    case 7: flags |= tile_hive; break;               // bat hive
+                    case 8: flags |= tile_waterfall; break;
+                    case 9: shortcut = 4; break;                     // whack-a-mole hole
+                    case 10: flags |= tile_garbage_hole; break;
+                    case 11: flags |= tile_worm_grass; break;
+                    case 12: shortcut = 5; break;                    // NPC/region transport
+                    default: break;                                  // ignored by vanilla too
+                    }
+                }
+                r.flags[i] = flags;
+                r.shortcut_marks[i] = shortcut;
+                ++parsed;
+                if (--y < 0) {
+                    ++x;
+                    y = h - 1;
+                }
+                p = entry_end + 1;
+            }
+            if (parsed != total) {
+                r.err.add_error("inconsistent geometry count " + std::to_string(parsed) + " / " + std::to_string(total));
+                return false;
+            }
+            return true;
+        }
+
+        void map_shortcuts(parsed_room& r) {
+            room_view const room = r.view();
+            // Room.exitAndDenIndex: room exits, then dens, then transports
+            for (uint8_t const want : {uint8_t(2), uint8_t(3), uint8_t(5)})
+                for (int32_t y = room.height - 1; y >= 0; --y)
+                    for (int32_t x = 0; x < room.width; ++x)
+                        if (room.get_tile(x, y).shortcut == want)
+                            r.exits.push_back(rw::ivec2{x, y});
+            for (int32_t y = room.height - 1; y >= 0; --y)
+                for (int32_t x = 0; x < room.width; ++x)
+                    if (room.get_terrain(x, y) == terrain::shortcut_entrance)
+                        r.shortcuts.push_back(map_shortcut(room, x, y, r.exits));
+        }
+
+        bool parse_geometry(parsed_room& r, std::string_view contents) {
+            auto& err = r.err;
+            err.line = 0;
+            std::vector<std::string_view> lines;
+            lines.reserve(16);
+            split_lines(contents, lines);
+
+            // RoomPreprocessor.VersionFix: very old 8 line files lack lines 5..8
+            if (lines.size() == 8) {
+                std::vector<std::string_view> fixed(12);
+                for (size_t i = 0; i < 5; ++i)
+                    fixed[i] = lines[i];
+                for (size_t i = 5; i < 8; ++i)
+                    fixed[i + 4] = lines[i];
+                lines = std::move(fixed);
+            }
+            if (lines.size() < 12) {
+                err.add_error("room file has " + std::to_string(lines.size()) + " lines, expected at least 12");
+                return false;
+            }
+            r.display_name = std::string{lines[0]};
+
+            // line 2: "<w>*<h>|<water level>|<water in front>"
+            {
+                err.line = 2;
+                scanner sc{lines[1].data(), lines[1].data() + lines[1].size()};
+                int32_t w = 0, h = 0, water = -1, in_front = 0;
+                if (!(sc.read_int(w) && sc.eat('*') && sc.read_int(h)) || w <= 0 || h <= 0) {
+                    err.add_error("invalid room dimensions");
+                    return false;
+                }
+                // VersionFix appends "|-1|0" when the water fields are missing
+                if (std::count(lines[1].begin(), lines[1].end(), '|') >= 2) {
+                    sc.skip_to('|');
+                    sc.eat('|');
+                    if (!sc.read_int(water))
+                        water = -1;
+                    sc.skip_to('|');
+                    sc.eat('|');
+                    if (!sc.read_int(in_front))
+                        in_front = 0;
+                }
+                r.width = w;
+                r.height = h;
+                r.water_level = water < 0 ? -1 : water;
+                r.water_in_front = water >= 0 && in_front == 1;
+            }
+            // line 3: "<light angle x>*<light angle y>|..."
+            {
+                err.line = 3;
+                scanner sc{lines[2].data(), lines[2].data() + lines[2].size()};
+                if (!(sc.read_float(r.light_angle.x) && sc.eat('*') && sc.read_float(r.light_angle.y)))
+                    err.add_warning("bad light angle");
+            }
+            err.line = 4;
+            parse_cameras(r, lines[3]);
+            // line 5: "Border: Solid" / "Border: Passable"
+            r.border_solid = lines[4].find("Passable") == std::string_view::npos;
+            err.line = 6;
+            parse_items(r, lines[5]);
+            err.line = 10;
+            parse_connectivity(r, lines[9]);
+            // line 11 holds the base64 creature AI heat maps; with files mmap'd on
+            // demand (RomFS) these are decoded when the AI preprocessor needs them.
+            err.line = 12;
+            if (!parse_tiles(r, lines[11]))
+                return false;
+            map_shortcuts(r);
+            return true;
+        }
+
+        danger_type to_danger_type(std::string_view sv) {
+            return sv == "Rain" ? danger_type::rain
+                : sv == "Flood" ? danger_type::flood
+                : sv == "FloodAndRain" ? danger_type::flood_and_rain
+                : sv == "None" ? danger_type::none
+                : danger_type::unknown;
+        }
+
+        dcon::room_id commit_room(sys::game_state& s, parsed_room& r) {
+            auto& dc = s.world;
+            auto const rid = dc.create_room();
+            dc.room_set_name(rid, s.add_text(r.name));
+            dc.room_set_display_name(rid, s.add_text(r.display_name));
+            dc.room_set_width(rid, r.width);
+            dc.room_set_height(rid, r.height);
+            dc.room_set_water_level(rid, r.water_level);
+            dc.room_set_water_in_front(rid, r.water_in_front);
+            dc.room_set_border_solid(rid, r.border_solid);
+            dc.room_set_light_angle(rid, r.light_angle);
+            dc.room_set_preprocessing_generation(rid, r.preprocessing_generation);
+            dc.room_set_connectivity_templates(rid, r.connectivity_templates);
+            dc.room_set_gravity(rid, s.default_room_gravity);
+            if (r.region)
+                dc.try_create_region_membership(rid, r.region);
+
+            // tiles: one contiguous block, filled straight into the property arrays
+            uint32_t const first = dc.tile_size();
+            uint32_t const count = uint32_t(r.terrains.size());
+            dc.tile_resize(first + count);
+            dcon::tile_id const first_id{dcon::tile_id::value_base_t(first)};
+            std::memcpy(&dc.tile_get_terrain(first_id), r.terrains.data(), count * sizeof(terrain));
+            std::memcpy(&dc.tile_get_flags(first_id), r.flags.data(), count);
+            std::memcpy(&dc.tile_get_shortcut(first_id), r.shortcut_marks.data(), count);
+            std::memcpy(&dc.tile_get_water(first_id), r.waters.data(), count);
+            dc.room_set_first_tile(rid, first_id);
+
+            for (auto const c : r.cameras) {
+                auto const cid = dc.create_room_camera();
+                dc.room_camera_set_position(cid, c);
+                dc.try_create_camera_location(cid, rid);
+            }
+            for (auto const& it : r.items) {
+                auto const iid = dc.create_placed_item();
+                dc.placed_item_set_tile(iid, it.tile);
+                dc.placed_item_set_type(iid, it.type);
+                dc.try_create_item_location(iid, rid);
+            }
+            std::vector<dcon::room_exit_id> exits;
+            exits.reserve(r.exits.size());
+            for (size_t i = 0; i < r.exits.size(); ++i) {
+                auto const eid = dc.create_room_exit();
+                dc.room_exit_set_tile(eid, r.exits[i]);
+                dc.room_exit_set_index(eid, uint8_t(i));
+                dc.try_create_exit_location(eid, rid);
+                exits.push_back(eid);
+            }
+            for (auto const& sc : r.shortcuts) {
+                auto const sid = dc.create_shortcut();
+                dc.shortcut_set_start(sid, sc.start);
+                dc.shortcut_set_dest(sid, sc.dest);
+                dc.shortcut_set_length(sid, sc.length);
+                dc.shortcut_set_type(sid, sc.type);
+                dc.try_create_shortcut_location(sid, rid);
+                if (sc.dest_exit >= 0 && size_t(sc.dest_exit) < exits.size())
+                    dc.try_create_shortcut_destination(sid, exits[size_t(sc.dest_exit)]);
+            }
+            size_t const per_node = size_t(r.connectivity_templates) * r.nodes.size();
+            for (size_t i = 0; i < r.nodes.size(); ++i) {
+                auto const nid = dc.create_room_node();
+                auto const& n = r.nodes[i];
+                dc.room_node_set_type(nid, n.type);
+                dc.room_node_set_shortcut_length(nid, n.shortcut_length);
+                dc.room_node_set_viewed_by_camera(nid, n.viewed_by_camera);
+                dc.room_node_set_entrance_width(nid, n.entrance_width);
+                dc.room_node_set_submerged(nid, n.submerged);
+                dc.room_node_set_index(nid, uint8_t(i));
+                auto conn = dc.room_node_get_connectivity(nid);
+                for (size_t j = 0; j < per_node && i * per_node + j < r.connectivity.size(); ++j)
+                    conn.push_back(r.connectivity[i * per_node + j]);
+                dc.try_create_node_location(nid, rid);
+            }
+
+            // RoomSettings, -1 meaning "not set"
+            auto const& t = r.settings;
+            dc.room_set_palette(rid, t.palette ? int16_t(*t.palette) : int16_t(-1));
+            dc.room_set_effect_color_a(rid, t.effect_color_a ? int16_t(*t.effect_color_a) : int16_t(-1));
+            dc.room_set_effect_color_b(rid, t.effect_color_b ? int16_t(*t.effect_color_b) : int16_t(-1));
+            dc.room_set_fade_palette(rid, t.fade_palette_index ? int16_t(*t.fade_palette_index) : int16_t(-1));
+            dc.room_set_fade_palette_amount(rid, t.fade_palette_amount.value_or(0.f));
+            dc.room_set_danger_type(rid, t.danger_type ? to_danger_type(*t.danger_type) : danger_type::rain);
+            dc.room_set_grime(rid, t.grime.value_or(0.f));
+            dc.room_set_clouds(rid, t.clouds.value_or(0.f));
+            dc.room_set_ceiling_drips(rid, t.ceiling_drips.value_or(0.f));
+            dc.room_set_wave_speed(rid, t.wave_speed.value_or(0.f));
+            dc.room_set_wave_length(rid, t.wave_length.value_or(0.f));
+            dc.room_set_wave_amplitude(rid, t.wave_amplitude.value_or(0.f));
+            dc.room_set_second_wave_length(rid, t.second_wave_length.value_or(0.f));
+            dc.room_set_second_wave_amplitude(rid, t.second_wave_amplitude.value_or(0.f));
+            dc.room_set_water_reflection_alpha(rid, t.water_reflection_alpha.value_or(0.f));
+            dc.room_set_bkg_drone_volume(rid, t.bkg_drone_volume.value_or(0.f));
+            dc.room_set_bkg_drone_no_threat_volume(rid, t.bkg_drone_no_threat_volume.value_or(0.f));
+            dc.room_set_random_item_density(rid, t.random_item_density.value_or(0.f));
+            dc.room_set_random_item_spear_chance(rid, t.random_item_spear_chance.value_or(0.f));
+            dc.room_set_rumble_intensity(rid, t.rumble_intensity.value_or(0.f));
+            dc.room_set_rain_intensity(rid, t.rain_intensity.value_or(0.f));
+            dc.room_set_room_specific_script_active(rid, t.room_specific_script_active.value_or(false));
+            dc.room_set_wet_terrain(rid, t.wet_terrain.value_or(false));
+
+            s.room_by_name.emplace(r.name, rid);
+            return rid;
+        }
+
+        void merge_errors(parsers::error_handler& into, parsers::error_handler const& from) {
+            into.accumulated_errors += from.accumulated_errors;
+            into.accumulated_warnings += from.accumulated_warnings;
+            into.error_count += from.error_count;
+            into.warning_count += from.warning_count;
+        }
+    }
+
+    dcon::room_id add_room(sys::game_state& s, std::string_view name, dcon::region_id region, std::string_view contents, parsers::error_handler& err) {
+        parsed_room r;
+        r.name = std::string{name};
+        r.region = region;
+        r.err.filename = err.filename;
+        r.ok = parse_geometry(r, contents);
+        merge_errors(err, r.err);
+        return r.ok ? commit_room(s, r) : dcon::room_id{};
+    }
+
+    //
+    // Scenario loading
+    //
+    namespace {
+        using template_map = std::unordered_map<std::string, parsers::room_template>;
+
+        void register_regions(sys::game_state& s, layered_fs::directory const& world_dir, parsers::error_handler& err) {
+            auto const f = world_dir.get_single_file("regions.txt");
+            auto const of = f.open_file(s.fs);
+            if (!of) {
+                err.add_standalone_error("no world/regions.txt found");
+                err.fatal = true;
+                return;
+            }
+            std::vector<std::string_view> lines;
+            split_lines(of->to_string_view(), lines);
+            auto const add = [&](std::string const& name, bool pseudo) {
+                if (s.region_by_name.contains(name))
+                    return;
+                auto const rid = s.world.create_region();
+                s.world.region_set_name(rid, s.add_text(name));
+                s.world.region_set_display_name(rid, s.add_text(name));
+                s.world.region_set_is_pseudo(rid, pseudo);
+                s.region_by_name.emplace(name, rid);
+            };
+            for (auto line : lines) {
+                while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+                    line.remove_suffix(1);
+                if (!line.empty())
+                    add(text::to_lowercase_native(line), false);
+            }
+            // gates and shared shelters live in their own folders, expose them
+            // as pseudo regions so they can be browsed like any other room
+            add("gates", true);
+            add("gate shelters", true);
+        }
+
+        parsers::room_template parse_template(sys::game_state const& s, std::string_view sv, parsers::error_handler& err) {
+            parsers::token_generator gen(sv);
+            parsers::room_context ctx{s};
+            return parsers::parse_room_template(gen, ctx, err);
+        }
+
+        void register_region_settings(sys::game_state& s, layered_fs::directory const& world_dir, dcon::region_id region,
+            parsers::error_handler& err, template_map& templates, std::vector<parsers::room_template>& defaults) {
+            auto& dc = s.world;
+            std::string const name{s.to_string_view(dc.region_get_name(region))};
+            auto const dir = world_dir.get_single_subdir(name);
+            if (auto const of = dir.get_single_file("displayname.txt").open_file(s.fs); of) {
+                auto sv = of->to_string_view();
+                while (!sv.empty() && (sv.back() == '\n' || sv.back() == '\r' || sv.back() == ' '))
+                    sv.remove_suffix(1);
+                dc.region_set_display_name(region, s.add_text(sv));
+            }
+            auto const f = dir.get_single_file("properties.txt");
+            auto const of = f.open_file(s.fs);
+            if (!of)
+                return; // pseudo regions have none
+            err.filename = f.path;
+            parsers::token_generator gen(of->to_string_view());
+            parsers::region_context ctx{s, uint32_t(region.index())};
+            auto const props = parsers::parse_region_properties(gen, ctx, err);
+            dc.region_set_palette(region, uint16_t(props.palette));
+            dc.region_set_bat_deplete_cycles_min(region, uint16_t(props.bat_deplete_cycles_min));
+            dc.region_set_bat_deplete_cycles_max(region, uint16_t(props.bat_deplete_cycles_max));
+            dc.region_set_bat_deplete_cycles_max_if_less_than_five_left(region, uint16_t(props.bat_deplete_cycles_max_if_less_than_five_left));
+            dc.region_set_bat_deplete_cycles_max_if_less_than_two_left(region, uint16_t(props.bat_deplete_cycles_max_if_less_than_two_left));
+            dc.region_set_bats_per_active_swarm_room(region, uint16_t(props.bats_per_active_swarm_room));
+            dc.region_set_overseers_min(region, uint16_t(props.overseers_min));
+            dc.region_set_overseers_max(region, uint16_t(props.overseers_max));
+            dc.region_set_ghost_rel_karma_req(region, uint16_t(props.ghost_rel_karma_req));
+            dc.region_set_overseers_spawn_chance(region, props.overseers_spawn_chance);
+            dc.region_set_player_guide_overseer_spawn_chance(region, props.player_guide_overseer_spawn_chance);
+            dc.region_set_corruption_effect_color(region, rw::vec3{props.corruption_effect_color.r, props.corruption_effect_color.g, props.corruption_effect_color.b});
+            dc.region_set_corruption_eye_color(region, rw::vec3{props.corruption_eye_color.r, props.corruption_eye_color.g, props.corruption_eye_color.b});
+            dc.region_set_albinos(region, props.albinos);
+            for (auto const& tname : props.room_setting_templates) {
+                auto const lname = text::to_lowercase_native(tname);
+                auto const tf = dir.get_single_file(name + "_settingstemplate_" + lname + ".txt");
+                if (auto const tof = tf.open_file(s.fs); tof) {
+                    err.filename = tf.path;
+                    auto t = parse_template(s, tof->to_string_view(), err);
+                    // RoomSettings: the first listed template is the region default
+                    if (&tname == &props.room_setting_templates.front())
+                        defaults[size_t(region.index())] = t;
+                    templates.insert_or_assign(name + "_settingstemplate_" + lname, std::move(t));
+                } else {
+                    err.add_standalone_warning("missing settings template \"" + tf.path + "\"");
+                }
+            }
+        }
+
+        // Settings of one room: template (explicit or region default) then the room file
+        void resolve_settings(sys::game_state const& s, parsed_room& r, layered_fs::directory const& dir, std::string const& region_name,
+            template_map const& templates, parsers::room_template const& region_default) {
+            auto const f = dir.get_single_file(r.name + "_settings.txt");
+            auto const of = f.open_file(s.fs);
+            if (!of) {
+                r.settings.apply(region_default);
+                return;
+            }
+            r.has_settings = true;
+            r.err.filename = f.path;
+            auto const t = parse_template(s, of->to_string_view(), r.err);
+            auto const lname = text::to_lowercase_native(t.template_);
+            if (lname == "none") {
+                // explicitly no template
+            } else if (!lname.empty()) {
+                // "SU_SettingsTemplate_Inside": vanilla takes the third '_' piece
+                std::string_view piece{lname};
+                for (int i = 0; i < 2 && piece.find('_') != std::string_view::npos; ++i)
+                    piece.remove_prefix(piece.find('_') + 1);
+                piece = piece.substr(0, piece.find('_'));
+                auto const key = region_name + "_settingstemplate_" + std::string{piece};
+                if (auto const it = templates.find(key); it != templates.end())
+                    r.settings.apply(it->second);
+                else
+                    r.err.add_warning("can't find settings template \"" + t.template_ + "\"");
+            } else {
+                r.settings.apply(region_default);
+            }
+            r.settings.apply(t); // room specific values override the template
+        }
+
+        struct room_job {
+            layered_fs::file file;
+            layered_fs::directory dir;
+            dcon::region_id region;
+            std::string name;
+        };
+    }
+
+    void load(sys::game_state& s, parsers::error_handler& err) {
+        using clock = std::chrono::steady_clock;
+        auto const t0 = clock::now();
+        auto& dc = s.world;
+        auto const world_dir = s.fs.get_root().get_single_subdir("world");
+        register_regions(s, world_dir, err);
+        if (err.fatal)
+            return;
+
+        template_map templates;
+        std::vector<parsers::room_template> defaults(dc.region_size());
+        dc.for_each_region([&](dcon::region_id r) { register_region_settings(s, world_dir, r, err, templates, defaults); });
+
+        // collect the room files (first occurrence of a name wins, like the
+        // shared shelters which appear in several folders)
+        std::vector<room_job> jobs;
+        std::unordered_map<std::string, bool> seen;
+        dc.for_each_region([&](dcon::region_id r) {
+            std::string const name{s.to_string_view(dc.region_get_name(r))};
+            bool const pseudo = dc.region_get_is_pseudo(r);
+            auto const dir = pseudo ? world_dir.get_single_subdir(name) : world_dir.get_single_subdir(name + "-rooms");
+            for (auto const& f : dir.get_files(s.fs)) {
+                auto const base = f.get_basename();
+                if (f.get_extension() != "txt" || base.find("_settings") != std::string::npos)
+                    continue;
+                if (name == "gates" && !base.starts_with("gate_"))
+                    continue;
+                if (base.starts_with("world_"))
+                    continue; // region world files sometimes sit next to the rooms
+                auto room_name = f.get_filename();
+                if (!seen.emplace(room_name, true).second)
+                    continue;
+                jobs.push_back(room_job{f, dir, r, std::move(room_name)});
+            }
+        });
+
+        // parse everything in parallel...
+        std::vector<parsed_room> parsed(jobs.size());
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, jobs.size()), [&](tbb::blocked_range<size_t> const& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                auto const& job = jobs[i];
+                auto& r = parsed[i];
+                r.name = job.name;
+                r.region = job.region;
+                r.err.filename = job.file.path;
+                auto const of = job.file.open_file(s.fs);
+                if (!of) {
+                    r.err.add_standalone_error("can't open room file \"" + job.file.path + "\"");
+                    continue;
+                }
+                r.ok = parse_geometry(r, of->to_string_view());
+                if (r.ok) {
+                    std::string const region_name{s.to_string_view(dc.region_get_name(job.region))};
+                    resolve_settings(s, r, job.dir, region_name, templates, defaults[size_t(job.region.index())]);
+                }
+            }
+        });
+        auto const t1 = clock::now();
+
+        // ...then commit to the data container serially, in a stable order
+        for (auto& r : parsed) {
+            merge_errors(err, r.err);
+            if (r.ok)
+                commit_room(s, r);
+        }
+        dc.for_each_region([&](dcon::region_id r) {
+            if (!dc.region_get_is_pseudo(r) && dc.region_get_region_membership(r).begin() == dc.region_get_region_membership(r).end())
+                err.add_standalone_warning("no rooms found for region \"" + std::string{s.to_string_view(dc.region_get_name(r))} + "\"");
+        });
+
+        auto const ms = [](auto d) { return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(d).count()); };
+        reports::add_log("loaded " + std::to_string(dc.region_size()) + " regions, " + std::to_string(dc.room_size()) + " rooms, "
+            + std::to_string(dc.tile_size()) + " tiles, " + std::to_string(dc.shortcut_size()) + " shortcuts, "
+            + std::to_string(dc.room_node_size()) + " nodes in " + ms(clock::now() - t0) + "ms (parallel parse " + ms(t1 - t0) + "ms)");
+    }
+}

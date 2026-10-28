@@ -1,0 +1,112 @@
+// Definitions consumed by ParserGenerator at build time.
+// See ParserGenerator/parser_generator.cpp for the format.
+
+// world/<region>/properties.txt
+region_properties
+    Palette                                         member      uint            0
+    Subregion                                       defer_fn    string_list     ""
+    3 Room Setting Templates                        defer       string_list     ""
+    batDepleteCyclesMin                             member      uint            2
+    batDepleteCyclesMax                             member      uint            7
+    batDepleteCyclesMaxIfLessThanFiveLeft           member      uint            4
+    batDepleteCyclesMaxIfLessThanTwoLeft            member      uint            3
+    batsPerActiveSwarmRoom                          member      uint            10
+    overseersSpawnChance                            member      float           0.8
+    overseersMin                                    member      uint            4
+    overseersMax                                    member      uint            4
+    playerGuideOverseerSpawnChance                  member      float           1
+    ghostRelKarmaReq                                member      uint            0
+    albinos                                         member      bool            false
+    corruptionEffectColor                           defer       color           0.0,0.0,1.0
+    corruptionEyeColor                              defer       color           0.0,0.0,1.0
+    Room_Attr                                       skip        key_value_list  ""
+    2 Broken Shelters                               skip        key_value_list  ""
+// downpour / watcher / mods (accepted so layered mod roots don't spam warnings)
+    scavsDelayInitialMin                            skip        uint            900
+    scavsDelayInitialMax                            skip        uint            1100
+    scavsDelayRepeatMin                             skip        uint            4100
+    scavsDelayRepeatMax                             skip        uint            8200
+    scavsMin                                        skip        uint            0
+    scavsMax                                        skip        uint            5
+    scavsSpawnChance                                skip        float           0.3
+    kelpColor                                       skip        color           1.0,0.0,0.1
+    blackSalamanderChance                           skip        float           1/3
+    pupSpawnChance                                  skip        float           0
+    GlacialWasteland                                skip        bool            false
+    earlyCycleChance                                skip        float           0.02
+    earlyCycleFloodChance                           skip        float           0.33
+    waterColorOverride                              skip        color           0.05,0.05,0.8
+    cloudsStart                                     skip        float           20000
+    cloudsEnd                                       skip        float           31400
+    proceduralMusicBank                             skip        string          ""
+    mudColor                                        skip        color           0.31,0.19,0.13
+    fuseSize                                        skip        float           10
+    hideTimer                                       skip        bool            false
+    mapName                                         skip        string          ""
+    globalCreatureFlags                             skip        string_list     ""
+    mapSkyLayers                                    skip        string_list     ""
+    rotPalette                                      skip        uint            0
+    rippleSpiderThreshold                           skip        float           0.0
+    boxWormColor                                    skip        color           0.0,0.0,0.0
+    rivStormyCycleLength                            skip        uint            0
+    guideColor                                      skip        color           0.0,0.0,0.0
+    Fireflies                                       skip        string_list     ""
+    scavTradeItems                                  skip        string_list     ""
+    scavScoreItems                                  skip        string_list     ""
+    scavMainTraitItem                               skip        string_list     ""
+    scavTreasuryItems                               skip        string_list     ""
+    scavGearItems                                   skip        string_list     ""
+    eliteScavGearItems                              skip        string_list     ""
+    dropwigBaitItems                                skip        string_list     ""
+    superStructureFusesBroken                       skip        float           0.0
+
+// world/<region>-rooms/<room>_settings.txt and <region>_settingstemplate_<name>.txt
+// Everything is optional so templates can be layered (template first, room last)
+room_template
+    Template                                        member      string          ""
+    DangerType                                      member      string          "Rain"
+    Palette                                         member      uint            0
+    EffectColorA                                    member      uint            0
+    EffectColorB                                    member      uint            0
+    Grime                                           member      float           0.0
+    Clouds                                          member      float           0.0
+    CeilingDrips                                    member      float           0.0
+    WaveSpeed                                       member      float           0.0
+    WaveLength                                      member      float           0.0
+    WaveAmplitude                                   member      float           0.0
+    SecondWaveLength                                member      float           0.0
+    SecondWaveAmplitude                             member      float           0.0
+    WaterReflectionAlpha                            member      float           0.0
+    BkgDroneVolume                                  member      float           0.0
+    BkgDroneNoThreatVolume                          member      float           0.0
+    RandomItemDensity                               member      float           0.0
+    RandomItemSpearChance                           member      float           0.0
+    RumbleIntensity                                 member      float           0.0
+    RainIntensity                                   member      float           0.0
+    RoomSpecificScriptActive                        member      bool            false
+    WetTerrain                                      member      bool            false
+    FadePalette                                     defer_fn    string_list     ""
+    Effects                                         skip        string_list     ""
+    AmbientSounds                                   skip        string_list     ""
+    PlacedObjects                                   skip        string_list     ""
+    Triggers                                        skip        string_list     ""
+// downpour terrain / mods
+    TerrainPalette                                  skip        string          ""
+    TerrainStainAmount                              skip        float           0.0
+    TerrainStainHeight                              skip        float           0.0
+    TerrainStainBrightness                          skip        float           0.0
+    TerrainWaves                                    skip        float           0.0
+    TerrainGooHeight                                skip        float           0.0
+    TerrainDepth                                    skip        float           0.0
+    TerrainLight                                    skip        float           0.0
+    TerrainGrain                                    skip        float           0.0
+    TerrainEdgeRadius                               skip        float           0.0
+    TerrainSkyFade                                  skip        float           0.0
+    TerrainFadePalette                              skip        string_list     ""
+    MorePalette0                                    skip        string_list     0,0,0
+    MorePalette1                                    skip        string_list     0,0,0
+    MorePalette2                                    skip        string_list     0,0,0
+    MorePalette3                                    skip        string_list     0,0,0
+    MorePalette4                                    skip        string_list     0,0,0
+    BackgroundOffset                                skip        string_list     0,0
+    BackgroundType                                  skip        string          ""

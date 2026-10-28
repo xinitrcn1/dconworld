@@ -1,0 +1,406 @@
+// DataContainer definitions: every game object lives here.
+//
+// Sizes are hard bounds (DataContainer allocates them up front), chosen as
+// powers of two a little above what vanilla Rain World needs, leaving room
+// for Downpour/Watcher content:
+//   regions 14 (+2 pseudo)    -> 64
+//   rooms 760                 -> 2048
+//   tiles 3264886             -> 8388608 (2^23)
+//   room cameras 1714         -> 4096
+//   placed items 511          -> 1024
+//   shortcuts 6266            -> 16384
+//   exits/dens 2957           -> 8192
+//   room nodes 3393           -> 8192 (+ ~460k connectivity entries pooled)
+//   players: co-op up to 4    -> 8
+//
+// Tags: `scenario` = static world data loaded from the game files,
+//       `save` = simulation state.
+
+include{"math.hpp"}
+include{"world_types.hpp"}
+include{"physics_types.hpp"}
+include{"player_types.hpp"}
+
+make_index{text_key}{uint32_t}
+
+//
+// World
+//
+
+object{
+	name{region}
+	storage_type{contiguous}
+	size{64}
+	tag{scenario}
+	property{ name{name} type{text_key} }
+	property{ name{display_name} type{text_key} }
+	property{ name{palette} type{uint16_t} }
+	property{ name{bat_deplete_cycles_min} type{uint16_t} }
+	property{ name{bat_deplete_cycles_max} type{uint16_t} }
+	property{ name{bat_deplete_cycles_max_if_less_than_five_left} type{uint16_t} }
+	property{ name{bat_deplete_cycles_max_if_less_than_two_left} type{uint16_t} }
+	property{ name{bats_per_active_swarm_room} type{uint16_t} }
+	property{ name{overseers_min} type{uint16_t} }
+	property{ name{overseers_max} type{uint16_t} }
+	property{ name{ghost_rel_karma_req} type{uint16_t} }
+	property{ name{overseers_spawn_chance} type{float} }
+	property{ name{player_guide_overseer_spawn_chance} type{float} }
+	property{ name{corruption_effect_color} type{rw::vec3} }
+	property{ name{corruption_eye_color} type{rw::vec3} }
+	property{ name{albinos} type{bitfield} }
+	// pseudo regions group the gate and shared shelter rooms
+	property{ name{is_pseudo} type{bitfield} }
+}
+
+object{
+	name{room}
+	storage_type{contiguous}
+	size{2048}
+	tag{scenario}
+	property{ name{name} type{text_key} }
+	property{ name{display_name} type{text_key} }
+	property{ name{width} type{int32_t} }
+	property{ name{height} type{int32_t} }
+	// tile row of the water surface, -1 for no water
+	property{ name{water_level} type{int32_t} }
+	property{ name{water_in_front} type{bitfield} }
+	property{ name{border_solid} type{bitfield} }
+	property{ name{light_angle} type{rw::vec2} }
+	// tiles of a room are one contiguous block of width * height, row major
+	property{ name{first_tile} type{tile_id} }
+	property{ name{preprocessing_generation} type{uint16_t} }
+	property{ name{connectivity_templates} type{uint16_t} }
+	// RoomSettings (template and room file already merged); -1 = unset
+	property{ name{palette} type{int16_t} }
+	property{ name{effect_color_a} type{int16_t} }
+	property{ name{effect_color_b} type{int16_t} }
+	property{ name{fade_palette} type{int16_t} }
+	property{ name{fade_palette_amount} type{float} }
+	property{ name{danger_type} type{world::danger_type} }
+	property{ name{grime} type{float} }
+	property{ name{clouds} type{float} }
+	property{ name{ceiling_drips} type{float} }
+	property{ name{wave_speed} type{float} }
+	property{ name{wave_length} type{float} }
+	property{ name{wave_amplitude} type{float} }
+	property{ name{second_wave_length} type{float} }
+	property{ name{second_wave_amplitude} type{float} }
+	property{ name{water_reflection_alpha} type{float} }
+	property{ name{bkg_drone_volume} type{float} }
+	property{ name{bkg_drone_no_threat_volume} type{float} }
+	property{ name{random_item_density} type{float} }
+	property{ name{random_item_spear_chance} type{float} }
+	property{ name{rumble_intensity} type{float} }
+	property{ name{rain_intensity} type{float} }
+	property{ name{room_specific_script_active} type{bitfield} }
+	property{ name{wet_terrain} type{bitfield} }
+	// room gravity multiplier (Room.gravity)
+	property{ name{gravity} type{float} }
+}
+
+relationship{
+	name{region_membership}
+	tag{scenario}
+	link{ object{room} name{room} type{unique} }
+	link{ object{region} name{region} type{many} index_storage{array} }
+	primary_key{room}
+}
+
+// Room.Tile, one per geometry tile
+object{
+	name{tile}
+	storage_type{contiguous}
+	size{8388608}
+	tag{scenario}
+	property{ name{terrain} type{world::terrain} }
+	property{ name{flags} type{uint8_t} }
+	property{ name{shortcut} type{uint8_t} }
+	property{ name{water} type{uint8_t} }
+}
+
+// Room.cameraPositions, already converted to room space
+object{
+	name{room_camera}
+	storage_type{contiguous}
+	size{4096}
+	tag{scenario}
+	property{ name{position} type{rw::vec2} }
+}
+relationship{
+	name{camera_location}
+	tag{scenario}
+	link{ object{room_camera} name{camera} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{camera}
+}
+
+// rocks and spears listed in the room file
+object{
+	name{placed_item}
+	storage_type{contiguous}
+	size{1024}
+	tag{scenario}
+	property{ name{tile} type{rw::ivec2} }
+	property{ name{type} type{world::item_type} }
+}
+relationship{
+	name{item_location}
+	tag{scenario}
+	link{ object{placed_item} name{item} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{item}
+}
+
+// Room.exitAndDenIndex: room exits, dens and transport holes, in vanilla order
+object{
+	name{room_exit}
+	storage_type{contiguous}
+	size{8192}
+	tag{scenario}
+	property{ name{tile} type{rw::ivec2} }
+	// position within the room's exitAndDenIndex
+	property{ name{index} type{uint8_t} }
+}
+relationship{
+	name{exit_location}
+	tag{scenario}
+	link{ object{room_exit} name{exit} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{exit}
+}
+
+// ShortcutData
+object{
+	name{shortcut}
+	storage_type{contiguous}
+	size{16384}
+	tag{scenario}
+	property{ name{start} type{rw::ivec2} }
+	property{ name{dest} type{rw::ivec2} }
+	property{ name{length} type{uint16_t} }
+	property{ name{type} type{world::shortcut_type} }
+}
+relationship{
+	name{shortcut_location}
+	tag{scenario}
+	link{ object{shortcut} name{shortcut} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{shortcut}
+}
+// where a shortcut leads (ShortcutData.destNode), absent for normal/dead ends
+relationship{
+	name{shortcut_destination}
+	tag{scenario}
+	link{ object{shortcut} name{shortcut} type{unique} }
+	link{ object{room_exit} name{exit} type{many} index_storage{array} }
+	primary_key{shortcut}
+}
+
+// AbstractRoomNode as serialised on the connectivity line of the room file
+object{
+	name{room_node}
+	storage_type{contiguous}
+	size{8192}
+	tag{scenario}
+	property{ name{type} type{uint16_t} }
+	property{ name{shortcut_length} type{uint16_t} }
+	property{ name{viewed_by_camera} type{int16_t} }
+	property{ name{entrance_width} type{uint16_t} }
+	property{ name{submerged} type{bitfield} }
+	property{ name{index} type{uint8_t} }
+	// connectivity[template][other node], template major
+	property{ name{connectivity} type{vector_pool{1048576}{world::node_connectivity}} }
+}
+relationship{
+	name{node_location}
+	tag{scenario}
+	link{ object{room_node} name{node} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{node}
+}
+
+//
+// Physics: PhysicalObject, BodyChunk, BodyChunkConnection
+//
+
+object{
+	name{physical_object}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// PhysicalObject.gravity before the room gravity multiplier
+	property{ name{g} type{float} }
+	property{ name{air_friction} type{float} }
+	property{ name{water_friction} type{float} }
+	property{ name{buoyancy} type{float} }
+	property{ name{surface_friction} type{float} }
+	property{ name{bounce} type{float} }
+	property{ name{impact_threshold} type{float} }
+	property{ name{water_retardation_immunity} type{float} }
+	property{ name{grabbed_by_count} type{uint8_t} }
+}
+relationship{
+	name{object_location}
+	tag{save}
+	link{ object{physical_object} name{object} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{object}
+}
+
+object{
+	name{body_chunk}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{last_pos} type{rw::vec2} }
+	property{ name{last_last_pos} type{rw::vec2} }
+	property{ name{vel} type{rw::vec2} }
+	property{ name{rad} type{float} }
+	property{ name{mass} type{float} }
+	property{ name{terrain_squeeze} type{float} }
+	property{ name{slope_rad} type{float} }
+	property{ name{restrict_in_room_range} type{float} }
+	property{ name{contact_point} type{rw::ivec2} }
+	property{ name{last_contact_point} type{rw::ivec2} }
+	property{ name{on_slope} type{int8_t} }
+	property{ name{collide_with_terrain} type{bitfield} }
+	property{ name{collide_with_slopes} type{bitfield} }
+	property{ name{go_through_floors} type{bitfield} }
+	// BodyChunk.index within its owner
+	property{ name{index} type{uint8_t} }
+}
+relationship{
+	name{chunk_ownership}
+	tag{save}
+	link{ object{body_chunk} name{chunk} type{unique} }
+	link{ object{physical_object} name{owner} type{many} index_storage{array} }
+	primary_key{chunk}
+}
+
+// BodyChunkConnection between two chunks of the same object
+relationship{
+	name{chunk_connection}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	link{ object{body_chunk} name{chunk1} type{many} index_storage{array} }
+	link{ object{body_chunk} name{chunk2} type{many} index_storage{array} }
+	link{ object{physical_object} name{owner} type{many} index_storage{array} }
+	property{ name{distance} type{float} }
+	property{ name{elasticity} type{float} }
+	property{ name{weight_symmetry} type{float} }
+	property{ name{type} type{physics::connection_type} }
+	property{ name{active} type{bitfield} }
+}
+
+//
+// Players (Player.cs movement state), one per co-op slot
+//
+
+object{
+	name{player}
+	storage_type{erasable}
+	size{8}
+	tag{save}
+	property{ name{stats} type{::player::slugcat_stats} }
+	property{ name{random} type{rw::rng} }
+	property{ name{input} type{::player::input_history} }
+	property{ name{body_mode} type{::player::body_mode_index} }
+	property{ name{animation} type{::player::animation_index} }
+
+	// Creature
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{shortcut_delay} type{int32_t} }
+
+	property{ name{flip_direction} type{int32_t} }
+	property{ name{last_flip_direction} type{int32_t} }
+	property{ name{standing} type{uint8_t} }
+	property{ name{feet_stuck_pos} type{std::optional<rw::vec2>} }
+	property{ name{animation_frame} type{int32_t} }
+	// [0] upper chunk, [1] lower chunk
+	property{ name{dynamic_run_speed} type{rw::vec2} }
+	property{ name{direction_boosts} type{glm::vec4} }
+	property{ name{aerobic_level} type{float} }
+	property{ name{exhausted} type{uint8_t} }
+	property{ name{air_in_lungs} type{float} }
+	property{ name{immune_to_fall_damage} type{int32_t} }
+
+	// jumping
+	property{ name{can_jump} type{int32_t} }
+	property{ name{want_to_jump} type{int32_t} }
+	property{ name{can_wall_jump} type{int32_t} }
+	property{ name{jump_boost} type{float} }
+	property{ name{jump_stun} type{int32_t} }
+	property{ name{jump_chunk_counter} type{int32_t} }
+	property{ name{super_launch_jump} type{int32_t} }
+	property{ name{kill_super_launch_jump_counter} type{int32_t} }
+	property{ name{simulate_hold_jump_button} type{int32_t} }
+	property{ name{pole_skip_penalty} type{int32_t} }
+	property{ name{slow_movement_stun} type{int32_t} }
+	property{ name{landing_delay} type{int32_t} }
+
+	// ground
+	property{ name{crawl_turn_delay} type{int32_t} }
+	property{ name{slide_counter} type{int32_t} }
+	property{ name{slide_direction} type{int32_t} }
+	property{ name{init_slide_counter} type{int32_t} }
+	property{ name{upper_body_frames_on_ground} type{int32_t} }
+	property{ name{upper_body_frames_off_ground} type{int32_t} }
+	property{ name{lower_body_frames_on_ground} type{int32_t} }
+	property{ name{lower_body_frames_off_ground} type{int32_t} }
+	property{ name{consistent_down_diagonal} type{int32_t} }
+	property{ name{wall_slide_counter} type{int32_t} }
+	property{ name{ledge_grab_counter} type{int32_t} }
+
+	// rolls, slides, flips
+	property{ name{roll_direction} type{int32_t} }
+	property{ name{roll_counter} type{int32_t} }
+	property{ name{stop_rolling_counter} type{int32_t} }
+	property{ name{allow_roll} type{int32_t} }
+	property{ name{exit_belly_slide_counter} type{int32_t} }
+	property{ name{rocket_jump_from_belly_slide} type{uint8_t} }
+	property{ name{flip_from_slide} type{uint8_t} }
+	property{ name{whiplash_jump} type{uint8_t} }
+	property{ name{long_belly_slide} type{uint8_t} }
+
+	// corridors
+	property{ name{go_into_corridor_climb} type{int32_t} }
+	property{ name{corridor_drop} type{uint8_t} }
+	property{ name{corridor_turn_dir} type{std::optional<rw::ivec2>} }
+	property{ name{corridor_turn_counter} type{int32_t} }
+	property{ name{can_corridor_jump} type{int32_t} }
+	property{ name{vertical_corridor_slide_counter} type{int32_t} }
+	property{ name{horizontal_corridor_slide_counter} type{int32_t} }
+	property{ name{time_since_in_corridor_mode} type{int32_t} }
+	property{ name{backwards_counter} type{int32_t} }
+	property{ name{shoot_up_counter} type{int32_t} }
+
+	// poles
+	property{ name{want_to_grab} type{int32_t} }
+	property{ name{no_grab_counter} type{int32_t} }
+	property{ name{drop_grab_tile} type{std::optional<rw::ivec2>} }
+	property{ name{force_feet_to_horizontal_beam_tile} type{int32_t} }
+	property{ name{straight_up_on_horizontal_beam} type{uint8_t} }
+	property{ name{up_on_horizontal_beam_pos} type{rw::vec2} }
+	property{ name{pullup_softlock_safety} type{int32_t} }
+	property{ name{slide_up_pole} type{int32_t} }
+
+	// water
+	property{ name{dive_force} type{float} }
+	property{ name{swim_cycle} type{float} }
+	property{ name{swim_force} type{float} }
+	property{ name{water_jump_delay} type{int32_t} }
+	property{ name{submerged} type{uint8_t} }
+	property{ name{lungs_exhausted} type{uint8_t} }
+	property{ name{drown} type{float} }
+}
+// the physical body a player controls
+relationship{
+	name{player_body}
+	tag{save}
+	link{ object{player} name{player} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{player}
+}
