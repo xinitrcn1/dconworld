@@ -1,4 +1,5 @@
 #include <cmath>
+#include <span>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -6,10 +7,13 @@
 
 #include "selftest.hpp"
 #include "physics.hpp"
+#include "items.hpp"
 #include "player.hpp"
+#include "simulation.hpp"
 #include "world.hpp"
 
 namespace selftest {
+    using rw::ivec2;
     using rw::vec2;
     using world::terrain;
 
@@ -64,6 +68,8 @@ namespace selftest {
             auto const rid = world::add_room(gs, "test_" + std::to_string(gs.world.room_size()), region, txt, err);
             if (!rid || err.error_count > 0)
                 std::printf("make_room failed:\n%s", err.accumulated_errors.c_str());
+            else
+                gs.world.room_set_items_spawned(rid, true); // tests place their own rocks
             return rid;
         }
 
@@ -86,8 +92,9 @@ namespace selftest {
             player::animation_index animation() const { return gs.world.player_get_animation(p); }
             int32_t stun() const { return gs.world.player_get_stun(p); }
             bool dead() const { return gs.world.player_get_dead(p) != 0; }
-            void step(int32_t x = 0, int32_t y = 0, bool jmp = false) {
-                player::update(gs, p, room, player::make_input(float(x), float(y), jmp, false, false));
+            void step(int32_t x = 0, int32_t y = 0, bool jmp = false, bool thrw = false, bool pckp = false) {
+                auto const in = player::make_input(float(x), float(y), jmp, thrw, pckp);
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
                 ++ticks;
             }
             void run(uint32_t n, int32_t x = 0, int32_t y = 0, bool jmp = false) {
@@ -289,6 +296,72 @@ namespace selftest {
             r.check("belly slide", fours && slid, (fours ? s.describe() : "never DownOnFours: " + at));
         }
 
+        {
+            // pick up a rock lying at the feet, throw it, it flies and drops
+            sim s(gs, flat, feet_at(10, 1));
+            auto const rock = items::create_rock(gs, flat, feet_at(11, 1));
+            s.run(30);
+            s.step(0, 0, false, false, true);
+            s.run(5);
+            bool const held = items::grabber(gs, rock) == s.p && gs.world.item_get_mode(rock) == world::weapon_mode::carried;
+            r.check("pick up rock", held, s.describe());
+
+            s.step(0, 1);
+            s.run(20);
+            float const x0 = gs.world.body_chunk_get_pos(items::chunk(gs, rock)).x;
+            s.step(0, 0, false, true);
+            bool const thrown = gs.world.item_get_mode(rock) == world::weapon_mode::thrown && gs.world.body_chunk_get_vel(items::chunk(gs, rock)).x > 30.f
+                && !items::grabber(gs, rock);
+            // it stays a projectile until it slows down or hits the wall
+            bool const landed = s.until(200, [&] { return gs.world.item_get_mode(rock) == world::weapon_mode::free; });
+            float const dx = gs.world.body_chunk_get_pos(items::chunk(gs, rock)).x - x0;
+            char d[96];
+            std::snprintf(d, sizeof(d), " thrown=%d flew=%.0fpx", int(thrown), dx);
+            r.check("throw rock", thrown && landed && dx > 200.f, s.describe() + d);
+
+            // walk to it, pick it up again, then drop it holding down
+            s.run(30);
+            vec2 const rp = gs.world.body_chunk_get_pos(items::chunk(gs, rock));
+            s.until(400, [&] { return std::fabs(s.pos(1).x - rp.x) < 15.f; }, rp.x > s.pos(1).x ? 1 : -1);
+            s.run(45); // forbiddenToPlayer runs out
+            s.step(0, 0, false, false, true);
+            s.run(3);
+            bool const regrabbed = items::grabber(gs, rock) == s.p;
+            for (int i = 0; i < 6; ++i)
+                s.step(0, -1);
+            s.step(0, -1, false, false, true);
+            s.run(3, 0, -1);
+            r.check("pick up again & drop", regrabbed && !items::grabber(gs, rock), s.describe());
+            items::destroy(gs, rock);
+        }
+        {
+            // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
+            auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
+                if (y < 8) return '#';
+                if ((x == 23 || x == 24) && y <= 16) return '#'; // the middle door starts closed
+                return ' ';
+            }));
+            auto& w = gs.world;
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_last_closed(g, 0b010);
+            w.try_create_gate_location(g, gate_room);
+            sim s(gs, gate_room, feet_at(19, 8));
+            // stand still in zone 1 until the airlock cycles and the middle opens
+            bool const opened = s.until(1200, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_open; });
+            auto const view = world::get_room_view(gs, gate_room);
+            bool const passable = view.get_tile(23, 9).t == terrain::air && view.get_tile(14, 9).t == terrain::solid;
+            s.run(200, 1);
+            bool const through = s.pos(1).x > 27.f * 20.f;
+            bool const reset = s.until(1500, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_closed; });
+            char d[96];
+            std::snprintf(d, sizeof(d), " opened=%d passable=%d through=%d rearmed=%d", int(opened), int(passable), int(through), int(reset));
+            r.check("region gate cycle", opened && passable && through && reset && view.get_tile(14, 9).t == terrain::air, s.describe() + d);
+        }
+
         std::printf("\n%d passed, %d failed\n", r.passed, r.failed);
         return r.failed == 0 ? 0 : 1;
     }
@@ -316,7 +389,10 @@ namespace selftest {
                     iy = rng.range(-1, 2);
                     jmp = rng.value() < 0.3f;
                 }
-                player::update(gs, p, room, player::make_input(float(ix), float(iy), jmp, false, false));
+                auto const in = player::make_input(float(ix), float(iy), jmp, rng.value() < 0.05f, rng.value() < 0.05f);
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                if (simulation::player_room(gs, p) != rid)
+                    break; // went through a pipe
                 bool finite = true;
                 for (uint32_t i = 0; i < 2; ++i) {
                     vec2 const q = w.body_chunk_get_pos(player::body_chunk(gs, p, i));
@@ -329,8 +405,37 @@ namespace selftest {
                 }
             }
         });
+        uint32_t rocks = 0;
+        w.for_each_item([&](dcon::item_id) { ++rocks; });
+        std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks spawned\n", w.room_size(), ticks_per_room, bad, rocks);
+
+        // every connected room exit pipe: sit in the entrance, push into it and
+        // expect to come out in the connected room
+        uint32_t pipes = 0, arrived = 0;
+        w.for_each_shortcut([&](dcon::shortcut_id sc) {
+            if (w.shortcut_get_type(sc) != world::shortcut_type::room_exit)
+                return;
+            auto const exit = w.shortcut_get_exit_from_shortcut_destination(sc);
+            dcon::room_id const target = exit ? dcon::room_id{w.room_exit_get_target_from_exit_connection(exit)} : dcon::room_id{};
+            if (!target)
+                return;
+            auto const rid = w.shortcut_get_room_from_shortcut_location(sc);
+            auto const room = world::get_room_view(gs, rid);
+            ivec2 const start = w.shortcut_get_start(sc);
+            ivec2 const dir = room.shortcut_entrance_hole_direction(start);
+            ++pipes;
+            player::reset(gs, p, rid, world::room_view::middle_of_tile(start) - vec2{0.f, 8.f});
+            auto const in = player::make_input(float(-dir.x), float(-dir.y), false, false, false);
+            for (uint32_t t = 0; t < 2400; ++t) {
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                if (simulation::player_room(gs, p) == target && !w.player_get_in_shortcut(p)) {
+                    ++arrived;
+                    break;
+                }
+            }
+        });
+        std::printf("pipes: %u of %u connected room exits delivered the slugcat\n", arrived, pipes);
         player::destroy(gs, p);
-        std::printf("fuzzed %u rooms x %u ticks, %u failures\n", w.room_size(), ticks_per_room, bad);
         return bad == 0 ? 0 : 1;
     }
 }

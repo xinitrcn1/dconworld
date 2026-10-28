@@ -70,8 +70,24 @@ namespace player {
         rw::ivec2 zero_g_gamepad_int_vec() const noexcept;
     };
 
-    // SlugcatStats (base game slugcats)
+    // SlugcatStats.Name: base game, Downpour (MoreSlugcats) and Watcher
+    enum class slugcat_name : uint8_t {
+        white,      // Survivor
+        yellow,     // Monk
+        red,        // Hunter
+        gourmand,
+        artificer,
+        rivulet,
+        spear,      // Spearmaster
+        saint,
+        inv,        // Sofanthiel
+        watcher,
+        count
+    };
+
+    // SlugcatStats
     struct slugcat_stats {
+        slugcat_name name = slugcat_name::white;
         float runspeed_fac = 1.f;
         float body_weight_fac = 1.f;
         float pole_climb_speed_fac = 1.f;
@@ -83,10 +99,10 @@ namespace player {
         float swim_boost_min_air = 0.5f;
         float drown_threshold = 1.f / 3.f;
         float lungs_fac = 1.f;
-        // PlayerGraphics.DefaultSlugcatColor
+        // PlayerGraphics.DefaultSlugcatColor / DefaultBodyPartColorHex eyes
         rw::vec3 body_color{1.f, 1.f, 1.f};
+        rw::vec3 eye_color{0.0627451f, 0.0627451f, 0.0627451f};
     };
-    enum class slugcat_name : uint8_t { white, yellow, red };
     slugcat_stats make_stats(slugcat_name name) noexcept;
 
     // BodyPart (GenericBodyPart / TailSegment) of the PlayerGraphics module

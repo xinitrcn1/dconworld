@@ -14,6 +14,8 @@ uniform ivec2 u_effect_colors; //[0,7] EffectColorA + EffectColorB
 uniform float u_grime_factor; //[0,1] amount of grime
 uniform float u_rooftop_blend; //[0,1] alpha of skybox
 uniform float u_timer;
+// 0: background pass (behind sprites), 1: foreground pass (in front of sprites)
+uniform int u_pass;
 // Lighting (we don't prebake lets just go in raw)
 uniform vec4 u_lighting_data[MAX_LIGHTS]; //vec3(rgb), a=intensity
 uniform vec2 u_lighting_pos[MAX_LIGHTS]; //(x,y,z) position (euclidean distance)
@@ -117,6 +119,17 @@ vec4 get_room_color(bool rain, ivec3 index, vec4 light_color) {
 void main() {
     vec3 room_color = texture(u_texture0, vec3(v_texcoord.xy, float(u_camera_index))).rgb;
     ivec3 index = ivec3(room_color * 255.0f);
+
+    // Vanilla LevelColor masks out every pixel with depth >= 5 wherever a sprite
+    // was drawn (the level graphic sits above creatures), so those pixels are
+    // background and depths 0..4 are foreground. Split them into two passes.
+    bool sky_pixel = index == ivec3(255, 255, 255);
+    int split_depth = (index.r - 1) % 30;
+    bool foreground = !sky_pixel && index.r > 0 && split_depth < 5;
+    if (u_pass == 0 && foreground)
+        discard;
+    if (u_pass == 1 && !foreground)
+        discard;
 
     vec4 light_color = vec4(0.f);
     for (int i = 0; i < MAX_LIGHTS; ++i) {

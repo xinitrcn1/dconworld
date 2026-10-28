@@ -32,6 +32,8 @@ namespace sys {
         // Rain World's screen, the size vanilla room cameras are laid out for
         float screen_width = 1366.f;
         float screen_height = 768.f;
+        // UnityEngine.Random for world level rolls (item spawns...)
+        rw::rng random{0x2545F491u};
 
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;

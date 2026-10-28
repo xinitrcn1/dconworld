@@ -3,6 +3,8 @@
 
 #include "player.hpp"
 #include "physics.hpp"
+#include "items.hpp"
+#include "shortcuts.hpp"
 
 // Port notes
 // - Code is kept structurally close to Player.cs so it can be diffed against
@@ -79,19 +81,84 @@ namespace player {
     }
 
     slugcat_stats make_stats(slugcat_name name) noexcept {
+        // SlugcatStats constructor and PlayerGraphics.DefaultSlugcatColor /
+        // DefaultBodyPartColorHex (eyes), not malnourished
         slugcat_stats s;
-        if (name == slugcat_name::yellow) {
+        s.name = name;
+        rw::vec3 const white_eyes{1.f, 1.f, 1.f};
+        switch (name) {
+        case slugcat_name::white:
+            break;
+        case slugcat_name::yellow:
             s.body_color = rw::vec3{1.f, 1.f, 0.4509804f};
             s.body_weight_fac = 0.95f;
             s.lungs_fac = 1.2f;
-        } else if (name == slugcat_name::red) {
+            break;
+        case slugcat_name::red:
             s.body_color = rw::vec3{1.f, 0.4509804f, 0.4509804f};
             s.runspeed_fac = 1.2f;
             s.body_weight_fac = 1.12f;
             s.pole_climb_speed_fac = 1.25f;
             s.corridor_climb_speed_fac = 1.2f;
+            break;
+        case slugcat_name::gourmand:
+            s.body_color = rw::vec3{0.94118f, 0.75686f, 0.59216f};
+            s.body_weight_fac = 1.35f;
+            s.pole_climb_speed_fac = 0.8f;
+            s.corridor_climb_speed_fac = 0.86f;
+            break;
+        case slugcat_name::artificer:
+            s.body_color = rw::vec3{0.43922f, 0.13725f, 0.23529f};
+            s.eye_color = white_eyes;
+            s.runspeed_fac = 1.2f;
+            s.body_weight_fac = 1.12f;
+            s.pole_climb_speed_fac = 1.25f;
+            s.corridor_climb_speed_fac = 1.2f;
+            s.swim_boost_cost = 0.015f;
+            s.swim_boost_force = 6.f;
+            break;
+        case slugcat_name::rivulet:
+            s.body_color = rw::vec3{0.56863f, 0.8f, 0.94118f};
+            s.body_weight_fac = 0.95f;
+            s.lungs_fac = 0.15f;
+            s.runspeed_fac = 1.75f;
+            s.pole_climb_speed_fac = 1.8f;
+            s.corridor_climb_speed_fac = 1.6f;
+            s.swim_boost_cost = 0.025f;
+            s.swim_boost_cooldown = 10;
+            break;
+        case slugcat_name::spear:
+            s.body_color = rw::vec3{0.31f, 0.18f, 0.41f};
+            s.eye_color = white_eyes;
+            s.runspeed_fac = 1.2f;
+            s.body_weight_fac = 0.85f;
+            s.pole_climb_speed_fac = 1.25f;
+            s.corridor_climb_speed_fac = 1.2f;
+            break;
+        case slugcat_name::saint:
+            s.body_color = rw::vec3{0.66667f, 0.9451f, 0.33725f};
+            break;
+        case slugcat_name::inv:
+            s.body_color = rw::vec3{0.09f, 0.14f, 0.31f};
+            s.eye_color = white_eyes;
+            break;
+        case slugcat_name::watcher:
+            // Custom.HSL2RGB(0.63055557, 0.54, 0.2)
+            s.body_color = rw::vec3{0.092f, 0.1389f, 0.308f};
+            s.eye_color = white_eyes;
+            s.lungs_fac = 0.8f;
+            break;
+        default:
+            break;
         }
         return s;
+    }
+
+    char const* to_string(slugcat_name n) noexcept {
+        static char const* const names[] = {
+            "Survivor", "Monk", "Hunter", "Gourmand", "Artificer", "Rivulet", "Spearmaster", "Saint", "Sofanthiel", "Watcher",
+        };
+        return n < slugcat_name::count ? names[size_t(n)] : "?";
     }
 
     namespace {
@@ -172,7 +239,17 @@ namespace player {
     X(water_jump_delay) \
     X(submerged) \
     X(lungs_exhausted) \
-    X(drown)
+    X(drown) \
+    X(entering_shortcut) \
+    X(shortcut_rad_add) \
+    X(in_shortcut) \
+    X(vessel_reverse) \
+    X(vessel_progress) \
+    X(vessel_last_progress) \
+    X(want_to_pick_up) \
+    X(want_to_throw) \
+    X(dont_grab_stuff) \
+    X(touched_no_input_counter)
 
         // Reference accessors into the data container for one player, so the
         // port reads like the C# ("this.canJump" -> p.can_jump())
@@ -231,6 +308,8 @@ namespace player {
             static vec2 mid(vec2 v) { return room_view::middle_of_tile(v); }
             static vec2 mid(ivec2 v) { return room_view::middle_of_tile(v); }
             bool consious() { return p.stun() <= 0 && !p.dead(); }
+            // Player.isRivulet (the only DLC cat with movement specific branches ported)
+            bool rivulet() { return p.stats().name == slugcat_name::rivulet; }
             void aerobic_increase(float f) { p.aerobic_level() = mathf::min(1.f, p.aerobic_level() + f / 9.f); }
         };
 
@@ -294,6 +373,8 @@ namespace player {
 #undef X
             p.stats() = stats;
             p.random() = random;
+            // id properties come back as fat ids (not references)
+            p.state.world.player_set_vessel_shortcut(p.id, dcon::shortcut_id{});
             p.air_in_lungs() = 1.f;
             p.flip_direction() = 1;
             p.last_flip_direction() = 1;
@@ -344,6 +425,7 @@ namespace player {
     }
 
     void destroy(sys::game_state& state, dcon::player_id id) {
+        items::release_all(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
         if (o)
@@ -351,6 +433,7 @@ namespace player {
     }
 
     void reset(sys::game_state& state, dcon::player_id id, dcon::room_id room, vec2 pos) {
+        items::release_all(state, id);
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -419,26 +502,33 @@ namespace player {
         if (p.want_to_jump() > 0) {
             --p.want_to_jump();
         } else if (jump_pressed) {
-            bool const standing_still = p.standing() && p.animation() == animation_index::none
+            bool standing_still = p.standing() && p.animation() == animation_index::none
                 && std::fabs(x.last_pos(1).y - x.pos(1).y) < 20.f && x.vel(1).y < 5.f && x.pos(0).y > x.pos(1).y + 5.f;
+            if (x.rivulet())
+                standing_still = std::fabs(x.last_pos(1).y - x.pos(1).y) < 50.f && x.vel(1).y < 15.f
+                    && (p.animation() == animation_index::none || p.animation() == animation_index::flip
+                        || p.animation() == animation_index::rocket_jump || p.animation() == animation_index::roll);
             if (standing_still && p.body_mode() == body_mode_index::default_ && x.contact(1).y == 0 && x.contact(0).y == 0
             && x.contact(1).x == 0 && x.contact(0).x == 0 && !x.solid(1, -1, 0) && !x.solid(1, 1, 0)) {
                 // pole skip: jump again when the feet pass a horizontal beam
                 vec2 const m = x.mid(x.pos(1));
-                bool const on_beam = x.tile(x.pos(1)).horizontal_beam() && x.in(0).x != 0
+                bool on_beam = x.tile(x.pos(1)).horizontal_beam() && x.in(0).x != 0
                     && mathf::min(std::fabs(m.y - x.pos(1).y), std::fabs(m.y - x.last_pos(1).y)) < 7.5f;
+                if (x.rivulet())
+                    on_beam = (x.tile(x.pos(1)).horizontal_beam() || x.tile(vec2{x.pos(1).x, x.pos(1).y - 10.f}).horizontal_beam())
+                        && mathf::min(std::fabs(m.y - x.pos(1).y), std::fabs(m.y - x.last_pos(1).y)) < 22.5f;
                 if (on_beam && x.in(0).y <= 0 && p.pole_skip_penalty() < 1) {
-                    x.vel(0).y = 4.5f;
-                    x.vel(1).y = 3.5f;
+                    x.vel(0).y = x.rivulet() ? 7.f : 4.5f;
+                    x.vel(1).y = x.rivulet() ? 6.f : 3.5f;
                     float const dy = m.y + 5.f - x.pos(1).y;
                     x.pos(1).y += dy;
                     x.pos(0).y += dy;
-                    p.jump_boost() = 6.f;
-                    p.pole_skip_penalty() = 6;
+                    p.jump_boost() = x.rivulet() ? 7.f : 6.f;
+                    p.pole_skip_penalty() = x.rivulet() ? 3 : 6;
                     p.want_to_jump() = 0;
                     p.can_jump() = 0;
                 } else {
-                    p.pole_skip_penalty() = mathf::min(30, p.pole_skip_penalty() + 12);
+                    p.pole_skip_penalty() = x.rivulet() ? 6 : mathf::min(30, p.pole_skip_penalty() + 12);
                     p.want_to_jump() = 5;
                 }
             } else {
@@ -487,6 +577,10 @@ namespace player {
         for (int i = 9; i > 0; --i)
             p.input()[i] = p.input()[i - 1];
         p.input()[0] = (p.stun() == 0 && !p.dead()) ? new_input : input_package{};
+        if (x.in(0).x == 0 && x.in(0).y == 0 && !x.in(0).jmp && !x.in(0).thrw && !x.in(0).pckp)
+            ++p.touched_no_input_counter();
+        else
+            p.touched_no_input_counter() = 0;
         if (p.super_launch_jump() > 10 && x.in(0).jmp && x.in(1).jmp && x.in(2).jmp && x.in(0).y < 1)
             x.in(0).x = 0;
         if (p.animation() == animation_index::roll && x.in(0).x == 0 && x.in(0).down_diagonal != 0)
@@ -520,12 +614,18 @@ namespace player {
             --p.stun();
         if (p.shortcut_delay() > 0)
             --p.shortcut_delay();
+        // being sucked into a shortcut replaces the physics and movement
+        if (shortcuts::update_entering(state, id, room))
+            return;
         // PhysicalObject.Update
         physics::update_object(state, room, x.o, &terrain_impact, &x);
 
         x.go_through_floors(false);
-        if (p.stun() < 1 && !p.dead())
+        if (p.stun() < 1 && !p.dead()) {
             movement_update(x);
+            items::grab_update(state, id, room);
+        }
+        items::carry_update(state, id);
     }
 }
 
@@ -898,8 +998,7 @@ namespace player {
             }
             // (JumpOnChunk needs other objects, Adrenaline boosts need mushrooms)
             p.super_launch_jump() -= launch_decay;
-            // TODO: shortcut entry (enteringShortCut) once shortcut travel exists;
-            // setting it without travel would freeze the player in place.
+            shortcuts::check_entrance(x.state, x.p.id, x.room);
         }
     }
 }
@@ -1119,7 +1218,7 @@ namespace player {
                     x.vel(1).x += k * 3.5f * sd + sd * 0.5f;
                 } else if (in.x != 0) {
                     if (in.x != p.slide_direction()) {
-                        if (p.init_slide_counter() > 10 && (x.vel(0).x > 0.f) == (p.slide_direction() > 0) && std::fabs(x.vel(0).x) > 1.f)
+                        if (p.init_slide_counter() > (x.rivulet() ? 5 : 10) && (x.vel(0).x > 0.f) == (p.slide_direction() > 0) && std::fabs(x.vel(0).x) > 1.f)
                             p.slide_counter() = 1;
                         else
                             p.slide_direction() = in.x;
@@ -1732,10 +1831,15 @@ namespace player {
                 vec2 const axis = rw::normalized(x.pos(0) - x.pos(1));
                 float const aligned = (std::fabs(rw::dot(rw::normalized(x.vel(0)), axis)) + std::fabs(rw::dot(rw::normalized(x.vel(1)), axis))) / 2.f;
                 // swim boost
-                if (in.jmp && !in1.jmp && p.air_in_lungs() > p.stats().swim_boost_min_air) {
+                bool const can_boost = x.rivulet() ? p.submerged() != 0 : p.air_in_lungs() > p.stats().swim_boost_min_air;
+                if (in.jmp && !in1.jmp && can_boost) {
                     if (p.water_jump_delay() == 0) {
                         p.swim_cycle() = 2.7f;
-                        x.vel(0) += custom::dir_vec(x.pos(1), x.pos(0)) * p.stats().swim_boost_force;
+                        vec2 const boost_dir = custom::dir_vec(x.pos(1), x.pos(0));
+                        if (x.rivulet())
+                            x.vel(0) += boost_dir * (boost_dir.y > 0.5f ? 300.f : 50.f);
+                        else
+                            x.vel(0) += boost_dir * p.stats().swim_boost_force;
                         p.air_in_lungs() -= p.stats().swim_boost_cost;
                     } else {
                         p.swim_cycle() = 0.f;
@@ -1776,7 +1880,7 @@ namespace player {
                         x.vel(1) -= dir * (0.1f * slow);
                     }
                 }
-                x.water_friction() = mathf::lerp(0.92f, 0.96f, aligned);
+                x.water_friction() = x.rivulet() && p.water_jump_delay() >= 5 ? 0.99f : mathf::lerp(0.92f, 0.96f, aligned);
                 if (p.body_mode() != body_mode_index::swimming)
                     p.animation() = animation_index::none;
                 break;
@@ -1784,7 +1888,7 @@ namespace player {
             case animation_index::surface_swim:
                 p.can_jump() = 0;
                 p.swim_cycle() += 0.025f;
-                x.water_friction() = 0.96f;
+                x.water_friction() = x.rivulet() && p.water_jump_delay() >= 5 ? 0.999f : 0.96f;
                 p.swim_force() *= 0.5f;
                 if (in.y > -1 && x.vel(0).y > -5.f && x.vel(0).y < 3.f && p.water_jump_delay() == 0 && !in.jmp) {
                     // bob at the surface
@@ -1798,26 +1902,27 @@ namespace player {
                 } else if (in.y == 1) {
                     x.vel(0).y += 0.5f;
                 }
-                p.dynamic_run_speed()[0] = 2.7f;
+                p.dynamic_run_speed()[0] = x.rivulet() ? 5.f : 2.7f;
                 p.dynamic_run_speed()[1] = 0.f;
                 if (in.x != 0) {
-                    x.vel(1).x -= float(in.x) * 0.2f;
+                    x.vel(1).x -= float(in.x) * 0.2f * (x.rivulet() ? 1.5f : 1.f);
                     p.swim_cycle() += 1.f / 30.f;
                 }
                 if (in.jmp && !in1.jmp) {
                     if (p.water_jump_delay() == 0) {
                         if (x.vel(0).y < 2.f && x.vel(1).y < 2.f) {
-                            x.vel(0).y += 6.f;
-                            x.vel(1).y += 6.f;
+                            x.vel(0).y += x.rivulet() ? 18.f : 6.f;
+                            x.vel(1).y += x.rivulet() ? 18.f : 6.f;
                         } else {
-                            x.vel(0) += custom::dir_vec(x.pos(1), x.pos(0)) * 4.f;
-                            x.vel(1).y += x.vel(1).y < 4.f ? 3.f : 1.5f;
+                            float const k = x.rivulet() ? 3.f : 1.f;
+                            x.vel(0) += custom::dir_vec(x.pos(1), x.pos(0)) * 4.f * k;
+                            x.vel(1).y += (x.vel(1).y < 4.f ? 3.f : 1.5f) * k;
                         }
-                        p.water_jump_delay() = 17;
+                        p.water_jump_delay() = x.rivulet() ? 6 : 17;
                     } else {
-                        if (p.water_jump_delay() < 10)
+                        if (p.water_jump_delay() < 10 && !x.rivulet())
                             p.water_jump_delay() = 10;
-                        x.vel(0) += vec2{0.f, 4.f};
+                        x.vel(0) += vec2{0.f, x.rivulet() ? 12.f : 4.f};
                         x.vel(1).x *= 0.75f;
                     }
                 }
@@ -1909,14 +2014,14 @@ namespace player {
             case animation_index::belly_slide: {
                 p.body_mode() = body_mode_index::default_;
                 float const rd = float(p.roll_direction());
-                if (p.roll_counter() < 6) {
+                if (p.roll_counter() < 6 && !x.rivulet()) {
                     x.vel(1).y += 2.7f;
                     x.vel(1).x -= 9.1f * rd;
                 } else if (x.solid(1, 0, -1) || x.solid(1, 0, -2)) {
                     x.vel(1).y -= 0.5f;
                 }
-                float const long_push = 14.f;
-                float const push = 18.1f;
+                float const long_push = x.rivulet() ? 20.f : 14.f;
+                float const push = x.rivulet() ? 25.f : 18.1f;
                 x.vel(0).x += (p.long_belly_slide() ? long_push : push) * rd * std::sin(float(p.roll_counter()) / (p.long_belly_slide() ? 39.f : 15.f) * mathf::pi);
                 if (x.solid(0, 0, -1) || x.solid(0, 0, -2))
                     x.vel(0).y -= 2.3f;
@@ -1946,8 +2051,8 @@ namespace player {
                     p.whiplash_jump() = false;
                 else if (p.roll_counter() > 5 && in.x == -p.roll_direction())
                     p.whiplash_jump() = true;
-                int32_t const jump_window = 12;
-                int32_t const long_jump_window = 34;
+                int32_t const jump_window = x.rivulet() ? 6 : 12;
+                int32_t const long_jump_window = x.rivulet() ? 20 : 34;
                 if ((p.roll_counter() > 8 && p.exit_belly_slide_counter() > (p.long_belly_slide() ? 16 : 6))
                 || p.roll_counter() > (p.long_belly_slide() ? 39 : 15)
                 || (!p.long_belly_slide() && p.roll_counter() > 6 && !x.solid(0, 0, -1) && !x.solid(1, 0, -1))
@@ -2014,18 +2119,25 @@ namespace player {
                 // close to the ground: plain upward jump
                 if (x.contact(1).y > -1 && x.contact(0).y > -1 && x.object_submersion() == 0.f)
                     k *= 0.7f;
-                x.vel(0).y = 8.f * k;
-                x.vel(1).y = 7.f * k;
+                x.vel(0).y = (x.rivulet() ? 9.f : 8.f) * k;
+                x.vel(1).y = (x.rivulet() ? 8.f : 7.f) * k;
                 x.pos(0).y += 10.f * mathf::min(1.f, k);
                 x.pos(1).y += 10.f * mathf::min(1.f, k);
                 p.jump_boost() = 0.f;
             } else {
-                x.vel(0).y = 8.f * k;
-                x.vel(1).y = 7.f * k;
-                x.vel(0).x = 6.f * k * float(direction);
-                x.vel(1).x = 5.f * k * float(direction);
+                if (x.rivulet()) {
+                    x.vel(0).y = 10.f * k;
+                    x.vel(1).y = 9.f * k;
+                    x.vel(0).x = 9.f * k * float(direction);
+                    x.vel(1).x = 7.f * k * float(direction);
+                } else {
+                    x.vel(0).y = 8.f * k;
+                    x.vel(1).y = 7.f * k;
+                    x.vel(0).x = 6.f * k * float(direction);
+                    x.vel(1).x = 5.f * k * float(direction);
+                }
                 p.standing() = true;
-                p.jump_boost() = 0.f;
+                p.jump_boost() = x.rivulet() ? 4.f : 0.f;
                 p.jump_stun() = 8 * direction;
             }
             p.can_wall_jump() = 0;
@@ -2053,7 +2165,7 @@ namespace player {
                 x.vel(0).y = 6.f * k;
                 x.vel(1).y = 5.f * k;
                 p.standing() = true;
-                p.jump_boost() = 8.f;
+                p.jump_boost() = x.rivulet() ? 14.f : 8.f;
                 return;
             }
             if (p.animation() == animation_index::ledge_grab) {
@@ -2065,10 +2177,18 @@ namespace player {
                 p.jump_boost() = 0.f;
                 if (in.x != 0) {
                     p.animation() = animation_index::none;
-                    x.vel(0).y = 8.f * k;
-                    x.vel(1).y = 7.f * k;
-                    x.vel(0).x = 6.f * float(p.flip_direction()) * k;
-                    x.vel(1).x = 5.f * float(p.flip_direction()) * k;
+                    float const fd = float(p.flip_direction());
+                    if (x.rivulet()) {
+                        x.vel(0).y = 9.f * k;
+                        x.vel(1).y = 8.f * k;
+                        x.vel(0).x = 9.f * fd * k;
+                        x.vel(1).x = 7.f * fd * k;
+                    } else {
+                        x.vel(0).y = 8.f * k;
+                        x.vel(1).y = 7.f * k;
+                        x.vel(0).x = 6.f * fd * k;
+                        x.vel(1).x = 5.f * fd * k;
+                    }
                     return;
                 }
                 if (in.y <= 0) {
@@ -2096,14 +2216,16 @@ namespace player {
                 vec2 const v = custom::deg_to_vec(float(p.roll_direction()) * mathf::lerp(60.f, 35.f, t)) * mathf::lerp(9.5f, 13.1f, t) * k;
                 x.vel(0) = v;
                 x.vel(1) = v;
+                x.vel(0).x *= x.rivulet() ? 1.5f : 1.f;
+                x.vel(1).x *= x.rivulet() ? 1.5f : 1.f;
                 p.animation() = animation_index::rocket_jump;
                 p.roll_direction() = 0;
                 return;
             }
             if (p.animation() == animation_index::belly_slide) {
-                float const speed = 9.f;
+                float const speed = x.rivulet() ? 18.f : 9.f;
                 if (!p.whiplash_jump() && in.x != -p.roll_direction()) {
-                    float const up = 8.5f;
+                    float const up = x.rivulet() ? 10.f : 8.5f;
                     x.pos(1) += vec2{5.f * float(p.roll_direction()), 5.f};
                     x.pos(0) = x.pos(1) + vec2{5.f * float(p.roll_direction()), 5.f};
                     vec2 const v = vec2{float(p.roll_direction()) * speed, up} * k * (p.long_belly_slide() ? 1.2f : 1.f);
@@ -2127,8 +2249,8 @@ namespace player {
                 float const rd = float(p.roll_direction());
                 x.pos(0) += vec2{rd * -(float(room_behind) * 15.f + 8.f), 14.f};
                 x.pos(1) += vec2{rd * -(float(room_behind) * 15.f + 2.f), 0.f};
-                x.vel(0) = vec2{rd * -7.f, 10.f};
-                x.vel(1) = vec2{rd * -7.f, 11.f};
+                x.vel(0) = vec2{rd * (x.rivulet() ? -11.f : -7.f), x.rivulet() ? 12.f : 10.f};
+                x.vel(1) = vec2{rd * (x.rivulet() ? -11.f : -7.f), x.rivulet() ? 13.f : 11.f};
                 p.roll_direction() = -p.roll_direction();
                 p.flip_from_slide() = true;
                 p.whiplash_jump() = false;
@@ -2153,24 +2275,24 @@ namespace player {
             if (p.standing()) {
                 if (p.slide_counter() > 0 && p.slide_counter() < 10) {
                     // flip out of a skid
-                    x.vel(0).y = 9.f * k;
-                    x.vel(1).y = 7.f * k;
+                    x.vel(0).y = (x.rivulet() ? 12.f : 9.f) * k;
+                    x.vel(1).y = (x.rivulet() ? 10.f : 7.f) * k;
                     x.vel(0).x *= 0.5f;
                     x.vel(1).x *= 0.5f;
                     x.vel(0).x -= float(p.slide_direction()) * 4.f * k;
-                    p.jump_boost() = 5.f;
+                    p.jump_boost() = x.rivulet() ? 9.f : 5.f;
                     p.animation() = animation_index::flip;
                     p.slide_counter() = 0;
                 } else {
-                    x.vel(0).y = 4.f * k;
-                    x.vel(1).y = 3.f * k;
+                    x.vel(0).y = (x.rivulet() ? 6.f : 4.f) * k;
+                    x.vel(1).y = (x.rivulet() ? 5.f : 3.f) * k;
                     p.jump_boost() = 8.f;
                 }
             } else {
                 float horizontal = 1.5f;
                 if (p.super_launch_jump() >= 20) {
                     p.super_launch_jump() = 0;
-                    horizontal = 9.f;
+                    horizontal = x.rivulet() ? 12.f : 9.f;
                     dir = x.pos(0).x > x.pos(1).x ? 1 : -1;
                     p.simulate_hold_jump_button() = 6;
                 }

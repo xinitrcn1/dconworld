@@ -122,6 +122,7 @@ namespace world {
             uint16_t length = 0;
             shortcut_type type = shortcut_type::dead_end;
             int16_t dest_exit = -1; // index into exits
+            std::vector<rw::ivec2> path; // entrance first
         };
 
         struct parsed_room {
@@ -265,12 +266,14 @@ namespace world {
             uint32_t n = 0;
             shortcut_type type = shortcut_type::dead_end;
             int16_t dest = -1;
+            std::vector<rw::ivec2> path{start};
             for (;;) {
                 ++n;
                 rw::ivec2 const prev = cur;
                 cur = next_shortcut_position(room, cur, last);
                 if (cur == prev)
                     break;
+                path.push_back(cur);
                 last = prev;
                 auto const t = room.get_tile(cur);
                 if (t.t == terrain::shortcut_entrance) {
@@ -295,7 +298,7 @@ namespace world {
                     break;
                 }
             }
-            return parsed_shortcut{start, cur, uint16_t(std::min<uint32_t>(n, 0xFFFF)), type, dest};
+            return parsed_shortcut{start, cur, uint16_t(std::min<uint32_t>(n, 0xFFFF)), type, dest, std::move(path)};
         }
 
         void parse_cameras(parsed_room& r, std::string_view line) {
@@ -602,6 +605,9 @@ namespace world {
                 dc.shortcut_set_dest(sid, sc.dest);
                 dc.shortcut_set_length(sid, sc.length);
                 dc.shortcut_set_type(sid, sc.type);
+                auto path = dc.shortcut_get_path(sid);
+                for (auto const t : sc.path)
+                    path.push_back(t);
                 dc.try_create_shortcut_location(sid, rid);
                 if (sc.dest_exit >= 0 && size_t(sc.dest_exit) < exits.size())
                     dc.try_create_shortcut_destination(sid, exits[size_t(sc.dest_exit)]);
@@ -622,7 +628,8 @@ namespace world {
                 dc.try_create_node_location(nid, rid);
             }
 
-            // RoomSettings, -1 meaning "not set"
+            // RoomSettings, -1 meaning "not set"; unset values come from
+            // DefaultRoomSettings.ancestor
             auto const& t = r.settings;
             // vanilla falls back on the region palette through the settings templates
             dc.room_set_palette(rid, t.palette ? s.palette_for(*t.palette) : dcon::palette_id{});
@@ -635,21 +642,21 @@ namespace world {
             dc.room_set_fade_palette(rid, t.fade_palette_index ? s.palette_for(*t.fade_palette_index) : dcon::palette_id{});
             dc.room_set_fade_palette_amount(rid, t.fade_palette_amount.value_or(0.f));
             dc.room_set_danger_type(rid, t.danger_type ? to_danger_type(*t.danger_type) : danger_type::rain);
-            dc.room_set_grime(rid, t.grime.value_or(0.f));
+            dc.room_set_grime(rid, t.grime.value_or(0.5f));
             dc.room_set_clouds(rid, t.clouds.value_or(0.f));
-            dc.room_set_ceiling_drips(rid, t.ceiling_drips.value_or(0.f));
-            dc.room_set_wave_speed(rid, t.wave_speed.value_or(0.f));
-            dc.room_set_wave_length(rid, t.wave_length.value_or(0.f));
+            dc.room_set_ceiling_drips(rid, t.ceiling_drips.value_or(0.5f));
+            dc.room_set_wave_speed(rid, t.wave_speed.value_or(0.75f));
+            dc.room_set_wave_length(rid, t.wave_length.value_or(0.5f));
             dc.room_set_wave_amplitude(rid, t.wave_amplitude.value_or(0.f));
-            dc.room_set_second_wave_length(rid, t.second_wave_length.value_or(0.f));
+            dc.room_set_second_wave_length(rid, t.second_wave_length.value_or(0.16666667f));
             dc.room_set_second_wave_amplitude(rid, t.second_wave_amplitude.value_or(0.f));
-            dc.room_set_water_reflection_alpha(rid, t.water_reflection_alpha.value_or(0.f));
-            dc.room_set_bkg_drone_volume(rid, t.bkg_drone_volume.value_or(0.f));
-            dc.room_set_bkg_drone_no_threat_volume(rid, t.bkg_drone_no_threat_volume.value_or(0.f));
-            dc.room_set_random_item_density(rid, t.random_item_density.value_or(0.f));
-            dc.room_set_random_item_spear_chance(rid, t.random_item_spear_chance.value_or(0.f));
-            dc.room_set_rumble_intensity(rid, t.rumble_intensity.value_or(0.f));
-            dc.room_set_rain_intensity(rid, t.rain_intensity.value_or(0.f));
+            dc.room_set_water_reflection_alpha(rid, t.water_reflection_alpha.value_or(1.f));
+            dc.room_set_bkg_drone_volume(rid, t.bkg_drone_volume.value_or(0.3f));
+            dc.room_set_bkg_drone_no_threat_volume(rid, t.bkg_drone_no_threat_volume.value_or(1.f));
+            dc.room_set_random_item_density(rid, t.random_item_density.value_or(0.5f));
+            dc.room_set_random_item_spear_chance(rid, t.random_item_spear_chance.value_or(0.2f));
+            dc.room_set_rumble_intensity(rid, t.rumble_intensity.value_or(1.f));
+            dc.room_set_rain_intensity(rid, t.rain_intensity.value_or(1.f));
             dc.room_set_room_specific_script_active(rid, t.room_specific_script_active.value_or(false));
             dc.room_set_wet_terrain(rid, t.wet_terrain.value_or(false));
 
@@ -799,6 +806,100 @@ namespace world {
             r.settings.apply(t); // room specific values override the template
         }
 
+        // world_<region>.txt ROOMS section: "ROOM : CONN, CONN, DISCONNECTED : ATTR".
+        // Connection i is where room exit i (exitAndDenIndex[i]) leads; gate
+        // rooms appear in both regions with the far side DISCONNECTED, so the
+        // files are merged.
+        void load_world_files(sys::game_state& s, layered_fs::directory const& world_dir, parsers::error_handler& err) {
+            auto& dc = s.world;
+            auto const trim = [](std::string_view v) {
+                while (!v.empty() && (v.front() == ' ' || v.front() == '\t'))
+                    v.remove_prefix(1);
+                while (!v.empty() && (v.back() == ' ' || v.back() == '\t'))
+                    v.remove_suffix(1);
+                return v;
+            };
+            uint32_t links = 0;
+            dc.for_each_region([&](dcon::region_id region) {
+                if (dc.region_get_is_pseudo(region))
+                    return;
+                std::string const name{s.to_string_view(dc.region_get_name(region))};
+                auto const f = world_dir.get_single_subdir(name).get_single_file("world_" + name + ".txt");
+                auto const of = f.open_file(s.fs);
+                if (!of) {
+                    err.add_standalone_warning("no world file for region \"" + name + "\"");
+                    return;
+                }
+                std::vector<std::string_view> lines;
+                split_lines(of->to_string_view(), lines);
+                bool in_rooms = false;
+                for (auto line : lines) {
+                    line = trim(line);
+                    if (line == "ROOMS") {
+                        in_rooms = true;
+                        continue;
+                    }
+                    if (line == "END ROOMS")
+                        break;
+                    if (!in_rooms || line.empty() || line.starts_with("//"))
+                        continue;
+                    // split on " : "
+                    std::vector<std::string_view> parts;
+                    size_t pos = 0;
+                    while (true) {
+                        size_t const sep = line.find(':', pos);
+                        parts.push_back(trim(line.substr(pos, sep == std::string_view::npos ? std::string_view::npos : sep - pos)));
+                        if (sep == std::string_view::npos)
+                            break;
+                        pos = sep + 1;
+                    }
+                    auto const rid = s.find_room(parts[0]);
+                    if (!rid || parts.size() < 2)
+                        continue;
+                    for (size_t i = 2; i < parts.size(); ++i) {
+                        if (parts[i] == "SHELTER")
+                            dc.room_set_is_shelter(rid, true);
+                        else if (parts[i] == "GATE")
+                            dc.room_set_is_gate(rid, true);
+                    }
+                    // the room's exits, in exitAndDenIndex order
+                    std::vector<dcon::room_exit_id> exits;
+                    dc.room_for_each_exit_location(rid, [&](dcon::exit_location_id el) {
+                        exits.push_back(dc.exit_location_get_exit(el));
+                    });
+                    std::sort(exits.begin(), exits.end(), [&](auto a, auto b) { return dc.room_exit_get_index(a) < dc.room_exit_get_index(b); });
+                    size_t i = 0, c = 0;
+                    std::string_view conns = parts[1];
+                    while (c <= conns.size()) {
+                        size_t const comma = std::min(conns.find(',', c), conns.size());
+                        auto const target_name = trim(conns.substr(c, comma - c));
+                        c = comma + 1;
+                        if (target_name.empty())
+                            continue;
+                        if (i < exits.size() && target_name != "DISCONNECTED") {
+                            auto const target = s.find_room(target_name);
+                            if (target && !dc.room_exit_get_target_from_exit_connection(exits[i])) {
+                                dc.room_exit_set_target_from_exit_connection(exits[i], target);
+                                ++links;
+                            }
+                        }
+                        ++i;
+                    }
+                }
+            });
+            // a RegionGate for every gate room
+            dc.for_each_room([&](dcon::room_id rid) {
+                if (!dc.room_get_is_gate(rid))
+                    return;
+                auto const g = dc.create_gate();
+                dc.gate_set_mode(g, gate_mode::middle_closed);
+                dc.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+                dc.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+                dc.try_create_gate_location(g, rid);
+            });
+            reports::add_log("world files: " + std::to_string(links) + " room connections, " + std::to_string(dc.gate_size()) + " gates");
+        }
+
         struct room_job {
             layered_fs::file file;
             layered_fs::directory dir;
@@ -872,6 +973,7 @@ namespace world {
             if (r.ok)
                 commit_room(s, r);
         }
+        load_world_files(s, world_dir, err);
         dc.for_each_region([&](dcon::region_id r) {
             if (!dc.region_get_is_pseudo(r) && dc.region_get_region_membership(r).begin() == dc.region_get_region_membership(r).end())
                 err.add_standalone_warning("no rooms found for region \"" + std::string{s.to_string_view(dc.region_get_name(r))} + "\"");

@@ -25,20 +25,25 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp                    # finds the Steam install, starts in SU_A22
 ./build/rwcpp --room sl_a02      # any room by name
 ./build/rwcpp --root <StreamingAssets> [--root <more>...]
-./build/rwcpp --selftest         # scripted movement tests (no game data needed)
-./build/rwcpp --fuzz 600         # random input soak test in every room
+./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
+./build/rwcpp --selftest         # scripted movement/item/gate tests (no game data needed)
+./build/rwcpp --fuzz 600         # random input soak test in every room, then every room exit pipe
 ```
 
 The game data is read straight from the installed game. Roots are layered:
 pass several `--root`s and earlier ones take priority (mergedmods over base).
 `RW_ROOT` can also point at `StreamingAssets`.
 
-Controls: arrows/WASD move, Z/K/Space jump, R respawn, left click teleports
+Controls: arrows/WASD move, Z/K/Space jump, X/J throw, Left Shift/L pick up
+(hold down while pressing it to drop), push into a pipe entrance to travel it,
+stand still in a gate's middle zone to cycle it, R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
-step, T slow motion, 1/2/3 Survivor/Monk/Hunter. A gamepad (left stick, d-pad,
-south button) also drives player one when playing alone.
+step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
+Rivulet, Spearmaster, Saint, Sofanthiel, Watcher. A gamepad (left stick, d-pad,
+south button jump, west throw, east pick up) also drives player one when
+playing alone.
 
 ## Storage
 
@@ -64,6 +69,10 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/world.*` | room file parsing (in parallel with TBB), loading into the data container, `room_view` tile helpers |
 | `src/physics.*` | `BodyChunk` and `BodyChunkConnection` ports over the data container |
 | `src/player.*` | slugcat movement (`Player.cs` port); players are data container objects (co-op ready) |
+| `src/shortcuts.*` | shortcut travel: suck-in, the vessel moving along the pipe path, spit out, room to room transfers through `world_<region>.txt` connections |
+| `src/items.*` | rocks (`Rock`/`Weapon`): vanilla spawning on a room's first visit, flight/bounces/wall hits, `Player.GrabUpdate`/`ThrowObject` |
+| `src/gates.*` | `RegionGate` airlock state machine and door tiles |
+| `src/simulation.*` | one tick of players, vessels, items and gates of the occupied rooms |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/selftest.*` | scripted movement scenarios and the fuzzer |
 | `og/` | decompiled game source used as the reference (not tracked) |
@@ -90,7 +99,8 @@ All 760 vanilla rooms load with no errors in ~0.6s (warm cache).
 `Player.Update`/`MovementUpdate`/`UpdateBodyMode`/`UpdateAnimation`, `Jump`,
 `WallJump`, `TerrainImpact` (rolls, fall stun and death), `LungUpdate` and the
 helpers (`DirectIntoHoles`, `GrabVerticalPole`, `GravitateToOpening`...) are
-ported for the base game slugcats: crawling, standing, running and skidding,
+ported for every slugcat's stats and colours (Rivulet's movement branches
+included): crawling, standing, running and skidding,
 jumps/boosted jumps/super launch, wall slides and wall jumps, ledge grabs,
 poles (vertical, horizontal, pull ups, beam tips, pole hopping, pole skips),
 corridors (crawl, boosts, turns, drops onto poles), rolls, belly slides,
@@ -99,10 +109,34 @@ drowning. The underlying `BodyChunk` physics (tile, floor and slope
 collision, water, room bounds) and chunk connections are ported faithfully,
 including the vanilla quirks.
 
-Not ported yet: shortcut travel, items and grasps, creatures and object to
-object collision, zero gravity, climbable vines, Remix (MMF) options,
-Downpour/Watcher slugcat abilities, sand terrain (`TerrainManager`), and the
-`modify/` mod merge system (needed for Downpour/Watcher regions).
+Not ported yet: creatures and object to object collision, zero gravity,
+climbable vines, Remix (MMF) options, the other Downpour/Watcher slugcat
+abilities, sand terrain (`TerrainManager`), and the `modify/` mod merge
+system (needed for Downpour/Watcher regions).
+
+### Shortcuts, items, gates
+
+Pushing into a pipe entrance pulls the slugcat in like
+`Creature.enteringShortCut`, then a vessel travels the traced shortcut path at
+vanilla's speed (one tile every third tick) but continuously, so it is drawn
+as a soft circle gliding along the pipe and lighting nearby pipe tiles instead
+of vanilla's tile by tile blink. In-room pipes spit the slugcat out at the
+other end; room exits follow `world_<region>.txt` connections (merged across
+region files, gates included) to the destination's matching exit. Every one
+of the 1414 connected room exits is exercised by `--fuzz`.
+
+Rocks spawn on a room's first visit like `Room.Loaded`: placed rocks at 75%,
+then `RandomItemDensity` random rocks on tiles with three solid tiles below
+(not in shelters or gates; spear rolls are made but spears aren't ported).
+Picking up, dropping (down + pick up), throwing (with recoil, flip
+down-throws and the belly slide boosts), flight, floor bounces, slope
+deflection and wall hits follow `Weapon`/`Rock`/`Player`. Carried rocks sit
+at an approximate hand position until hands are ported.
+
+Gates run the `RegionGate` modes (airlock closing, washing, middle door,
+side doors) with vanilla door speeds, and doors turn their tiles solid while
+closed. Karma locks aren't enforced (karma isn't tracked) and the doors are
+drawn as plain slabs.
 
 ### Rendering
 
@@ -112,8 +146,11 @@ or region uses is a `palette` object in the data container and one layer of a
 palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
-anchors, plus the 4 segment tail mesh. Not done yet: arms/hands, skyboxes and
-other room effects, vanilla water.
+anchors, plus the 4 segment tail mesh. The level is drawn in two passes split
+on vanilla's depth threshold: background depths first, then sprites (slugcats,
+rocks, gate doors), then only the foreground depths over them, so pipes and
+foreground plants occlude the slugcat. Not done yet: arms/hands, skyboxes and
+other room effects, vanilla water, `RegionGateGraphics`.
 
 ## License
 

@@ -318,7 +318,7 @@ namespace player_graphics {
         if (!g.initialized)
             return;
         rw::vec3 const body_color = w.player_get_stats(p).body_color;
-        rw::vec3 const eye_color{0.01f, 0.01f, 0.01f};
+        rw::vec3 const eye_color = w.player_get_stats(p).eye_color;
         auto const mode = w.player_get_body_mode(p);
         auto const anim = w.player_get_animation(p);
         int32_t const flip = w.player_get_flip_direction(p);

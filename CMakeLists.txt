@@ -63,6 +63,10 @@ add_executable(rwcpp
     src/player_graphics.cpp
     src/render.cpp
     src/selftest.cpp
+    src/shortcuts.cpp
+    src/items.cpp
+    src/gates.cpp
+    src/simulation.cpp
     "${GENERATED_DIR}/dcon_generated.hpp"
     "${GENERATED_DIR}/dcon_generated_ids.hpp"
     "${GENERATED_DIR}/parser_defs_generated.hpp"

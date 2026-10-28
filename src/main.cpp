@@ -4,19 +4,24 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
+#include <span>
 #include <vector>
 
 #include <SDL3/SDL.h>
 
 #include "config.h"
 #include "gamestate.hpp"
+#include "gates.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "render.hpp"
 #include "reports.hpp"
 #include "selftest.hpp"
+#include "shortcuts.hpp"
+#include "simulation.hpp"
 #include "world.hpp"
 
 namespace {
@@ -42,20 +47,43 @@ namespace {
             "  --root <dir>        add a StreamingAssets-like root (repeatable, first has priority)\n"
             "                      default: $RW_ROOT or the Steam install\n"
             "  --room <name>       start in this room (default su_a22)\n"
-            "  --slugcat <name>    white | yellow | red\n"
+            "  --slugcat <name>    survivor | monk | hunter | gourmand | artificer | rivulet |\n"
+            "                      spearmaster | saint | sofanthiel | watcher (or white/yellow/red)\n"
             "  --selftest          run the scripted movement tests and exit\n"
             "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
+            "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
-            "                      U D L R J (N = nothing) held for the given ticks\n"
+            "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
+            "                      held for the given ticks\n"
             "\n"
-            "controls: arrows/WASD move, Z/K/Space jump, R respawn, left click teleport,\n"
+            "controls: arrows/WASD move, Z/K/Space jump, X throw, Left Shift pick up/drop\n"
+            "          (hold down to drop), push into a pipe entrance to travel it,\n"
+            "          R respawn, left click teleport,\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
-            "          1/2/3 slugcat, Esc quit\n",
+            "          1-9/0 slugcat (Survivor, Monk, Hunter, Gourmand, Artificer, Rivulet,\n"
+            "          Spearmaster, Saint, Sofanthiel, Watcher), Esc quit\n",
             argv0);
+    }
+
+    player::slugcat_name parse_slugcat(std::string n) {
+        for (auto& c : n)
+            c = char(std::tolower(static_cast<unsigned char>(c)));
+        if (n == "white") return player::slugcat_name::white;
+        if (n == "yellow") return player::slugcat_name::yellow;
+        if (n == "red") return player::slugcat_name::red;
+        if (n == "inv") return player::slugcat_name::inv;
+        for (uint32_t i = 0; i < uint32_t(player::slugcat_name::count); ++i) {
+            std::string name = player::to_string(player::slugcat_name(i));
+            for (auto& c : name)
+                c = char(std::tolower(static_cast<unsigned char>(c)));
+            if (name == n)
+                return player::slugcat_name(i);
+        }
+        return player::slugcat_name::white;
     }
 
     struct app {
@@ -90,15 +118,55 @@ namespace {
                 player::reset(gs, players[i], rid, spawn + vec2{float(i) * 20.f, 0.f});
                 player_graphics::reset(gs, players[i]);
             }
+            simulation::activate_room(gs, rid);
+            log_room();
+        }
+
+        // the view follows player one through pipes and gates
+        void follow_player() {
+            auto const pr = simulation::player_room(gs, players[0]);
+            if (pr && pr != room) {
+                room = pr;
+                camera_index = 0;
+                auto const cams = camera_positions();
+                vec2 const first = cams.empty() ? vec2{0.f, 0.f} : cams[0];
+                spawn = selftest::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
+                log_room();
+            }
+        }
+
+        void log_room() const {
+            auto const rid = room;
             auto const& w = gs.world;
             reports::add_log("room " + std::string{gs.to_string_view(w.room_get_display_name(rid))} + " ("
                 + std::string{gs.to_string_view(w.region_get_name(w.room_get_region_from_region_membership(rid)))} + ") "
                 + std::to_string(w.room_get_width(rid)) + "x" + std::to_string(w.room_get_height(rid)));
+            std::string pipes;
+            w.room_for_each_shortcut_location(rid, [&](dcon::shortcut_location_id sl) {
+                auto const sc = w.shortcut_location_get_shortcut(sl);
+                auto const exit = w.shortcut_get_exit_from_shortcut_destination(sc);
+                dcon::room_id const target = exit ? dcon::room_id{w.room_exit_get_target_from_exit_connection(exit)} : dcon::room_id{};
+                if (w.shortcut_get_type(sc) != world::shortcut_type::room_exit && w.shortcut_get_type(sc) != world::shortcut_type::normal)
+                    return;
+                rw::ivec2 const t = w.shortcut_get_start(sc);
+                pipes += " (" + std::to_string(t.x) + "," + std::to_string(t.y) + ")->"
+                    + (target ? std::string{gs.to_string_view(w.room_get_name(target))} : std::string{"room"});
+            });
+            if (!pipes.empty())
+                reports::add_log("  pipes:" + pipes);
+            uint32_t rocks = 0;
+            w.for_each_item([&](dcon::item_id it) {
+                if (w.physical_object_get_room_from_object_location(w.item_get_body_from_item_body(it)) == rid)
+                    ++rocks;
+            });
+            if (rocks > 0)
+                reports::add_log("  rocks: " + std::to_string(rocks));
         }
 
         // Snap to the vanilla camera containing player one, like RoomCamera
         void update_camera(float view_w, float view_h) {
-            vec2 const head = gs.world.body_chunk_get_pos(player::body_chunk(gs, players[0], 0));
+            vec2 const head = gs.world.player_get_in_shortcut(players[0]) ? shortcuts::vessel_position(gs, players[0], 1.f)
+                : gs.world.body_chunk_get_pos(player::body_chunk(gs, players[0], 0));
             if (follow_camera) {
                 cam.pos = head - vec2{view_w / 2.f, view_h / 2.f};
                 return;
@@ -130,24 +198,42 @@ namespace {
             auto const p = players[0];
             auto const c0 = player::body_chunk(gs, p, 0);
             auto const c1 = player::body_chunk(gs, p, 1);
-            char buf[768];
+            uint32_t rocks = 0, held = 0;
+            w.for_each_item([&](dcon::item_id it) {
+                if (w.physical_object_get_room_from_object_location(w.item_get_body_from_item_body(it)) == room)
+                    ++rocks;
+            });
+            w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id) { ++held; });
+            char buf[896];
             std::snprintf(buf, sizeof(buf),
-                "%s  [%s]%s%s\n"
+                "%s  [%s]%s%s  %s\n"
                 "mode %s  anim %s\n"
                 "vel %.2f %.2f  feet %.0f %.0f\n"
                 "contact %d %d / %d %d  slope %d\n"
                 "standing %d canJump %d wantJump %d stun %d\n"
-                "air %.2f  aerobic %.2f  players %zu%s",
+                "air %.2f  aerobic %.2f  players %zu%s\n"
+                "rocks in room %u  held %u%s",
                 std::string{gs.to_string_view(w.room_get_display_name(room))}.c_str(),
                 std::string{gs.to_string_view(w.region_get_display_name(w.room_get_region_from_region_membership(room)))}.c_str(),
-                paused ? "  PAUSED" : "", slow ? "  SLOW" : "",
+                paused ? "  PAUSED" : "", slow ? "  SLOW" : "", player::to_string(w.player_get_stats(p).name),
                 player::to_string(w.player_get_body_mode(p)), player::to_string(w.player_get_animation(p)),
                 w.body_chunk_get_vel(c0).x, w.body_chunk_get_vel(c0).y, w.body_chunk_get_pos(c1).x, w.body_chunk_get_pos(c1).y,
                 w.body_chunk_get_contact_point(c0).x, w.body_chunk_get_contact_point(c0).y,
                 w.body_chunk_get_contact_point(c1).x, w.body_chunk_get_contact_point(c1).y, int(w.body_chunk_get_on_slope(c1)),
                 int(w.player_get_standing(p)), w.player_get_can_jump(p), w.player_get_want_to_jump(p), w.player_get_stun(p),
-                w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), w.player_get_dead(p) ? "  DEAD (R)" : "");
-            return buf;
+                w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), w.player_get_dead(p) ? "  DEAD (R)" : "",
+                rocks, held, w.player_get_in_shortcut(p) ? "  IN PIPE" : "");
+            std::string out = buf;
+            if (auto const g = gates::gate_of(gs, room)) {
+                static char const* const modes[] = {"MiddleClosed", "ClosingAirLock", "Waiting", "OpeningMiddle",
+                    "MiddleOpen", "ClosingMiddle", "OpeningSide", "Closed", "Broken"};
+                rw::vec3 const d = w.gate_get_door_closed(g);
+                char gb[160];
+                std::snprintf(gb, sizeof(gb), "\ngate %s  doors %.2f %.2f %.2f  still %d",
+                    modes[size_t(w.gate_get_mode(g))], d[0], d[1], d[2], w.player_get_touched_no_input_counter(p));
+                out += gb;
+            }
+            return out;
         }
     };
 
@@ -159,7 +245,9 @@ namespace {
         if (keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S]) ay -= 1.f;
         if (keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W]) ay += 1.f;
         bool const jmp = keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_K] || keys[SDL_SCANCODE_SPACE];
-        return player::make_input(ax, ay, jmp, keys[SDL_SCANCODE_X], keys[SDL_SCANCODE_LSHIFT]);
+        bool const thrw = keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_J];
+        bool const pckp = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_L];
+        return player::make_input(ax, ay, jmp, thrw, pckp);
     }
 
     player::input_package gamepad_input(SDL_Gamepad* pad) {
@@ -184,6 +272,7 @@ int main(int argc, char* argv[]) {
     std::string screenshot;
     uint32_t screenshot_ticks = 80;
     std::string script;
+    std::optional<vec2> start_pos;
     bool selftest_mode = false;
     int32_t fuzz_ticks = -1;
     player::slugcat_name slugcat = player::slugcat_name::white;
@@ -195,8 +284,7 @@ int main(int argc, char* argv[]) {
         } else if (a == "--room") {
             start_room = next();
         } else if (a == "--slugcat") {
-            auto const n = next();
-            slugcat = n == "yellow" ? player::slugcat_name::yellow : n == "red" ? player::slugcat_name::red : player::slugcat_name::white;
+            slugcat = parse_slugcat(next());
         } else if (a == "--selftest") {
             selftest_mode = true;
         } else if (a == "--fuzz") {
@@ -207,6 +295,10 @@ int main(int argc, char* argv[]) {
             screenshot = next();
         } else if (a == "--script") {
             script = next();
+        } else if (a == "--pos") {
+            float x = 0.f, y = 0.f;
+            if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
+                start_pos = vec2{x, y};
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -248,6 +340,9 @@ int main(int argc, char* argv[]) {
     if (fuzz_ticks >= 0)
         return selftest::fuzz(gs, uint32_t(fuzz_ticks));
 
+    // vanilla rolls item spawns with UnityEngine.Random; screenshots stay reproducible
+    if (screenshot.empty())
+        gs.random.state ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
     app a{gs};
     a.slugcat = slugcat;
     dcon::room_id start = gs.find_room(start_room);
@@ -257,6 +352,11 @@ int main(int argc, char* argv[]) {
     }
     a.players.push_back(player::create(gs, start, vec2{0.f, 0.f}, slugcat));
     a.enter_room(start);
+    if (start_pos) {
+        a.spawn = *start_pos;
+        player::reset(gs, a.players[0], start, *start_pos);
+        player_graphics::reset(gs, a.players[0]);
+    }
 
     render::state r;
     bool const headless = !screenshot.empty();
@@ -266,8 +366,8 @@ int main(int argc, char* argv[]) {
 
     if (headless) {
         auto const step = [&](player::input_package const& in) {
-            player::update(gs, a.players[0], a.view(), in);
-            player_graphics::update(gs, a.players[0], a.view());
+            simulation::tick(gs, a.players, std::span{&in, 1});
+            a.follow_player();
         };
         for (uint32_t t = 0; t < screenshot_ticks; ++t)
             step(player::input_package{});
@@ -278,7 +378,7 @@ int main(int argc, char* argv[]) {
             std::string const tok = script.substr(pos, end - pos);
             pos = end + 1;
             float ax = 0.f, ay = 0.f;
-            bool jmp = false;
+            bool jmp = false, thrw = false, pckp = false;
             size_t i = 0;
             for (; i < tok.size() && std::isalpha(static_cast<unsigned char>(tok[i])); ++i) {
                 switch (tok[i]) {
@@ -287,12 +387,14 @@ int main(int argc, char* argv[]) {
                 case 'L': ax -= 1.f; break;
                 case 'R': ax += 1.f; break;
                 case 'J': jmp = true; break;
+                case 'X': thrw = true; break;
+                case 'P': pckp = true; break;
                 default: break;
                 }
             }
             int const n = i < tok.size() ? std::atoi(tok.c_str() + i) : 1;
             for (int k = 0; k < n; ++k)
-                step(player::make_input(ax, ay, jmp, false, false));
+                step(player::make_input(ax, ay, jmp, thrw, pckp));
         }
         render::use_room(r, gs, a.room);
         a.update_camera(float(r.width), float(r.height));
@@ -311,8 +413,9 @@ int main(int argc, char* argv[]) {
     uint64_t const tick_ns = 1000000000ull / gs.ticks_per_second;
     uint64_t last = SDL_GetTicksNS();
     uint64_t accumulator = 0;
+    std::vector<player::input_package> inputs;
     auto const tick = [&] {
-        auto const view = a.view();
+        inputs.clear();
         for (size_t i = 0; i < a.players.size(); ++i) {
             // single player: keyboard or gamepad; co-op: gamepad drives player two
             player::input_package in = keyboard_input();
@@ -323,9 +426,10 @@ int main(int argc, char* argv[]) {
             } else if (i > 0) {
                 in = i == 1 ? gamepad_input(pad) : player::input_package{};
             }
-            player::update(gs, a.players[i], view, in);
-            player_graphics::update(gs, a.players[i], view);
+            inputs.push_back(in);
         }
+        simulation::tick(gs, a.players, inputs);
+        a.follow_player();
     };
     while (running) {
         SDL_Event e;
@@ -394,12 +498,19 @@ int main(int argc, char* argv[]) {
                 case SDLK_P: paused = !paused; break;
                 case SDLK_N: step_once = true; break;
                 case SDLK_T: slow = !slow; break;
-                case SDLK_1: case SDLK_2: case SDLK_3: {
-                    a.slugcat = e.key.key == SDLK_1 ? player::slugcat_name::white
-                        : e.key.key == SDLK_2 ? player::slugcat_name::yellow : player::slugcat_name::red;
-                    // rebuild player one (body mass depends on the slugcat)
-                    player::destroy(gs, a.players[0]);
-                    a.players[0] = player::create(gs, a.room, a.spawn, a.slugcat);
+                case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
+                case SDLK_6: case SDLK_7: case SDLK_8: case SDLK_9: case SDLK_0: {
+                    uint32_t const k = e.key.key == SDLK_0 ? 9u : uint32_t(e.key.key - SDLK_1);
+                    a.slugcat = player::slugcat_name(k);
+                    // rebuild player one where it stands (body mass depends on the slugcat)
+                    auto const old = a.players[0];
+                    bool const travelling = w.player_get_in_shortcut(old);
+                    dcon::room_id const pr = travelling ? a.room : simulation::player_room(gs, old);
+                    vec2 const feet = travelling ? a.spawn : w.body_chunk_get_pos(player::body_chunk(gs, old, 1));
+                    player::destroy(gs, old);
+                    a.players[0] = player::create(gs, pr, feet, a.slugcat);
+                    player_graphics::reset(gs, a.players[0]);
+                    reports::add_log(std::string{"slugcat: "} + player::to_string(a.slugcat));
                     break;
                 }
                 default: break;

@@ -52,6 +52,27 @@ namespace world {
         spear,
     };
 
+    // Weapon.Mode
+    enum class weapon_mode : uint8_t {
+        free,
+        thrown,
+        carried,
+        stuck_in_wall,
+    };
+
+    // RegionGate.Mode
+    enum class gate_mode : uint8_t {
+        middle_closed,
+        closing_air_lock,
+        waiting,
+        opening_middle,
+        middle_open,
+        closing_middle,
+        opening_side,
+        closed,
+        broken,
+    };
+
     // RoomSettings.DangerType
     enum class danger_type : uint8_t {
         rain,

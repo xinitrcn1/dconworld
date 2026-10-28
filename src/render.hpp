@@ -44,6 +44,7 @@ namespace render {
         int32_t proj = -1, palette = -1, camera_index = -1, night_time = -1, fog_factor = -1;
         int32_t effect_colors = -1, grime = -1, rooftop_blend = -1, timer = -1;
         int32_t lighting_data = -1, lighting_pos = -1, replace_a = -1, replace_b = -1;
+        int32_t pass = -1;
     };
 
     struct state {

@@ -2,8 +2,9 @@
 
 // Port of the slugcat movement code from Player.cs: Update (the movement
 // relevant parts), MovementUpdate, UpdateBodyMode, UpdateAnimation, Jump,
-// WallJump, TerrainImpact, LungUpdate and helpers. Base game behaviour only:
-// no Remix (MMF), Downpour or Watcher slugcat mechanics, no items/grasps.
+// WallJump, TerrainImpact, LungUpdate and helpers, with every slugcat's stats
+// and Rivulet's movement branches. No Remix (MMF) or other Downpour/Watcher
+// abilities. Shortcuts and items hook in from shortcuts.* and items.*.
 //
 // Players are `player` objects in the data container (one per co-op slot),
 // each controlling a physical_object body through the player_body relation.
@@ -18,6 +19,7 @@
 namespace player {
     char const* to_string(body_mode_index m) noexcept;
     char const* to_string(animation_index a) noexcept;
+    char const* to_string(slugcat_name n) noexcept;
 
     // Builds an input package the way RWInput.PlayerInputLogic does from
     // a (possibly digital) stick: directions are derived from analogueDir

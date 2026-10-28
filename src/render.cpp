@@ -12,8 +12,11 @@
 #include "stb_image.h"
 
 #include "render.hpp"
+#include "gates.hpp"
+#include "items.hpp"
 #include "physics.hpp"
 #include "player_graphics.hpp"
+#include "shortcuts.hpp"
 #include "reports.hpp"
 
 namespace render {
@@ -38,6 +41,9 @@ namespace render {
         constexpr uint32_t col_body = rgba(235, 235, 235);
         constexpr uint32_t col_body_dead = rgba(150, 60, 60);
         constexpr uint32_t col_eye = rgba(20, 20, 30);
+        constexpr uint32_t col_rock = rgba(14, 12, 16);
+        constexpr uint32_t col_gate_door = rgba(22, 20, 26);
+        constexpr uint32_t col_gate_door_edge = rgba(48, 44, 52);
 
         char const* const vertex_src = R"(#version 330 core
 layout(location = 0) in vec2 a_pos;
@@ -111,6 +117,17 @@ void main() {
                     float const a0 = float(i) / float(segs) * 6.2831853f;
                     float const a1 = float(i + 1) / float(segs) * 6.2831853f;
                     tri(c, c + vec2{std::cos(a0) * r, std::sin(a0) * r}, c + vec2{std::cos(a1) * r, std::sin(a1) * r}, col);
+                }
+            }
+            // radial gradient from `inner` at the centre to `outer` at the rim
+            void glow(vec2 c, float r, uint32_t inner, uint32_t outer) {
+                constexpr int segs = 32;
+                for (int i = 0; i < segs; ++i) {
+                    float const a0 = float(i) / float(segs) * 6.2831853f;
+                    float const a1 = float(i + 1) / float(segs) * 6.2831853f;
+                    b.push_back(vertex{c.x, c.y, inner, 0.f, 0.f});
+                    b.push_back(vertex{c.x + std::cos(a0) * r, c.y + std::sin(a0) * r, outer, 0.f, 0.f});
+                    b.push_back(vertex{c.x + std::cos(a1) * r, c.y + std::sin(a1) * r, outer, 0.f, 0.f});
                 }
             }
         };
@@ -275,6 +292,7 @@ void main() {
             u.lighting_pos = loc("u_lighting_pos");
             u.replace_a = loc("u_replace_effect_color_a");
             u.replace_b = loc("u_replace_effect_color_b");
+            u.pass = loc("u_pass");
             glUseProgram(r.room_program);
             glUniform1i(loc("u_texture0"), 0);
             glUniform1i(loc("u_texture1"), 1);
@@ -505,7 +523,7 @@ void main() {
                 white_uv = vec2{(white_it->second.x + white_it->second.w * 0.5f) / tw, (white_it->second.y + white_it->second.h * 0.5f) / th};
             world.for_each_player([&](dcon::player_id pid) {
                 auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id)
+                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid))
                     return;
                 cmds.clear();
                 player_graphics::build(s, pid, alpha, cmds);
@@ -545,7 +563,7 @@ void main() {
             painter p{r.batch};
             world.for_each_player([&](dcon::player_id pid) {
                 auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id)
+                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid))
                     return;
                 auto const c0 = physics::chunk(s, o, 0);
                 auto const c1 = physics::chunk(s, o, 1);
@@ -556,6 +574,87 @@ void main() {
                 p.circle(b1, world.body_chunk_get_rad(c1), body);
                 p.circle(b0, world.body_chunk_get_rad(c0), body);
                 p.circle(b0 + vec2{float(world.player_get_flip_direction(pid)) * 4.f, 3.f}, 2.f, col_eye);
+            });
+        }
+    }
+
+    namespace {
+        // Rock.DrawSprites: a pebble in the palette's black, plus the
+        // triangle trail while thrown
+        void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& world = s.world;
+            painter p{r.batch};
+            world.for_each_item([&](dcon::item_id it) {
+                auto const o = items::body(s, it);
+                if (world.physical_object_get_room_from_object_location(o) != room.id)
+                    return;
+                auto const g = items::grabber(s, it);
+                if (g && world.player_get_in_shortcut(g))
+                    return;
+                auto const c = items::chunk(s, it);
+                vec2 const pos = rw::lerp(world.body_chunk_get_last_pos(c), world.body_chunk_get_pos(c), alpha);
+                vec2 const rot = rw::normalized(rw::lerp(world.item_get_last_rotation(it), world.item_get_rotation(it), alpha));
+                vec2 const side = rw::custom::perpendicular_vector(rot);
+                // an irregular pentagon, rotated with the rock
+                constexpr float shape[5][2] = {{0.f, 5.5f}, {4.5f, 2.f}, {3.5f, -4.f}, {-3.f, -4.5f}, {-5.f, 1.5f}};
+                for (int i = 0; i < 5; ++i) {
+                    int const j = (i + 1) % 5;
+                    vec2 const a = pos + rot * shape[i][1] + side * shape[i][0];
+                    vec2 const b = pos + rot * shape[j][1] + side * shape[j][0];
+                    p.tri(pos, a, b, col_rock);
+                }
+                if (world.item_get_mode(it) == world::weapon_mode::thrown) {
+                    vec2 const tail = world.body_chunk_get_last_pos(c);
+                    vec2 const n = rw::custom::perpendicular_vector(rw::normalized(pos - tail));
+                    p.tri(pos + n * 3.f, pos - n * 3.f, tail, col_rock);
+                }
+            });
+        }
+
+        // RegionGateGraphics, minimal: each door is a slab sliding down from
+        // above its opening while closing
+        void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room) {
+            auto const g = gates::gate_of(s, room.id);
+            if (!g)
+                return;
+            painter p{r.batch};
+            rw::vec3 const closed = s.world.gate_get_door_closed(g);
+            float const bottom = float(gates::door_bottom_y) * 20.f;
+            float const top = float(gates::door_top_y + 1) * 20.f;
+            for (int i = 0; i < 3; ++i) {
+                float const x = float(gates::door_first_x + i * gates::door_spacing) * 20.f;
+                float const h = (top - bottom) * closed[i];
+                if (h <= 0.f)
+                    continue;
+                p.rect(x, top - h, 40.f, h, col_gate_door);
+                p.rect(x + 4.f, top - h, 32.f, 4.f, col_gate_door_edge);
+                p.rect(x + 18.f, top - h, 4.f, h, col_gate_door_edge);
+            }
+        }
+
+        // The vessel of a player travelling a shortcut: a soft circle gliding
+        // along the pipe (vanilla blinks the pipe tile by tile), lighting the
+        // pipe tiles around it
+        void build_shortcut_glow(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& world = s.world;
+            painter p{r.batch};
+            world.for_each_player([&](dcon::player_id pid) {
+                if (!world.player_get_in_shortcut(pid) || world.physical_object_get_room_from_object_location(world.player_get_body_from_player_body(pid)) != room.id)
+                    return;
+                rw::vec3 const col = world.player_get_stats(pid).body_color;
+                auto const shade = [&](float a) { return to_rgba(rw::vec3{0.5f, 0.5f, 0.5f} + col * 0.5f, a); };
+                vec2 const pos = shortcuts::vessel_position(s, pid, alpha);
+                auto const path = world.shortcut_get_path(world.player_get_vessel_shortcut(pid));
+                for (uint32_t i = 0; i < path.size(); ++i) {
+                    vec2 const m = world::room_view::middle_of_tile(path[i]);
+                    float const d = rw::distance(m, pos);
+                    if (d > 70.f)
+                        continue;
+                    float const a = 0.55f * (1.f - d / 70.f);
+                    p.rect(m.x - 5.f, m.y - 5.f, 10.f, 10.f, shade(a));
+                }
+                p.glow(pos, 26.f, shade(0.45f), shade(0.f));
+                p.glow(pos, 8.f, shade(1.f), shade(0.2f));
             });
         }
     }
@@ -584,12 +683,17 @@ void main() {
         glBindVertexArray(r.vao);
         glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
 
-        // room camera images with the level shader
+        // room camera images with the level shader. Pass 0 draws everything
+        // behind the creature layers, pass 1 only the foreground depths
+        // (vanilla puts the level's front layers over sprites)
+        std::vector<vec2> cams;
         if (textured_room) {
-            std::vector<vec2> cams;
             world.room_for_each_camera_location(room.id, [&](dcon::camera_location_id cl) {
                 cams.push_back(world.room_camera_get_position(world.camera_location_get_camera(cl)));
             });
+        }
+        auto const draw_cameras = [&](int pass) {
+            r.batch.clear();
             for (auto const c : cams) {
                 // image top row is texture row 0
                 vertex const bl{c.x, c.y, 0xFFFFFFFFu, 0.f, 1.f};
@@ -602,6 +706,7 @@ void main() {
             auto const& u = r.room_uniforms;
             glUseProgram(r.room_program);
             glUniformMatrix4fv(u.proj, 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform1i(u.pass, pass);
             glUniform1i(u.palette, palette ? palette.index() : 0);
             int16_t const fx_a = world.room_get_effect_color_a(room.id);
             int16_t const fx_b = world.room_get_effect_color_b(room.id);
@@ -627,36 +732,63 @@ void main() {
                 upload_and_draw(r, i * 6, 6);
             }
             glActiveTexture(GL_TEXTURE0);
-        }
+        };
+        // untextured triangles, flat shader
+        auto const draw_flat = [&](auto&& build) {
+            r.batch.clear();
+            build();
+            if (r.batch.empty())
+                return;
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            glUseProgram(r.program);
+            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform1i(r.u_textured, 0);
+            upload_and_draw(r, 0, r.batch.size());
+        };
+        auto const draw_geometry = [&] {
+            draw_flat([&] { build_geometry(r, s, room, cam, view_w, view_h, textured_room ? 110 : 255); });
+        };
 
-        // debug geometry (always when there are no room images), then bodies
+        if (textured_room)
+            draw_cameras(0);
+        else
+            draw_geometry();
+
+        // the sprite layers: creatures (midground), items, gate doors
         r.batch.clear();
-        if (r.show_geometry || !textured_room)
-            build_geometry(r, s, room, cam, view_w, view_h, textured_room ? 110 : 255);
-        size_t const geometry_end = r.batch.size();
         bool const sprites = r.slugcat_texture != 0;
         if (sprites)
             build_slugcats(r, s, room, alpha);
         else
             build_slugcat_circles(r, s, room, alpha);
         size_t const bodies_end = r.batch.size();
-        // water drawn over everything below the surface
-        if (room.water) {
-            painter p{r.batch};
-            p.rect(-200.f, -200.f, room.pixel_width() + 400.f, room.float_water_level + 200.f, col_water);
-        }
+        build_items(r, s, room, alpha);
+        build_gate_doors(r, s, room);
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
         glUseProgram(r.program);
         glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-        glUniform1i(r.u_textured, 0);
-        upload_and_draw(r, 0, geometry_end);
         if (sprites) {
             glBindTexture(GL_TEXTURE_2D, r.slugcat_texture);
             glUniform1i(r.u_textured, 1);
         }
-        upload_and_draw(r, geometry_end, bodies_end - geometry_end);
+        upload_and_draw(r, 0, bodies_end);
         glUniform1i(r.u_textured, 0);
         upload_and_draw(r, bodies_end, r.batch.size() - bodies_end);
+
+        if (textured_room) {
+            draw_cameras(1);
+            if (r.show_geometry)
+                draw_geometry();
+        }
+
+        // shortcuts are drawn over the level, then water over everything below the surface
+        draw_flat([&] {
+            build_shortcut_glow(r, s, room, alpha);
+            if (room.water) {
+                painter p{r.batch};
+                p.rect(-200.f, -200.f, room.pixel_width() + 400.f, room.float_water_level + 200.f, col_water);
+            }
+        });
 
         if (r.show_hud && r.font_texture != 0 && !hud.empty())
             draw_hud(r, hud);
@@ -699,6 +831,7 @@ void main() {
         }
         // screen space, y down
         glm::mat4 const proj = glm::ortho(0.f, float(r.width), float(r.height), 0.f);
+        glUseProgram(r.program);
         glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
         glUniform1i(r.u_textured, 0);

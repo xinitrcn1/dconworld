@@ -13,6 +13,11 @@
 //   room nodes 3393           -> 8192 (+ ~460k connectivity entries pooled)
 //   players: co-op up to 4    -> 8
 //   palettes ~50 files        -> 128
+//   items (rocks): placed + random spawns persist in every visited room,
+//     ~3000 once all 760 rooms were visited -> 8192
+//   physical objects / body chunks: players + items -> 8192 / 16384
+//   region gates ~20          -> 64
+//   shortcut path tiles pooled (~6266 paths)
 //
 // Tags: `scenario` = static world data loaded from the game files,
 //       `save` = simulation state.
@@ -107,6 +112,11 @@ object{
 	property{ name{wet_terrain} type{bitfield} }
 	// room gravity multiplier (Room.gravity)
 	property{ name{gravity} type{float} }
+	// world file attributes
+	property{ name{is_shelter} type{bitfield} }
+	property{ name{is_gate} type{bitfield} }
+	// Room.abstractRoom.firstTimeRealized: items get spawned on the first visit
+	property{ name{items_spawned} type{bitfield} }
 }
 
 relationship{
@@ -180,6 +190,15 @@ relationship{
 	primary_key{exit}
 }
 
+// AbstractRoom.connections: where a room exit leads (world_<region>.txt)
+relationship{
+	name{exit_connection}
+	tag{scenario}
+	link{ object{room_exit} name{exit} type{unique} }
+	link{ object{room} name{target} type{many} index_storage{array} }
+	primary_key{exit}
+}
+
 // ShortcutData
 object{
 	name{shortcut}
@@ -190,6 +209,8 @@ object{
 	property{ name{dest} type{rw::ivec2} }
 	property{ name{length} type{uint16_t} }
 	property{ name{type} type{world::shortcut_type} }
+	// ShortcutData.connection: every tile from the entrance to the destination
+	property{ name{path} type{vector_pool{524288}{rw::ivec2}} }
 }
 relationship{
 	name{shortcut_location}
@@ -237,7 +258,7 @@ relationship{
 object{
 	name{physical_object}
 	storage_type{erasable}
-	size{1024}
+	size{8192}
 	tag{save}
 	// PhysicalObject.gravity before the room gravity multiplier
 	property{ name{g} type{float} }
@@ -261,7 +282,7 @@ relationship{
 object{
 	name{body_chunk}
 	storage_type{erasable}
-	size{4096}
+	size{16384}
 	tag{save}
 	property{ name{pos} type{rw::vec2} }
 	property{ name{last_pos} type{rw::vec2} }
@@ -409,6 +430,23 @@ object{
 
 	// PlayerGraphics: head, legs and tail body parts, draw positions, blink
 	property{ name{graphics} type{::player::graphics_state} }
+
+	// shortcuts: Creature.enteringShortCut, then the ShortCutVessel travelling
+	// the path (smooth: progress in tiles, a third of a tile per tick)
+	property{ name{entering_shortcut} type{std::optional<rw::ivec2>} }
+	property{ name{shortcut_rad_add} type{float} }
+	property{ name{in_shortcut} type{uint8_t} }
+	property{ name{vessel_shortcut} type{shortcut_id} }
+	property{ name{vessel_reverse} type{uint8_t} }
+	property{ name{vessel_progress} type{float} }
+	property{ name{vessel_last_progress} type{float} }
+
+	// grabbing (Player.GrabUpdate)
+	property{ name{want_to_pick_up} type{int32_t} }
+	property{ name{want_to_throw} type{int32_t} }
+	property{ name{dont_grab_stuff} type{int32_t} }
+	// Player.touchedNoInputCounter (gates wait for players standing still)
+	property{ name{touched_no_input_counter} type{int32_t} }
 }
 // the physical body a player controls
 relationship{
@@ -417,4 +455,73 @@ relationship{
 	link{ object{player} name{player} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{player}
+}
+
+// Creature.Grasp of a player holding an item (grasps[hand])
+relationship{
+	name{grasp}
+	storage_type{erasable}
+	size{16}
+	tag{save}
+	link{ object{player} name{grabber} type{many} index_storage{array} }
+	link{ object{item} name{grabbed} type{unique} }
+	property{ name{hand} type{uint8_t} }
+}
+
+//
+// Items: Rock (Weapon) for now
+//
+object{
+	name{item}
+	storage_type{erasable}
+	size{8192}
+	tag{save}
+	property{ name{type} type{world::item_type} }
+	// Weapon.Mode
+	property{ name{mode} type{world::weapon_mode} }
+	property{ name{rotation} type{rw::vec2} }
+	property{ name{last_rotation} type{rw::vec2} }
+	property{ name{rotation_speed} type{float} }
+	property{ name{throw_dir} type{rw::ivec2} }
+	property{ name{thrown_pos} type{rw::vec2} }
+	property{ name{change_dir_counter} type{int32_t} }
+	property{ name{floor_bounce_frames} type{int32_t} }
+	property{ name{forbidden_to_player} type{int32_t} }
+	property{ name{override_exit_thrown_speed} type{float} }
+	property{ name{throw_mode_frames} type{int32_t} }
+	// Weapon.thrownBy (invalid when not thrown by a player)
+	property{ name{thrown_by} type{player_id} }
+}
+relationship{
+	name{item_body}
+	tag{save}
+	link{ object{item} name{item} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{item}
+}
+
+//
+// RegionGate (doors at tile columns 14, 23, 32 of the gate room)
+//
+object{
+	name{gate}
+	storage_type{contiguous}
+	size{64}
+	tag{save}
+	property{ name{mode} type{world::gate_mode} }
+	property{ name{door_closed} type{rw::vec3} }
+	property{ name{door_goal} type{rw::vec3} }
+	property{ name{start_counter} type{int32_t} }
+	property{ name{washing_counter} type{int32_t} }
+	property{ name{let_through_dir} type{uint8_t} }
+	property{ name{dont_open} type{uint8_t} }
+	// Door.lastClosed of the three doors, bit per door
+	property{ name{last_closed} type{uint8_t} }
+}
+relationship{
+	name{gate_location}
+	tag{scenario}
+	link{ object{gate} name{gate} type{unique} }
+	link{ object{room} name{room} type{unique} }
+	primary_key{gate}
 }
