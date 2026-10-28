@@ -20,6 +20,7 @@ namespace gates {
             int32_t const height = w.room_get_height(room);
             int32_t const x0 = door_first_x + door * door_spacing;
             auto const first = w.room_get_first_tile(room).id.index();
+            ++w.room_get_geometry_version(room);
             for (int32_t i = 0; i < 2; ++i)
                 for (int32_t j = door_bottom_y; j <= door_top_y; ++j) {
                     if (x0 + i >= width || j >= height)

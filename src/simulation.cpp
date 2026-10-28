@@ -1,6 +1,7 @@
 #include <vector>
 
 #include "simulation.hpp"
+#include "centipede.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "player.hpp"
@@ -91,6 +92,9 @@ namespace simulation {
             auto const view = world::get_room_view(state, room);
             player::update(state, p, view, i < inputs.size() ? inputs[i] : ::player::input_package{});
             player_graphics::update(state, p, view);
+            // Player.GraphicsModuleUpdated: held items follow the hands
+            items::carry_update(state, p);
+            items::back_spear_update(state, p);
         }
 
         // rooms with someone in them are the realised ones
@@ -104,8 +108,12 @@ namespace simulation {
                 rooms.push_back(room);
         }
         for (auto const room : rooms) {
-            items::update_room(state, world::get_room_view(state, room));
+            auto const view = world::get_room_view(state, room);
+            centipede::update_room(state, view);
+            centipede::collide(state, view);
+            items::update_room(state, view);
             gates::update_room(state, room);
         }
+        ++state.tick;
     }
 }

@@ -12,6 +12,7 @@
 #include "stb_image.h"
 
 #include "render.hpp"
+#include "centipede.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -531,8 +532,10 @@ void main() {
                 for (auto const& c : cmds) {
                     if (c.is_triangle) {
                         uint32_t const col = to_rgba(c.color);
-                        for (auto const& v : c.tri)
-                            r.batch.push_back(vertex{v.x, v.y, col, white_uv.x, white_uv.y});
+                        for (int k = 0; k < 3; ++k) {
+                            uint32_t const vc = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w) : col;
+                            r.batch.push_back(vertex{c.tri[k].x, c.tri[k].y, vc, white_uv.x, white_uv.y});
+                        }
                         continue;
                     }
                     auto const it = r.slugcat_frames.find(std::string{c.spr.element});
@@ -582,7 +585,9 @@ void main() {
     namespace {
         // Rock.DrawSprites: a pebble in the palette's black, plus the
         // triangle trail while thrown; Spear.DrawSprites
-        void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+        // `behind`: only the items drawn behind creatures (Hunter's back spear),
+        // else every other one
+        void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool behind) {
             auto const& world = s.world;
             painter p{r.batch};
             world.for_each_item([&](dcon::item_id it) {
@@ -591,6 +596,8 @@ void main() {
                     return;
                 auto const g = items::grabber(s, it);
                 if (g && world.player_get_in_shortcut(g))
+                    return;
+                if ((world.item_get_mode(it) == world::weapon_mode::on_back) != behind)
                     return;
                 auto const c = items::chunk(s, it);
                 vec2 const pos = rw::lerp(world.body_chunk_get_last_pos(c), world.body_chunk_get_pos(c), alpha);
@@ -619,6 +626,100 @@ void main() {
                     vec2 const tail = world.body_chunk_get_last_pos(c);
                     vec2 const n = rw::custom::perpendicular_vector(rw::normalized(pos - tail));
                     p.tri(pos + n * 3.f, pos - n * 3.f, tail, col_rock);
+                }
+            });
+        }
+
+        // Custom.HSL2RGB
+        rw::vec3 hsl(float h, float s, float l) {
+            h = h - std::floor(h);
+            auto const f = [&](float n) {
+                float const k = std::fmod(n + h * 12.f, 12.f);
+                float const a = s * std::min(l, 1.f - l);
+                return l - a * std::max(-1.f, std::min({k - 3.f, 9.f - k, 1.f}));
+            };
+            return rw::vec3{f(0.f), f(8.f), f(4.f)};
+        }
+
+        // CentipedeGraphics, drawn with plain shapes: a shell per segment in
+        // the centipede's hue, a pair of legs reaching for the nearest surface,
+        // antennae at both ends and the blue flash of a shock
+        void build_centipedes(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            w.for_each_centipede([&](dcon::centipede_id c) {
+                if (w.physical_object_get_room_from_object_location(centipede::body(s, c)) != room.id)
+                    return;
+                uint32_t const n = centipede::chunk_count(s, c);
+                float const size = w.centipede_get_size(c);
+                bool const dead = w.centipede_get_dead(c);
+                auto const at = [&](uint32_t i) {
+                    auto const k = centipede::chunk(s, c, i);
+                    return rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
+                };
+                rw::vec3 const black{0.06f, 0.05f, 0.07f};
+                float const hue = w.centipede_get_hue(c);
+                float const cycle = w.centipede_get_walk_cycle(c);
+                // legs first, under the shells
+                for (uint32_t i = 0; i < n; ++i) {
+                    vec2 const pos = at(i);
+                    vec2 const dir = rw::normalized(at(std::min(i + 1, n - 1)) - at(i > 0 ? i - 1 : 0));
+                    vec2 const side = rw::custom::perpendicular_vector(dir);
+                    float const t = float(i) / float(std::max<uint32_t>(n - 1, 1));
+                    float const len = mathf::lerp(10.f, 25.f, std::sin(t * mathf::pi)) * mathf::lerp(0.5f, 1.5f, size) * 0.8f;
+                    for (int l = -1; l <= 1; l += 2) {
+                        // a foot on the closest surface on that side, else dangling
+                        vec2 foot = pos + side * (float(l) * len * 0.7f) + vec2{0.f, -len * 0.4f};
+                        for (int k = 1; k <= 4; ++k) {
+                            vec2 const probe = pos + side * (float(l) * len * float(k) / 4.f);
+                            if (room.get_tile(probe).solid()) {
+                                foot = probe;
+                                break;
+                            }
+                        }
+                        float const step = dead ? 0.f : std::sin(cycle + float(i) * 1.3f + (l > 0 ? mathf::pi : 0.f));
+                        foot += dir * (step * len * 0.25f);
+                        vec2 const knee = (pos + foot) / 2.f + side * (float(l) * len * 0.25f) + dir * (len * 0.1f);
+                        uint32_t const leg = to_rgba(black + (hsl(hue, 0.9f, 0.3f) - black) * 0.3f);
+                        p.line(pos, knee, 1.5f, leg);
+                        p.line(knee, foot, 1.f, leg);
+                    }
+                }
+                for (int end = 0; end < 2; ++end) {
+                    uint32_t const i = end == 0 ? 0 : n - 1;
+                    uint32_t const j = end == 0 ? std::min(1u, n - 1) : (n > 1 ? n - 2 : 0);
+                    vec2 const dir = rw::normalized(at(i) - at(j));
+                    vec2 const side = rw::custom::perpendicular_vector(dir);
+                    for (int l = -1; l <= 1; l += 2) {
+                        vec2 const tip = at(i) + dir * (14.f * mathf::lerp(0.6f, 1.2f, size)) + side * (float(l) * 6.f);
+                        p.line(at(i), tip, 1.f, to_rgba(black));
+                    }
+                }
+                for (uint32_t i = 0; i < n; ++i) {
+                    vec2 const pos = at(i);
+                    vec2 const dir = rw::normalized(at(std::min(i + 1, n - 1)) - at(i > 0 ? i - 1 : 0));
+                    vec2 const side = rw::custom::perpendicular_vector(dir);
+                    float const rad = w.body_chunk_get_rad(centipede::chunk(s, c, i));
+                    float const t = float(i) / float(std::max<uint32_t>(n - 1, 1));
+                    float const shine = std::sin(t * mathf::pi);
+                    rw::vec3 const shell = hsl(hue, 0.9f, 0.5f + 0.25f * shine);
+                    rw::vec3 col = black + (shell - black) * (dead ? 0.25f : 0.55f);
+                    // a segment: an oval stretched along the body
+                    constexpr int segs = 10;
+                    uint32_t const rgba_col = to_rgba(col);
+                    for (int k = 0; k < segs; ++k) {
+                        float const a0 = float(k) / segs * 6.2831853f, a1 = float(k + 1) / segs * 6.2831853f;
+                        vec2 const e0 = pos + dir * (std::cos(a0) * rad * 1.35f) + side * (std::sin(a0) * rad * 1.1f);
+                        vec2 const e1 = pos + dir * (std::cos(a1) * rad * 1.35f) + side * (std::sin(a1) * rad * 1.1f);
+                        p.tri(pos, e0, e1, rgba_col);
+                    }
+                    // the shell's ridge
+                    p.line(pos - dir * rad * 0.8f, pos + dir * rad * 0.8f, std::max(1.f, rad * 0.5f), to_rgba(black + (shell - black) * 0.8f));
+                }
+                float const flash = w.centipede_get_light_flash(c);
+                if (flash > 0.f) {
+                    vec2 const head = at(centipede::head_index(s, c));
+                    p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
                 }
             });
         }
@@ -769,7 +870,8 @@ void main() {
         else
             draw_geometry();
 
-        // the sprite layers: creatures (midground), items, gate doors
+        // the sprite layers: back spears, creatures (midground), items, gate doors
+        draw_flat([&] { build_items(r, s, room, alpha, true); });
         r.batch.clear();
         bool const sprites = r.slugcat_texture != 0;
         if (sprites)
@@ -777,7 +879,8 @@ void main() {
         else
             build_slugcat_circles(r, s, room, alpha);
         size_t const bodies_end = r.batch.size();
-        build_items(r, s, room, alpha);
+        build_centipedes(r, s, room, alpha);
+        build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
         glUseProgram(r.program);

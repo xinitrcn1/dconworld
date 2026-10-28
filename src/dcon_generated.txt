@@ -18,6 +18,10 @@
 //   physical objects / body chunks: players + items -> 8192 / 16384
 //   region gates ~20          -> 64
 //   music triggers ~80 (+MSC/Watcher) -> 512
+//   centipedes: a few per realised room -> 64 (17 chunks, 136 push
+//     connections each at most, within the chunk/connection bounds)
+//   path fields: shared distance fields built on demand -> 32, their
+//     distances pooled (rooms are at most ~15k tiles)
 //   shortcut path tiles pooled (~6266 paths)
 //
 // Tags: `scenario` = static world data loaded from the game files,
@@ -118,6 +122,9 @@ object{
 	property{ name{is_gate} type{bitfield} }
 	// Room.abstractRoom.firstTimeRealized: items get spawned on the first visit
 	property{ name{items_spawned} type{bitfield} }
+	// bumped whenever tiles change at runtime (gate doors, spear beams):
+	// cached path fields of the room are rebuilt
+	property{ name{geometry_version} type{uint16_t} }
 }
 
 relationship{
@@ -488,6 +495,12 @@ object{
 	property{ name{spear_row} type{uint8_t} }
 	property{ name{spear_line} type{uint8_t} }
 	property{ name{spear_sound_ready} type{uint8_t} }
+	// Player.SpearOnBack (Hunter)
+	property{ name{back_spear} type{item_id} }
+	property{ name{back_counter} type{int32_t} }
+	property{ name{back_flip} type{float} }
+	property{ name{back_locked} type{uint8_t} }
+	property{ name{back_increment} type{uint8_t} }
 	// room the music triggers were last armed for (re-armed on entering a room)
 	property{ name{trigger_room} type{room_id} }
 }
@@ -558,6 +571,79 @@ relationship{
 	link{ object{item} name{item} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{item}
+}
+
+//
+// Creatures: Centipede (Centipede.cs + CentipedeAI), the body is a
+// physical_object with one chunk per segment
+//
+object{
+	name{centipede}
+	storage_type{erasable}
+	size{64}
+	tag{save}
+	property{ name{size} type{float} }
+	property{ name{random} type{rw::rng} }
+	property{ name{hue} type{float} }
+	// Creature / HealthState
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{health} type{float} }
+	// movement: bodyDirection true means chunk 0 leads
+	property{ name{body_direction} type{uint8_t} }
+	property{ name{moving} type{uint8_t} }
+	property{ name{move_to_pos} type{rw::vec2} }
+	property{ name{change_dir_counter} type{int32_t} }
+	property{ name{direction_change_block} type{int32_t} }
+	property{ name{no_follow_con_counter} type{int32_t} }
+	// grasps[0] at chunk 0, grasps[1] at the last chunk (players only for now)
+	property{ name{grasp_player} type{world::byte_pair} }
+	property{ name{grasp_chunk} type{world::byte_pair} }
+	property{ name{shock_charge} type{float} }
+	property{ name{double_grab_charge} type{float} }
+	property{ name{shock_give_up_counter} type{int32_t} }
+	// CentipedeAI
+	property{ name{behavior} type{world::centipede_behavior} }
+	property{ name{run} type{float} }
+	property{ name{excitement} type{float} }
+	property{ name{current_utility} type{float} }
+	property{ name{destination} type{rw::ivec2} }
+	property{ name{temp_idle_pos} type{rw::ivec2} }
+	property{ name{forbidden_idle_pos} type{rw::ivec2} }
+	property{ name{idle_counter} type{int32_t} }
+	property{ name{annoying_collisions} type{int32_t} }
+	// tracker: the player it last saw (index + 1, 0 none)
+	property{ name{seen_player} type{uint8_t} }
+	property{ name{ticks_since_seen} type{int32_t} }
+	property{ name{last_seen_pos} type{rw::vec2} }
+	// CentipedeGraphics.lightFlash
+	property{ name{light_flash} type{float} }
+	property{ name{walk_cycle} type{float} }
+}
+relationship{
+	name{centipede_body}
+	tag{save}
+	link{ object{centipede} name{centipede} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{centipede}
+}
+
+// A distance field to a goal tile over one room, for one way of moving
+// (pathing.hpp). Built on demand when a creature asks for a path and shared
+// by every creature heading to the same tile; recycled least recently used.
+object{
+	name{path_field}
+	storage_type{contiguous}
+	size{32}
+	tag{save}
+	property{ name{room} type{room_id} }
+	property{ name{goal} type{rw::ivec2} }
+	property{ name{movement} type{uint8_t} }
+	property{ name{geometry_version} type{uint16_t} }
+	property{ name{last_used} type{uint32_t} }
+	property{ name{in_use} type{bitfield} }
+	// travel cost to the goal per tile (row major), 0xFFFF unreachable
+	property{ name{distance} type{vector_pool{1048576}{uint16_t}} }
 }
 
 //

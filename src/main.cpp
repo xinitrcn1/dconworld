@@ -12,6 +12,7 @@
 #include <SDL3/SDL.h>
 
 #include "audio.hpp"
+#include "centipede.hpp"
 #include "config.h"
 #include "gamestate.hpp"
 #include "gates.hpp"
@@ -56,18 +57,22 @@ namespace {
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
+            "  --centipede <x,y[,size]>  spawn a centipede (repeatable)\n"
+            "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
             "                      held for the given ticks\n"
             "\n"
-            "controls: arrows/WASD move, Z/K/Space jump, X throw, Left Shift pick up/drop\n"
+            "controls: arrows/WASD move, Z/Space jump, X throw, Left Shift pick up/drop\n"
             "          (hold down to drop), push into a pipe entrance to travel it,\n"
-            "          R respawn, left click teleport,\n"
+            "          R respawn, left click teleport, K spawn a centipede at the cursor\n"
+            "          (Shift+K a big one, Ctrl+K removes them all),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
             "          1-9/0 slugcat (Survivor, Monk, Hunter, Gourmand, Artificer, Rivulet,\n"
-            "          Spearmaster, Saint, Sofanthiel, Watcher), M play a song of the region\n"
+            "          Spearmaster, Saint, Sofanthiel, Watcher; 0 again toggles the Watcher's\n"
+            "          Void Weaver decorations), M play a song of the region\n"
             "          (again for another one), Ctrl+M stop the music, Esc quit\n",
             argv0);
     }
@@ -255,7 +260,7 @@ namespace {
         if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D]) ax += 1.f;
         if (keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_S]) ay -= 1.f;
         if (keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_W]) ay += 1.f;
-        bool const jmp = keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_K] || keys[SDL_SCANCODE_SPACE];
+        bool const jmp = keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_SPACE];
         bool const thrw = keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_J];
         bool const pckp = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_L];
         return player::make_input(ax, ay, jmp, thrw, pckp);
@@ -284,6 +289,8 @@ int main(int argc, char* argv[]) {
     uint32_t screenshot_ticks = 80;
     std::string script;
     std::optional<vec2> start_pos;
+    std::vector<rw::vec3> spawn_centipedes; // x, y, size
+    bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
     int32_t fuzz_ticks = -1;
@@ -313,6 +320,12 @@ int main(int argc, char* argv[]) {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
                 start_pos = vec2{x, y};
+        } else if (a == "--weaver") {
+            weaver = true;
+        } else if (a == "--centipede") {
+            float x = 0.f, y = 0.f, sz = -1.f;
+            if (std::sscanf(next().c_str(), "%f,%f,%f", &x, &y, &sz) >= 2)
+                spawn_centipedes.push_back(rw::vec3{x, y, sz});
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -370,6 +383,10 @@ int main(int argc, char* argv[]) {
     }
     a.players.push_back(player::create(gs, start, vec2{0.f, 0.f}, slugcat));
     a.enter_room(start);
+    if (weaver)
+        player_graphics::set_weaver(gs, a.players[0], true);
+    for (auto const& c : spawn_centipedes)
+        centipede::create(gs, start, vec2{c.x, c.y}, c.z);
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);
@@ -416,6 +433,11 @@ int main(int argc, char* argv[]) {
             for (int k = 0; k < n; ++k)
                 step(player::make_input(ax, ay, jmp, thrw, pckp));
         }
+        gs.world.for_each_centipede([&](dcon::centipede_id c) {
+            vec2 const hp = gs.world.body_chunk_get_pos(centipede::chunk(gs, c, centipede::head_index(gs, c)));
+            reports::add_log("centipede at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
+                + std::to_string(int(gs.world.centipede_get_behavior(c))) + (gs.world.centipede_get_dead(c) ? " dead" : ""));
+        });
         render::use_room(r, gs, a.room);
         a.update_camera(float(r.width), float(r.height));
         render::draw_frame(r, gs, a.view(), 1.f, a.cam, a.hud(false, false));
@@ -516,6 +538,22 @@ int main(int argc, char* argv[]) {
                         reports::add_log("player " + std::to_string(a.players.size()) + " joined");
                     }
                     break;
+                case SDLK_K: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        std::vector<dcon::centipede_id> all;
+                        w.for_each_centipede([&](dcon::centipede_id c) { all.push_back(c); });
+                        for (auto const c : all)
+                            centipede::destroy(gs, c);
+                        break;
+                    }
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    // same mapping as the teleport click
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    auto const c = centipede::create(gs, a.room, at, (e.key.mod & SDL_KMOD_SHIFT) ? 0.9f : -1.f);
+                    reports::add_log("centipede, size " + std::to_string(gs.world.centipede_get_size(c)));
+                    break;
+                }
                 case SDLK_P: paused = !paused; break;
                 case SDLK_M:
                     if (sound && (e.key.mod & SDL_KMOD_CTRL))
@@ -528,6 +566,13 @@ int main(int argc, char* argv[]) {
                 case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
                 case SDLK_6: case SDLK_7: case SDLK_8: case SDLK_9: case SDLK_0: {
                     uint32_t const k = e.key.key == SDLK_0 ? 9u : uint32_t(e.key.key - SDLK_1);
+                    // 0 again while playing the Watcher: its Void Weaver look
+                    if (k == 9 && a.slugcat == player::slugcat_name::watcher) {
+                        bool const on = !player_graphics::weaver(gs, a.players[0]);
+                        player_graphics::set_weaver(gs, a.players[0], on);
+                        reports::add_log(on ? "watcher: decorated" : "watcher: original look");
+                        break;
+                    }
                     a.slugcat = player::slugcat_name(k);
                     // rebuild player one where it stands (body mass depends on the slugcat)
                     auto const old = a.players[0];

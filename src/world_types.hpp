@@ -58,6 +58,7 @@ namespace world {
         thrown,
         carried,
         stuck_in_wall,
+        on_back,
     };
 
     // RegionGate.Mode
@@ -71,6 +72,21 @@ namespace world {
         opening_side,
         closed,
         broken,
+    };
+
+    // two bytes, indexable (DataContainer type names can't hold commas)
+    struct byte_pair {
+        uint8_t v[2] = {0, 0};
+        uint8_t& operator[](size_t i) noexcept { return v[i]; }
+        uint8_t operator[](size_t i) const noexcept { return v[i]; }
+    };
+
+    // CentipedeAI.Behavior
+    enum class centipede_behavior : uint8_t {
+        idle,
+        flee,
+        hunt,
+        injured,
     };
 
     // RoomSettings.DangerType

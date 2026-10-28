@@ -35,17 +35,20 @@ The game data is read straight from the installed game. Roots are layered:
 pass several `--root`s and earlier ones take priority (mergedmods over base).
 `RW_ROOT` can also point at `StreamingAssets`.
 
-Controls: arrows/WASD move, Z/K/Space jump, X/J throw, Left Shift/L pick up
+Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
 (hold down while pressing it to drop), push into a pipe entrance to travel it,
-stand still in a gate's middle zone to cycle it, R respawn, left click teleports
+stand still in a gate's middle zone to cycle it, K spawns a centipede at the
+cursor (Shift+K a big one, Ctrl+K removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
 step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
-Rivulet, Spearmaster, Saint, Sofanthiel, Watcher, M plays a song of the
+Rivulet, Spearmaster, Saint, Sofanthiel, Watcher (0 again toggles the
+Watcher's Void Weaver decorations), M plays a song of the
 region (again for another one; the game itself has long silent stretches),
 Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
-pick up with a free hand. A gamepad (left stick, d-pad,
+pick up with a free hand; Hunter stows a held spear on its back (or takes it
+back) by holding pick up. A gamepad (left stick, d-pad,
 south button jump, west throw, east pick up) also drives player one when
 playing alone.
 
@@ -78,7 +81,9 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
 | `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
-| `src/simulation.*` | one tick of players, vessels, items and gates of the occupied rooms |
+| `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
+| `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
+| `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/selftest.*` | scripted movement scenarios and the fuzzer |
 | `og/` | decompiled game source used as the reference (not tracked) |
@@ -119,6 +124,26 @@ Not ported yet: creatures and object to object collision, zero gravity,
 climbable vines, Remix (MMF) options, the other Downpour/Watcher slugcat
 abilities, sand terrain (`TerrainManager`), and the `modify/` mod merge
 system (needed for Downpour/Watcher regions).
+
+### Creatures
+
+The centipede is the first creature: a chain of body chunks (7 to 17 by
+size) held by push connections and ropes, crawling along floors, walls,
+ceilings and poles with either end leading, turning around when its tail is
+closer to the goal. Its ends grab the slugcat on contact and once the other
+end reaches it too, the shock kills a lighter slugcat or stuns a heavier one
+(big centipedes hunt, small ones flee). Rocks and spears hurt and stun it
+like `Centipede.Violence` (shell breaking and spears lodging aren't
+ported). The AI follows `CentipedeAI`: idle wandering by idle score, fleeing
+and hunting from a simplified tracker (sight and contact).
+
+Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
+creature asks `pathing::field_to(room, goal tile)` and gets a distance field
+(reverse Dijkstra with vanilla's connection costs: steps, open diagonals,
+drops) kept in a `path_field` object. Fields are shared by every creature
+heading to the same tile, reused until the room's `geometry_version`
+changes (gate doors, spear beams) and recycled least recently used; following
+one is a neighbour lookup.
 
 ### Audio
 
@@ -175,9 +200,14 @@ grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 anchors, plus the 4 segment tail mesh. The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,
 rocks, gate doors), then only the foreground depths over them, so pipes and
-foreground plants occlude the slugcat. Slugcat specifics: Gourmand's wide
-torso, Spearmaster's thin body and tail speckles, Artificer's mushroom
-scar, Rivulet's axolotl gills (sprites from the DressMySlugcat extras sheet).
+foreground plants occlude the slugcat. Slugcats have their hands (`SlugcatHand` limbs: gripping poles, ledges and
+the floor while crawling, swimming strokes, flailing in the air, reaching
+after a throw or over the shoulder for the back spear; carried items sit in
+them). Slugcat specifics: Gourmand's wide
+torso, Spearmaster's thin body and tail speckles (eyes shut while pulling a
+needle), Artificer's mushroom scar, Rivulet's axolotl gills (sprites from the
+DressMySlugcat extras sheet), and the decorated Watcher: longer tail, gold
+feathers, gold eyes and a halo.
 The grime noise drifts very slowly. Not done yet: arms/hands, skyboxes and
 other room effects, vanilla water, `RegionGateGraphics`.
 

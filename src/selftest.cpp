@@ -1,13 +1,16 @@
 #include <cmath>
 #include <span>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <vector>
 
 #include "selftest.hpp"
 #include "physics.hpp"
+#include "centipede.hpp"
 #include "items.hpp"
+#include "pathing.hpp"
 #include "player.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
@@ -41,6 +44,10 @@ namespace selftest {
     }
 
     namespace {
+        bool custom_dist_ok(vec2 a, vec2 b) {
+            return rw::custom::dist_less(a, b, 30.f);
+        }
+
         // Builds a level file from ASCII art (top row first) and loads it
         // through the real parser. '#' solid, '/' slope, '=' floor, '|' vertical
         // beam, '-' horizontal beam, '+' both beams, ' ' air.
@@ -412,6 +419,78 @@ namespace selftest {
                 items::destroy(gs, needle);
         }
         {
+            // Hunter stows a spear on its back by holding pick up, and takes it back
+            sim s(gs, flat, feet_at(10, 1), player::slugcat_name::red);
+            auto const spear = items::create_spear(gs, flat, feet_at(11, 1));
+            s.run(30);
+            s.step(0, 0, false, false, true);
+            s.run(3);
+            bool const held = items::grabber(gs, spear) == s.p;
+            s.until(40, [&] { return bool(gs.world.player_get_back_spear(s.p)); }, 0, 0, false, true);
+            bool const on_back = gs.world.player_get_back_spear(s.p) == spear && gs.world.item_get_mode(spear) == world::weapon_mode::on_back
+                && !items::grabber(gs, spear);
+            s.run(10);
+            vec2 const sp = gs.world.body_chunk_get_pos(items::chunk(gs, spear));
+            bool const follows = custom_dist_ok(sp, s.pos(0));
+            s.until(40, [&] { return items::grabber(gs, spear) == s.p; }, 0, 0, false, true);
+            bool const back_in_hand = items::grabber(gs, spear) == s.p && !gs.world.player_get_back_spear(s.p);
+            char d[96];
+            std::snprintf(d, sizeof(d), " held=%d on_back=%d follows=%d back_in_hand=%d", int(held), int(on_back), int(follows), int(back_in_hand));
+            r.check("hunter back spear", held && on_back && follows && back_in_hand, s.describe() + d);
+            items::destroy(gs, spear);
+        }
+        {
+            // pathing: a wall with a gap; the field leads around it
+            auto const walled = make_room(gs, region, box(30, 15, [](int32_t x, int32_t y) {
+                return (x == 15 && y < 10) ? '#' : ' ';
+            }));
+            uint32_t const before = pathing::builds();
+            auto const f = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::movement::climber);
+            auto const again = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::movement::climber);
+            ivec2 t{5, 1};
+            int steps = 0;
+            while (t != ivec2{25, 1} && steps < 200) {
+                auto const next = pathing::next_step(gs, f, t);
+                if (!next)
+                    break;
+                t = *next;
+                ++steps;
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), "reached in %d steps, %u build(s) for two requests", steps, pathing::builds() - before);
+            r.check("on demand path field", t == ivec2{25, 1} && f == again && pathing::builds() - before == 1, d);
+        }
+        {
+            // a big centipede finds the slugcat, grabs it and shocks it dead
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, pit, feet_at(8, 1));
+            auto const c = centipede::create(gs, pit, feet_at(30, 1), 0.8f);
+            bool grabbed = false;
+            bool const killed = s.until(3000, [&] {
+                grabbed = grabbed || gs.world.physical_object_get_grabbed_by_count(player::body(gs, s.p)) > 0;
+                return s.dead();
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " grabbed=%d killed=%d behavior=%d", int(grabbed), int(killed), int(gs.world.centipede_get_behavior(c)));
+            r.check("centipede hunts and shocks", grabbed && killed, s.describe() + d);
+            centipede::destroy(gs, c);
+        }
+        {
+            // a small one is afraid of the slugcat; rocks stun it
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, pit, feet_at(18, 1));
+            auto const c = centipede::create(gs, pit, feet_at(23, 1), 0.f);
+            s.run(60);
+            bool const flees = gs.world.centipede_get_behavior(c) == world::centipede_behavior::flee;
+            // a spear's worth of damage (a rock barely stuns a healthy one)
+            centipede::violence(gs, c, 0, vec2{0.f, 0.f}, 1.f, 0.f);
+            bool const stunned = gs.world.centipede_get_stun(c) > 0;
+            char d[64];
+            std::snprintf(d, sizeof(d), " flees=%d stunned=%d", int(flees), int(stunned));
+            r.check("small centipede flees, spears stun", flees && stunned && !s.dead(), s.describe() + d);
+            centipede::destroy(gs, c);
+        }
+        {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';
@@ -451,6 +530,8 @@ namespace selftest {
         auto const first = dcon::room_id{0};
         auto const p = player::create(gs, first, vec2{0.f, 0.f});
         uint32_t music_requests = 0;
+        uint32_t deaths = 0;
+        uint32_t lost = 0;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -459,6 +540,13 @@ namespace selftest {
                     near = w.room_camera_get_position(w.camera_location_get_camera(cl)) + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f};
             });
             player::reset(gs, p, rid, find_spawn(room, near));
+            // a centipede in every room, somewhere it can stand
+            dcon::centipede_id centi;
+            for (int k = 0; k < 50 && !centi; ++k) {
+                ivec2 const t{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
+                if (pathing::accessible(room, t, pathing::movement::climber))
+                    centi = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
+            }
             int32_t ix = 0, iy = 0;
             bool jmp = false;
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
@@ -479,17 +567,34 @@ namespace selftest {
                     vec2 const q = w.body_chunk_get_pos(player::body_chunk(gs, p, i));
                     finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
                 }
+                if (centi)
+                    for (uint32_t i = 0; i < centipede::chunk_count(gs, centi); ++i) {
+                        vec2 const q = w.body_chunk_get_pos(centipede::chunk(gs, centi, i));
+                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    }
                 if (!finite) {
                     std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
                     ++bad;
                     break;
                 }
             }
+            if (centi) {
+                vec2 const hp = w.body_chunk_get_pos(centipede::chunk(gs, centi, 0));
+                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
+                    ++lost;
+                    if (lost <= 5)
+                        std::printf("  centipede left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                }
+                centipede::destroy(gs, centi);
+            }
+            if (w.player_get_dead(p))
+                ++deaths;
         });
         uint32_t rocks = 0;
         w.for_each_item([&](dcon::item_id) { ++rocks; });
         std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
             w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
+        std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
 
         // every connected room exit pipe: sit in the entrance, push into it and
         // expect to come out in the connected room

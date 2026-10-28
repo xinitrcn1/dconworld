@@ -114,6 +114,29 @@ namespace player {
         float stretched = 1.f; // TailSegment.stretched
     };
 
+    // Limb.Mode
+    enum class limb_mode : uint8_t {
+        hunt_relative_position,
+        hunt_absolute_position,
+        retracted,
+        dangle,
+    };
+
+    // SlugcatHand (Limb)
+    struct hand_state {
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+        rw::vec2 relative_hunt_pos{0.f, 0.f};
+        rw::vec2 absolute_hunt_pos{0.f, 0.f};
+        float hunt_speed = 7.f;
+        float quickness = 0.5f;
+        int32_t retract_counter = 0;
+        limb_mode mode = limb_mode::hunt_relative_position;
+        uint8_t reached_snap_position = 0;
+        uint8_t reaching_for_object = 0;
+    };
+
     // PlayerGraphics state that drives the sprites (purely cosmetic)
     struct graphics_state {
         rw::vec2 draw_pos[2];      // drawPositions[i, 0]
@@ -124,6 +147,17 @@ namespace player {
         body_part tail[4];
         // AxolotlGills scales (Rivulet)
         body_part gills[6];
+        hand_state hands[2];
+        float spear_dir = 0.f;
+        float airborne_counter = 0.f;
+        // PlayerGraphics.ThrowObject: the hand follows the thrown item
+        int32_t throw_counter = 0;
+        uint32_t thrown_item = 0; // dcon::item_id index + 1, 0 for none
+        uint8_t throw_hand = 0;
+        // Watcher after the Void Weaver: longer tail, fluff, halo, gold eyes
+        uint8_t weaver = 0;
+        float halo_flux = 1.f;
+        uint32_t ticks = 0;
         rw::vec2 look_direction{0.f, 0.f};
         rw::vec2 last_look_direction{0.f, 0.f};
         int32_t blink = 0;

@@ -34,6 +34,10 @@ namespace sound {
             "Gate_Rails_Collide",
             "SM_Spear_Pull",
             "SM_Spear_Grab",
+            "Slugcat_Stash_Spear_On_Back",
+            "Rock_Hit_Creature",
+            "Centipede_Shock",
+            "Centipede_Attach",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

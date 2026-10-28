@@ -32,12 +32,22 @@ namespace player_graphics {
         sprite spr;
         rw::vec2 tri[3];
         rw::vec3 color{1.f, 1.f, 1.f};
+        // per vertex colours with alpha (VertexColorSprite, glows)
+        bool vertex_colors = false;
+        rw::vec4 vcol[3];
     };
+    // the Watcher's Void Weaver decorations (longer tail, fluff, halo, gold eyes)
+    void set_weaver(sys::game_state& state, dcon::player_id p, bool on);
+    bool weaver(sys::game_state const& state, dcon::player_id p);
 
     // Puts every body part back on the body (PlayerGraphics.Reset)
     void reset(sys::game_state& state, dcon::player_id p);
     // PlayerGraphics.Update, once per tick after the player update
     void update(sys::game_state& state, dcon::player_id p, world::room_view const& room);
+    // PlayerGraphics.ThrowObject: the throwing hand follows the item a moment
+    void throw_object(sys::game_state& state, dcon::player_id p, uint32_t hand, dcon::item_id item);
+    // where SlugcatHand `hand` is (carried items sit there)
+    rw::vec2 hand_position(sys::game_state const& state, dcon::player_id p, uint32_t hand);
     // PlayerGraphics.DrawSprites; `alpha` interpolates between ticks
     void build(sys::game_state const& state, dcon::player_id p, float alpha, std::vector<draw_cmd>& out);
 }

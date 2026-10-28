@@ -33,6 +33,8 @@ namespace sys {
         // Rain World's screen, the size vanilla room cameras are laid out for
         float screen_width = 1366.f;
         float screen_height = 768.f;
+        // simulation ticks since start
+        uint32_t tick = 0;
         // UnityEngine.Random for world level rolls (item spawns...)
         rw::rng random{0x2545F491u};
         // sound/music requests of the last ticks, consumed by audio::update

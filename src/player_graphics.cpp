@@ -3,6 +3,7 @@
 #include <string>
 
 #include "player_graphics.hpp"
+#include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 
@@ -20,6 +21,11 @@ namespace player_graphics {
         constexpr float legs_rad = 1.f, legs_surface_friction = 0.8f, legs_air_friction = 0.99f;
         constexpr float tail_rad[4] = {6.f, 4.f, 2.5f, 1.f};
         constexpr float tail_connection_rad[4] = {4.f, 7.f, 7.f, 7.f};
+        // PlayerGraphics.InitializeLongerWatcherTail
+        constexpr float weaver_tail_connection_rad[4] = {6.f, 10.5f, 10.5f, 10.5f};
+        // SlugcatHand: Limb(rad 3, surface friction 0.8, air friction 1, hunt speed 7, quickness 0.5)
+        constexpr float hand_rad = 3.f, hand_surface_friction = 0.8f;
+        constexpr float hand_hunt_speed = 7.f, hand_quickness = 0.5f;
         constexpr float tail_affect_previous[4] = {1.f, 0.5f, 0.5f, 0.5f};
         constexpr float tail_surface_friction = 0.85f, tail_air_friction = 1.f;
         constexpr ivec2 eight_directions_and_zero[9] = {
@@ -46,6 +52,7 @@ namespace player_graphics {
         auto const legs_crawling_names = make_names<6>("LegsACrawling");
         auto const legs_climbing_names = make_names<7>("LegsAClimbing");
         auto const legs_on_pole_names = make_names<7>("LegsAOnPole");
+        auto const arm_names = make_names<13>("PlayerArm");
 
         // BodyPart.ConnectToPoint
         void connect_to_point(player::body_part& bp, vec2 pnt, float connection_rad, bool push, float elastic, vec2 host_vel, float adapt, float exaggerate) {
@@ -148,7 +155,7 @@ namespace player_graphics {
             t.pos += t.vel;
             t.vel *= tail_air_friction;
             t.stretched = 1.f;
-            float const cr = tail_connection_rad[i];
+            float const cr = (g.weaver ? weaver_tail_connection_rad : tail_connection_rad)[i];
             if (i > 0) {
                 auto& prev = g.tail[i - 1];
                 if (!custom::dist_less(t.pos, prev.pos, cr)) {
@@ -248,11 +255,328 @@ namespace player_graphics {
         }
     }
 
+    namespace {
+        // Custom.RotateAroundOrigo (clockwise degrees)
+        vec2 rotate_around_origo(vec2 v, float deg) {
+            float const a = deg * -0.017453292f;
+            float const c = std::cos(a), sn = std::sin(a);
+            return vec2{c * v.x - sn * v.y, sn * v.x + c * v.y};
+        }
+
+        // Vector3.Slerp for 2D vectors: angle and length interpolated
+        vec2 slerp(vec2 a, vec2 b, float t) {
+            t = mathf::clamp01(t);
+            float const la = rw::magnitude(a), lb = rw::magnitude(b);
+            if (la < 1e-5f || lb < 1e-5f)
+                return rw::lerp(a, b, t);
+            float const aa = std::atan2(a.y, a.x);
+            float da = std::atan2(b.y, b.x) - aa;
+            while (da > mathf::pi)
+                da -= 2.f * mathf::pi;
+            while (da < -mathf::pi)
+                da += 2.f * mathf::pi;
+            float const ang = aa + da * t;
+            return vec2{std::cos(ang), std::sin(ang)} * mathf::lerp(la, lb, t);
+        }
+
+        // the hand as a body part, for the shared helpers
+        template<typename F>
+        void as_body_part(player::hand_state& h, F&& f) {
+            player::body_part bp;
+            bp.pos = h.pos;
+            bp.last_pos = h.last_pos;
+            bp.vel = h.vel;
+            bp.rad = hand_rad;
+            f(bp);
+            h.pos = bp.pos;
+            h.last_pos = bp.last_pos;
+            h.vel = bp.vel;
+        }
+
+        // Limb.FindGrip: the closest point on terrain or a beam to `goal`
+        void find_grip(player::hand_state& h, room_view const& room, vec2 attached, vec2 search_from, float max_rad, vec2 goal, int forbidden_x, int forbidden_y) {
+            if (!custom::dist_less(attached, search_from, max_rad))
+                search_from = attached + custom::dir_vec(attached, search_from) * (max_rad - 1.f);
+            if (!custom::dist_less(attached, goal, max_rad))
+                goal = attached + custom::dir_vec(attached, goal) * max_rad;
+            ivec2 const tp = room_view::get_tile_position(search_from);
+            vec2 best{-100000.f, -100000.f};
+            auto const consider = [&](vec2 v) {
+                if (rw::sqr_magnitude(goal - v) < rw::sqr_magnitude(goal - best) && custom::dist_less(attached, v, max_rad))
+                    best = v;
+            };
+            for (auto const d : eight_directions_and_zero) {
+                if (d.x == forbidden_x || d.y == forbidden_y)
+                    continue;
+                ivec2 const t = tp + d;
+                vec2 const m = room_view::middle_of_tile(t);
+                vec2 v{mathf::clamp(goal.x, m.x - 10.f, m.x + 10.f), mathf::clamp(goal.y, m.y - 10.f, m.y + 10.f)};
+                auto const tile = room.get_tile(t);
+                if (tile.t == terrain::solid) {
+                    if (d.x != 0 && room.get_terrain(t.x - d.x, t.y) != terrain::solid)
+                        v.x = m.x - float(d.x) * 10.f;
+                    if (d.y != 0 && room.get_terrain(t.x, t.y - d.y) != terrain::solid)
+                        v.y = m.y - float(d.y) * 10.f;
+                    consider(v);
+                } else if (tile.t == terrain::floor) {
+                    v.y = m.y + 10.f;
+                    consider(v);
+                } else if (tile.t == terrain::slope) {
+                    auto const sl = room.identify_slope(t);
+                    if (sl == world::slope_direction::down_left || sl == world::slope_direction::up_right)
+                        v.y = m.y + 10.f - (v.x - (m.x - 10.f));
+                    else if (sl == world::slope_direction::down_right || sl == world::slope_direction::up_left)
+                        v.y = m.y - 10.f + (v.x - (m.x - 10.f));
+                    consider(v);
+                }
+                if (tile.horizontal_beam())
+                    consider(vec2{mathf::clamp(goal.x, m.x - 10.f, m.x + 10.f), m.y});
+                if (tile.vertical_beam())
+                    consider(vec2{m.x, mathf::clamp(goal.y, m.y - 10.f, m.y + 10.f)});
+            }
+            if (best.x != -100000.f && best.y != -100000.f) {
+                h.mode = player::limb_mode::hunt_absolute_position;
+                h.absolute_hunt_pos = best;
+            }
+        }
+
+        // Limb.Update
+        void limb_update(player::hand_state& h, vec2 conn, vec2 conn_vel, vec2 rotation_chunk, room_view const& room) {
+            h.last_pos = h.pos;
+            using player::limb_mode;
+            if (h.mode == limb_mode::hunt_relative_position)
+                h.absolute_hunt_pos = conn + rotate_around_origo(h.relative_hunt_pos, aim(rotation_chunk, conn));
+            if (h.mode == limb_mode::hunt_relative_position || h.mode == limb_mode::hunt_absolute_position) {
+                if (custom::dist_less(h.absolute_hunt_pos, h.pos, h.hunt_speed)) {
+                    h.vel = h.absolute_hunt_pos - h.pos;
+                    h.reached_snap_position = 1;
+                } else {
+                    h.vel = rw::lerp(h.vel, custom::dir_vec(h.pos, h.absolute_hunt_pos) * h.hunt_speed, h.quickness);
+                    h.reached_snap_position = 0;
+                }
+            } else if (h.mode == limb_mode::retracted) {
+                h.vel = conn_vel;
+                h.pos = conn;
+                h.reached_snap_position = 1;
+            } else {
+                h.reached_snap_position = 0;
+            }
+            h.quickness = hand_quickness;
+            h.hunt_speed = hand_hunt_speed;
+            if (h.mode != limb_mode::retracted) {
+                h.pos += h.vel;
+                if (h.mode == limb_mode::hunt_relative_position)
+                    h.pos += conn_vel;
+                as_body_part(h, [&](player::body_part& bp) { push_out_of_terrain(bp, room, hand_surface_friction); });
+            }
+        }
+
+        // SlugcatHand.EngageInMovement: true when the hand is free to do
+        // something else (hold an item, or retract)
+        bool engage_in_movement(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room) {
+            auto const& w = state.world;
+            auto& h = g.hands[limb];
+            using player::limb_mode;
+            using player::animation_index;
+            using player::body_mode_index;
+            vec2 const c0 = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
+            vec2 const c1 = w.body_chunk_get_pos(player::body_chunk(state, p, 1));
+            vec2 const v0 = w.body_chunk_get_vel(player::body_chunk(state, p, 0));
+            auto const mode = w.player_get_body_mode(p);
+            auto const anim = w.player_get_animation(p);
+            int32_t const flip = w.player_get_flip_direction(p);
+            float const frame = float(w.player_get_animation_frame(p));
+            auto const& in = w.player_get_input(p)[0];
+            float const side = limb == 0 ? -1.f : 1.f;
+            bool flag = true;
+            if (mode == body_mode_index::climbing_on_beam) {
+                flag = false;
+                if (anim == animation_index::climb_on_beam) {
+                    bool const inner = (limb == 1) == (flip == 1);
+                    float num = frame / 20.f * mathf::pi * 2.f;
+                    num = inner ? std::sin(num) : std::cos(num);
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.absolute_hunt_pos = vec2{room_view::middle_of_tile(c0).x, c0.y};
+                    h.absolute_hunt_pos.y += (inner ? -3.f : 3.f) + 6.f * num;
+                    h.absolute_hunt_pos.x += inner ? float(-flip) : float(flip);
+                    h.retract_counter = 40;
+                } else if (anim == animation_index::hang_from_beam || anim == animation_index::get_up_on_beam) {
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.absolute_hunt_pos = vec2{c0.x, room_view::middle_of_tile(c0).y - 1.f};
+                    h.absolute_hunt_pos.x += side * (10.f + 3.f * std::sin(6.2831855f * frame / 20.f));
+                    auto const t = room.get_tile(h.absolute_hunt_pos);
+                    if (t.solid() || !t.horizontal_beam())
+                        h.absolute_hunt_pos.x = room_view::middle_of_tile(c0).x + side * 10.f;
+                } else if (anim == animation_index::beam_tip || anim == animation_index::stand_on_beam) {
+                    h.mode = limb_mode::hunt_relative_position;
+                    h.relative_hunt_pos = vec2{-20.f + 40.f * float(limb), -4.f};
+                    find_grip(h, room, c0, c0, 100.f, c0 + vec2{-10.f + 20.f * float(limb), ((limb == 0) == (flip == -1)) ? 0.f : -5.f},
+                        limb == 0 ? 1 : -1, -1);
+                    h.hunt_speed = 5.f;
+                    h.quickness = 0.2f;
+                } else if (anim == animation_index::hang_under_vertical_beam) {
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.absolute_hunt_pos = room_view::middle_of_tile(c0) + vec2{limb == 0 ? -0.5f : 0.5f, limb == 0 ? 20.f : 25.f};
+                    h.hunt_speed = 10.f;
+                    h.quickness = 1.f;
+                }
+            } else if (mode == body_mode_index::crawl) {
+                flag = false;
+                h.mode = limb_mode::hunt_absolute_position;
+                h.hunt_speed = 12.f;
+                h.quickness = 0.7f;
+                auto const& h0 = g.hands[0];
+                if ((limb == 0 || (std::fabs(h0.pos.x - c0.x) < 10.f && h0.reached_snap_position)) && !custom::dist_less(c0, h.absolute_hunt_pos, 29.f)) {
+                    vec2 const from = c0 + vec2{float(flip) * 20.f, 0.f};
+                    find_grip(h, room, from, from, 100.f, vec2{c0.x + float(flip) * 28.f, room_view::middle_of_tile(c0).y - 10.f}, 2, 1);
+                }
+            } else if (mode == body_mode_index::corridor_climb) {
+                flag = false;
+                h.mode = limb_mode::hunt_absolute_position;
+                if (!custom::dist_less(h.pos, c0, 20.f)) {
+                    vec2 const v = custom::dir_vec(c1, c0);
+                    vec2 const goal = c0 + rw::normalized(v + rw::normalized(vec2{float(in.x), float(in.y)}) * 1.5f) * 20.f
+                        + custom::perpendicular_vector(v) * (6.f - 12.f * float(limb));
+                    find_grip(h, room, c0, c0, 100.f, goal, 2, 2);
+                }
+            } else if (mode == body_mode_index::wall_climb) {
+                flag = false;
+                h.mode = limb_mode::hunt_absolute_position;
+                h.absolute_hunt_pos.x = room_view::middle_of_tile(c0).x + float(flip) * 10.f;
+                h.absolute_hunt_pos.y = ((limb == 0) == (flip == -1)) ? c0.y - 7.f : c0.y + 3.f;
+            } else if (mode == body_mode_index::swimming) {
+                flag = false;
+                float const cycle = w.player_get_swim_cycle(p);
+                float const num4 = cycle < 3.f ? cycle / 3.f : 1.f - (cycle - 3.f);
+                if (anim == animation_index::deep_swim) {
+                    h.mode = limb_mode::hunt_relative_position;
+                    float const num5 = mathf::pow(1.f - mathf::inverse_lerp(0.5f, 1.f, num4), 1.5f);
+                    h.relative_hunt_pos = custom::deg_to_vec((20.f + num5 * 140.f) * side) * 20.f;
+                    if (cycle < 3.f)
+                        h.relative_hunt_pos.x *= 0.5f;
+                } else {
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.absolute_hunt_pos.x = c0.x + mathf::lerp(side * 30.f, float(in.x) * 10.f * -std::sin(num4 * 2.f * mathf::pi), 0.5f);
+                    h.absolute_hunt_pos.y = room.get_float_water_level(h.absolute_hunt_pos) - 7.f;
+                    h.absolute_hunt_pos += custom::deg_to_vec(360.f * num4 * (in.x == 0 ? 1.f : -float(in.x))) * side * (in.x == 0 ? 5.f : 10.f);
+                }
+                h.hunt_speed = 5.f;
+                h.quickness = 0.5f;
+            } else if (mode == body_mode_index::default_) {
+                if (g.airborne_counter > 180.f && !custom::dist_less(vec2{0.f, 0.f}, v0, 4.f)) {
+                    // flailing for something to hold on to
+                    flag = false;
+                    h.retract_counter = 0;
+                    vec2 const b = custom::deg_to_vec(g.random.value() * 360.f) * 40.f * g.random.value();
+                    vec2 const probe = c0 + v0 * 4.f + b;
+                    if (room.get_tile(probe).t != terrain::air) {
+                        h.mode = limb_mode::hunt_absolute_position;
+                        h.absolute_hunt_pos = probe;
+                        h.hunt_speed = 18.f;
+                        h.quickness = 1.f;
+                    } else {
+                        bool const upright = c0.y > c1.y + 5.f;
+                        h.mode = limb_mode::hunt_relative_position;
+                        h.relative_hunt_pos.x = (std::fabs(v0.x * (upright ? 2.1f : 1.f)) + 4.f) * (-1.f + 2.f * float(limb));
+                        h.relative_hunt_pos.y = v0.y * (upright ? -3.f : -0.9f) + std::fabs(v0.x * 0.6f) + 1.f;
+                        if (rw::magnitude(v0) > 10.f)
+                            h.relative_hunt_pos += custom::deg_to_vec(g.random.value() * 360.f) * g.random.value() * g.random.value() * rw::magnitude(v0);
+                        h.hunt_speed = 8.f;
+                        h.quickness = 0.6f;
+                    }
+                }
+            }
+            if (anim == animation_index::down_on_fours || anim == animation_index::crawl_turn) {
+                flag = false;
+                h.mode = limb_mode::hunt_absolute_position;
+                vec2 const cv = rw::normalized(v0);
+                h.absolute_hunt_pos = c0 + vec2{-6.f + 12.f * float(limb) + cv.x * 20.f, std::fabs(cv.y) * -20.f};
+            } else if (anim == animation_index::ledge_grab) {
+                flag = false;
+                h.absolute_hunt_pos = room_view::middle_of_tile(c0);
+                if ((limb == 0) == (flip == -1))
+                    h.absolute_hunt_pos += vec2{float(flip) * 10.f, -10.f};
+                else
+                    h.absolute_hunt_pos += vec2{float(flip) * 15.f, 10.f};
+            }
+            return flag;
+        }
+
+        // SlugcatHand.Update
+        void hand_update(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room) {
+            auto const& w = state.world;
+            auto& h = g.hands[limb];
+            using player::limb_mode;
+            auto const b0 = player::body_chunk(state, p, 0);
+            vec2 const c0 = w.body_chunk_get_pos(b0);
+            vec2 const v0 = w.body_chunk_get_vel(b0);
+            limb_update(h, c0, v0, w.body_chunk_get_pos(player::body_chunk(state, p, 1)), room);
+            as_body_part(h, [&](player::body_part& bp) { connect_to_point(bp, c0, 20.f, false, 0.f, v0, 0.f, 0.f); });
+            bool flag;
+            if (h.reaching_for_object) {
+                h.mode = limb_mode::hunt_absolute_position;
+                flag = false;
+                h.reaching_for_object = 0;
+            } else {
+                flag = engage_in_movement(state, p, g, limb, room);
+            }
+            if (flag && items::held(state, p, uint32_t(limb))) {
+                // holding something: out to the side, spears swinging along while walking
+                h.mode = limb_mode::hunt_relative_position;
+                h.relative_hunt_pos = vec2{-20.f + 40.f * float(limb), -12.f};
+                auto const& in = w.player_get_input(p)[0];
+                if (g.spear_dir != 0.f && w.player_get_body_mode(p) == player::body_mode_index::stand) {
+                    float const frame = float(w.player_get_animation_frame(p));
+                    vec2 b = custom::deg_to_vec(180.f + (limb == 0 ? -1.f : 1.f) * 8.f + float(in.x) * 4.f) * 12.f;
+                    b.y += std::sin(frame / 6.f * 2.f * mathf::pi) * 2.f;
+                    b.x -= std::cos(frame / 12.f * 2.f * mathf::pi) * 4.f * float(in.x);
+                    b.x += float(in.x) * 2.f;
+                    h.relative_hunt_pos = rw::lerp(h.relative_hunt_pos, b, std::fabs(g.spear_dir));
+                }
+                flag = false;
+            }
+            if (flag && h.mode != limb_mode::retracted) {
+                if (++h.retract_counter > 5) {
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.pos = rw::lerp(h.pos, c0, mathf::clamp((float(h.retract_counter) - 5.f) * 0.05f, 0.f, 1.f));
+                    if (custom::dist_less(h.pos, c0, 2.f) && h.reached_snap_position)
+                        h.mode = limb_mode::retracted;
+                    h.absolute_hunt_pos = c0;
+                    h.hunt_speed = 1.f + float(h.retract_counter) * 0.2f;
+                    h.quickness = 1.f;
+                }
+            } else {
+                h.retract_counter = std::max(0, h.retract_counter - 10);
+            }
+        }
+    }
+
+    void set_weaver(sys::game_state& state, dcon::player_id p, bool on) {
+        state.world.player_get_graphics(p).weaver = on ? 1 : 0;
+    }
+
+    bool weaver(sys::game_state const& state, dcon::player_id p) {
+        return state.world.player_get_graphics(p).weaver != 0;
+    }
+
+    void throw_object(sys::game_state& state, dcon::player_id p, uint32_t hand, dcon::item_id item) {
+        auto& g = state.world.player_get_graphics(p);
+        g.throw_counter = 5;
+        g.thrown_item = item ? uint32_t(item.index()) + 1 : 0;
+        g.throw_hand = uint8_t(hand);
+    }
+
+    rw::vec2 hand_position(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
+        auto const& g = state.world.player_get_graphics(p);
+        return g.hands[hand & 1].pos;
+    }
+
     void reset(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
         auto& g = w.player_get_graphics(p);
         vec2 const c0 = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
         vec2 const c1 = w.body_chunk_get_pos(player::body_chunk(state, p, 1));
+        uint8_t const weaver = g.weaver; // a look, survives resets
         g = player::graphics_state{};
         g.draw_pos[0] = g.last_draw_pos[0] = c0;
         g.draw_pos[1] = g.last_draw_pos[1] = c1;
@@ -268,6 +592,11 @@ namespace player_graphics {
             place(g.tail[i], c1 - vec2{0.f, float(i + 1) * 4.f}, tail_rad[i]);
         for (auto& gl : g.gills)
             place(gl, c0, 1.f);
+        for (auto& h : g.hands) {
+            h = player::hand_state{};
+            h.pos = h.last_pos = h.absolute_hunt_pos = c0;
+        }
+        g.weaver = weaver;
         g.initialized = 1;
     }
 
@@ -382,6 +711,73 @@ namespace player_graphics {
         if (w.player_get_stats(p).name == player::slugcat_name::rivulet)
             gills_update(g, c0, c1, room);
 
+        // spearDir: where a held spear points while walking
+        int32_t const in_x = w.player_get_input(p)[0].x;
+        if (mode == player::body_mode_index::stand && in_x != 0)
+            g.spear_dir = mathf::clamp(g.spear_dir + float(in_x) * 0.1f, -1.f, 1.f);
+        else if (g.spear_dir < 0.f)
+            g.spear_dir = mathf::min(g.spear_dir + 0.05f, 0.f);
+        else if (g.spear_dir > 0.f)
+            g.spear_dir = mathf::max(g.spear_dir - 0.05f, 0.f);
+        if (mode == player::body_mode_index::default_ && anim == player::animation_index::none
+        && w.body_chunk_get_contact_point(b0) == ivec2{0, 0} && w.body_chunk_get_contact_point(b1) == ivec2{0, 0})
+            g.airborne_counter += rw::magnitude(v0);
+        else
+            g.airborne_counter = 0.f;
+
+        // hands: following a throw, or reaching over the shoulder for the back spear
+        if (consious(w, p)) {
+            dcon::item_id const thrown = g.thrown_item ? dcon::item_id{dcon::item_id::value_base_t(g.thrown_item - 1)} : dcon::item_id{};
+            int32_t const back_counter = w.player_get_back_counter(p);
+            if (g.throw_counter > 0 && thrown && w.item_is_valid(thrown)) {
+                auto& h = g.hands[g.throw_hand & 1];
+                vec2 const ip = w.body_chunk_get_pos(items::chunk(state, thrown));
+                h.reaching_for_object = 1;
+                h.absolute_hunt_pos = ip;
+                if (custom::dist_less(h.pos, ip, 40.f))
+                    h.pos = ip;
+                else
+                    h.vel += custom::dir_vec(h.pos, ip) * 6.f;
+                g.hands[1 - (g.throw_hand & 1)].vel -= custom::dir_vec(h.pos, ip) * 3.f;
+                --g.throw_counter;
+            } else if (w.player_get_stats(p).name == player::slugcat_name::red && back_counter > 5) {
+                bool const has = bool(w.player_get_back_spear(p));
+                int hand = -1;
+                for (int i = 0; i < 2 && hand == -1; ++i) {
+                    auto const held = items::held(state, p, uint32_t(i));
+                    if ((has && !held) || (!has && held && w.item_get_type(held) == world::item_type::spear))
+                        hand = i;
+                }
+                if (hand > -1) {
+                    auto& h = g.hands[hand];
+                    float const sd = hand == 0 ? -1.f : 1.f;
+                    h.reaching_for_object = 1;
+                    h.mode = player::limb_mode::hunt_relative_position;
+                    float const k = float(back_counter);
+                    if (has)
+                        h.relative_hunt_pos = slerp(vec2{sd * 20.f, -30.f} * std::sin(mathf::inverse_lerp(9.f, 20.f, k) * mathf::pi), vec2{0.f, 1.f},
+                            mathf::inverse_lerp(9.f, 20.f, k));
+                    else
+                        h.relative_hunt_pos = slerp(vec2{sd * 30.f, -20.f} * mathf::lerp(1.f, 0.2f, std::fabs(w.player_get_back_flip(p))), vec2{1.f, 1.f},
+                            mathf::inverse_lerp(14.f, 20.f, k));
+                    g.draw_pos[0] += custom::dir_vec(h.absolute_hunt_pos, g.draw_pos[0]) * 0.7f;
+                    g.head.vel += custom::dir_vec(h.absolute_hunt_pos, g.head.pos) * 1.5f;
+                }
+            }
+        }
+        for (int i = 0; i < 2; ++i) {
+            hand_update(state, p, g, i, room);
+            if (!std::isfinite(g.hands[i].pos.x) || !std::isfinite(g.hands[i].pos.y))
+                g.hands[i].pos = c0;
+        }
+
+        // Spearmaster shuts its eyes while pulling a needle out
+        if (w.player_get_stats(p).name == player::slugcat_name::spear && w.player_get_spear_prog(p) > 0.1f)
+            g.blink = 5;
+        if (g.random.value() < 0.1f)
+            g.halo_flux = mathf::lerp(0.6f, 1.f, g.random.value());
+        ++g.ticks;
+
         // blinking
         g.last_look_direction = g.look_direction;
         --g.blink;
@@ -395,7 +791,10 @@ namespace player_graphics {
         if (!g.initialized)
             return;
         rw::vec3 const body_color = w.player_get_stats(p).body_color;
-        rw::vec3 const eye_color = w.player_get_stats(p).eye_color;
+        bool const decorated = g.weaver && w.player_get_stats(p).name == player::slugcat_name::watcher;
+        // RainWorld.GoldRGB; the decorated Watcher's eyes are SaturatedGold
+        rw::vec3 const gold{0.529f, 0.365f, 0.184f};
+        rw::vec3 const eye_color = decorated ? rw::vec3{1.f, 0.73f, 0.368f} : w.player_get_stats(p).eye_color;
         auto const mode = w.player_get_body_mode(p);
         auto const anim = w.player_get_animation(p);
         int32_t const flip = w.player_get_flip_direction(p);
@@ -550,6 +949,41 @@ namespace player_graphics {
                 push(element, legs_pos, aim(g.legs_direction, vec2{0.f, 0.f}), vec2{scale_x, 1.f}, vec2{0.5f, 0.25f}, body_color);
         }
 
+        // 5, 6 arms and 7, 8 hands gripping terrain
+        for (int j = 0; j < 2; ++j) {
+            auto const& h = g.hands[j];
+            vec2 const hp = rw::lerp(h.last_pos, h.pos, alpha);
+            bool const snapped_grip = (anim == player::animation_index::climb_on_beam || anim == player::animation_index::hang_from_beam
+                || anim == player::animation_index::get_up_on_beam) && h.reached_snap_position;
+            if (h.mode != player::limb_mode::retracted && (anim != player::animation_index::climb_on_beam || !h.reached_snap_position)) {
+                float shoulder = 4.5f / (float(h.retract_counter) + 1.f);
+                if (anim == player::animation_index::hang_from_beam)
+                    shoulder *= 0.5f;
+                shoulder *= std::fabs(std::cos(aim(v2, v) / 360.f * mathf::pi * 2.f));
+                if (name == player::slugcat_name::spear)
+                    shoulder *= 0.6f;
+                vec2 const sp = v + rotate_around_origo(vec2{(-1.f + 2.f * float(j)) * shoulder, -3.5f}, aim(v2, v));
+                size_t const idx = size_t(custom::int_clamp(int32_t(std::round(mathf::clamp(rw::distance(hp, sp) / 2.f, 0.f, 12.f))), 0, 12));
+                float scale_y;
+                if (mode == player::body_mode_index::crawl)
+                    scale_y = v.x < v2.x ? -1.f : 1.f;
+                else if (mode == player::body_mode_index::wall_climb)
+                    scale_y = flip == -1 ? -1.f : 1.f;
+                else {
+                    // Custom.DistanceToLine(hand, body top, body bottom)
+                    float const dl = ((v.y - v2.y) * hp.x - (v.x - v2.x) * hp.y + v.x * v2.y - v.y * v2.x);
+                    scale_y = mathf::sign(dl);
+                }
+                if (anim == player::animation_index::hang_under_vertical_beam)
+                    scale_y = j == 0 ? 1.f : -1.f;
+                push(arm_names[idx], hp, aim(hp, sp) + 90.f, vec2{1.f, scale_y}, vec2{0.9f, 0.5f}, body_color);
+            }
+            if (snapped_grip) {
+                vec2 const at = hp + vec2{0.f, anim != player::animation_index::climb_on_beam ? 3.f : 0.f};
+                push("OnTopOfTerrainHand", at, 0.f, vec2{j == 1 ? -1.f : 1.f, 1.f}, vec2{0.5f, 0.5f}, body_color);
+            }
+        }
+
         // 9 face
         vec2 const face_pos = v3 + look + vec2{0.f, -2.f};
         push(face_element, face_pos, face_rot, vec2{face_scale_x, 1.f}, vec2{0.5f, 0.5f}, eye_color);
@@ -628,6 +1062,95 @@ namespace player_graphics {
                         c.color = rw::vec3{1.f, 1.f, 1.f};
                         out.push_back(c);
                     }
+                }
+            }
+        }
+
+        // Watcher: WeaverParts, feathers down the tail and a flickering halo
+        if (decorated) {
+            constexpr int rows = 4, lines = 3;
+            auto const side_pos = [](int i, int j) {
+                float num = (float(j) + (i % 2 != 0 ? 0.f : 0.5f)) / float(lines - 1);
+                num = -1.f + 2.f * num;
+                if (num < -1.f)
+                    num += 2.f;
+                else if (num > 1.f)
+                    num -= 2.f;
+                return mathf::sign(num) * mathf::pow(std::fabs(num), 0.6f);
+            };
+            rw::vec4 const tip{gold.x * 1.5f, gold.y * 1.5f, gold.z * 1.5f, 1.f};
+            rw::vec4 const base{body_color.x, body_color.y, body_color.z, 1.f};
+            for (int i = 0; i < rows; ++i) {
+                float const f = mathf::inverse_lerp(0.f, float(rows - 1), float(i));
+                float const along = mathf::lerp(0.05f, 0.9f, f);
+                auto const sd = spine_position(g, along, alpha);
+                for (int j = 0; j < lines; ++j) {
+                    float const sp = side_pos(i, j);
+                    float const scale = 0.5f * mathf::lerp(0.35f, 1.f, 1.f - along);
+                    // fully decorated (weaverTier 4): the bigger feathers are gone
+                    if (scale > 0.35f)
+                        continue;
+                    vec2 const at = sd.pos + sd.perp * ((sd.rad + 0.5f) * sp);
+                    float const rot = aim(vec2{0.f, 0.f}, sd.dir) - mathf::lerp(0.f, 30.f, 1.f - along) * mathf::sign(sp);
+                    vec2 const up = custom::deg_to_vec(rot);
+                    vec2 const across = custom::perpendicular_vector(up);
+                    // WeaverFeather: a leaf 40px long from its anchor, gold at the tip
+                    float const len = 40.f * scale;
+                    float const half = 7.f * mathf::lerp(scale, 1.f, 0.25f) * 0.8f;
+                    vec2 const b0 = at - up * (len * 0.1f);
+                    vec2 const t0 = b0 + up * len;
+                    vec2 const m0 = b0 + up * (len * 0.45f) + across * (half * (sp > 0.f ? 1.f : -1.f));
+                    vec2 const m1 = b0 + up * (len * 0.45f) - across * (half * 0.4f * (sp > 0.f ? 1.f : -1.f));
+                    for (auto const& tri : {std::array<vec2, 3>{b0, m0, t0}, std::array<vec2, 3>{b0, t0, m1}}) {
+                        draw_cmd c;
+                        c.is_triangle = true;
+                        c.vertex_colors = true;
+                        for (int k = 0; k < 3; ++k) {
+                            c.tri[k] = tri[size_t(k)];
+                            float const t = mathf::clamp01(rw::dot(tri[size_t(k)] - b0, up) / mathf::max(len, 0.01f));
+                            c.vcol[k] = base + (tip - base) * t;
+                        }
+                        out.push_back(c);
+                    }
+                }
+            }
+            // the halo: three rings (10, 25, 50px) around the head, the middle one glowing
+            float const t = (float(g.ticks) + alpha) / 40.f;
+            float const n11 = std::sin(t * 0.2f * 6.2831f) * 0.25f;
+            float n12 = std::sin(t * 0.1f * 6.2831f + 1.7f) * 0.8f;
+            n12 = mathf::pow(std::fabs(n12), 0.75f) * mathf::sign(n12);
+            float const strength = 0.55f * g.halo_flux;
+            vec2 const hp = lerp_part(g.head);
+            rw::vec3 const sat{1.f, 0.73f, 0.368f};
+            constexpr int divs = 64;
+            for (int k = 0; k < divs; ++k) {
+                auto const ring = [&](int kk, float rad) {
+                    float const a = float(kk) / float(divs) * 6.2831855f;
+                    return hp + vec2{std::cos(-a), std::sin(-a)} * rad;
+                };
+                // WeaverGlow's banding: eight soft lobes around the ring
+                auto const band = [&](int kk) {
+                    float const u = float(kk % divs) / float(divs) * 8.f;
+                    float const pp = u - 2.f * std::floor(u / 2.f);
+                    float const ping = pp > 1.f ? 2.f - pp : pp;
+                    return mathf::clamp01(0.55f + mathf::pow(ping, 2.f + n12) * (0.45f + n11 * 0.2f));
+                };
+                for (int layer = 0; layer < 2; ++layer) {
+                    float const r0 = layer == 0 ? 10.f : 25.f, r1 = layer == 0 ? 25.f : 50.f;
+                    float const a0 = layer == 0 ? 0.f : 1.f, a1 = layer == 0 ? 1.f : 0.f;
+                    vec2 const p00 = ring(k, r0), p01 = ring(k, r1), p10 = ring(k + 1, r0), p11 = ring(k + 1, r1);
+                    float const s0 = band(k) * strength, s1 = band(k + 1) * strength;
+                    rw::vec4 const c00{sat.x, sat.y, sat.z, a0 * s0}, c01{sat.x, sat.y, sat.z, a1 * s0};
+                    rw::vec4 const c10{sat.x, sat.y, sat.z, a0 * s1}, c11{sat.x, sat.y, sat.z, a1 * s1};
+                    draw_cmd c;
+                    c.is_triangle = true;
+                    c.vertex_colors = true;
+                    c.tri[0] = p00; c.tri[1] = p01; c.tri[2] = p10;
+                    c.vcol[0] = c00; c.vcol[1] = c01; c.vcol[2] = c10;
+                    out.push_back(c);
+                    c.tri[0] = p10; c.tri[1] = p01; c.tri[2] = p11;
+                    c.vcol[0] = c10; c.vcol[1] = c01; c.vcol[2] = c11;
+                    out.push_back(c);
                 }
             }
         }

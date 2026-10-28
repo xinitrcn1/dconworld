@@ -67,6 +67,8 @@ add_executable(rwcpp
     src/items.cpp
     src/gates.cpp
     src/simulation.cpp
+    src/pathing.cpp
+    src/centipede.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

@@ -28,10 +28,13 @@ namespace items {
     void update_room(sys::game_state& state, world::room_view const& room);
     // Player.GrabUpdate (pick up, drop, throw), end of Player.MovementUpdate
     void grab_update(sys::game_state& state, dcon::player_id p, world::room_view const& room);
-    // Moves carried items to the hands (Player.Update, after the body moved)
+    // Moves carried items to the hands (Player.GraphicsModuleUpdated, after
+    // the player graphics moved the hands)
     void carry_update(sys::game_state& state, dcon::player_id p);
-    // Where the hand holding grasps[hand] is (stands in for SlugcatHand)
-    rw::vec2 hand_position(sys::game_state const& state, dcon::player_id p, uint32_t hand);
+    // the item held in grasps[hand], if any
+    dcon::item_id held(sys::game_state const& state, dcon::player_id p, uint32_t hand);
+    // Player.SpearOnBack.GraphicsModuleUpdated: the back spear follows the body
+    void back_spear_update(sys::game_state& state, dcon::player_id p);
     // Releases every grasp of the player (death, reset)
     void release_all(sys::game_state& state, dcon::player_id p);
 

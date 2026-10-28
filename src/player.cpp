@@ -3,6 +3,7 @@
 
 #include "player.hpp"
 #include "physics.hpp"
+#include "centipede.hpp"
 #include "items.hpp"
 #include "shortcuts.hpp"
 
@@ -448,6 +449,7 @@ namespace player {
 
     void destroy(sys::game_state& state, dcon::player_id id) {
         items::release_all(state, id);
+        centipede::release_player(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
         if (o)
@@ -456,6 +458,7 @@ namespace player {
 
     void reset(sys::game_state& state, dcon::player_id id, dcon::room_id room, vec2 pos) {
         items::release_all(state, id);
+        centipede::release_player(state, id);
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -647,7 +650,6 @@ namespace player {
             movement_update(x);
             items::grab_update(state, id, room);
         }
-        items::carry_update(state, id);
     }
 }
 

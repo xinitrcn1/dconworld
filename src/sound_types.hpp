@@ -44,6 +44,10 @@ namespace sound {
         gate_rails_collide,
         sm_spear_pull,
         sm_spear_grab,
+        slugcat_stash_spear_on_back,
+        rock_hit_creature,
+        centipede_shock,
+        centipede_attach,
         count
     };
     char const* to_string(sound_id id) noexcept;
