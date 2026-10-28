@@ -67,6 +67,11 @@ add_executable(rwcpp
     src/items.cpp
     src/gates.cpp
     src/simulation.cpp
+    src/audio.cpp
+    src/sound_ids.cpp
+    src/codecs.cpp
+    src/unity_bundle.cpp
+    src/fsb5.cpp
     "${GENERATED_DIR}/dcon_generated.hpp"
     "${GENERATED_DIR}/dcon_generated_ids.hpp"
     "${GENERATED_DIR}/parser_defs_generated.hpp"
@@ -80,6 +85,8 @@ target_link_libraries(rwcpp PRIVATE
     dependency_glm
     dependency_glew
     dependency_stb
+    dependency_dr_libs
+    dependency_vgmstream_fsb
     SDL3::SDL3
     OpenGL::GL
 )

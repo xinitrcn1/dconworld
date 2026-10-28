@@ -42,6 +42,7 @@ namespace render {
         constexpr uint32_t col_body_dead = rgba(150, 60, 60);
         constexpr uint32_t col_eye = rgba(20, 20, 30);
         constexpr uint32_t col_rock = rgba(14, 12, 16);
+        constexpr uint32_t col_needle = rgba(235, 228, 240);
         constexpr uint32_t col_gate_door = rgba(22, 20, 26);
         constexpr uint32_t col_gate_door_edge = rgba(48, 44, 52);
 
@@ -580,7 +581,7 @@ void main() {
 
     namespace {
         // Rock.DrawSprites: a pebble in the palette's black, plus the
-        // triangle trail while thrown
+        // triangle trail while thrown; Spear.DrawSprites
         void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             auto const& world = s.world;
             painter p{r.batch};
@@ -593,6 +594,17 @@ void main() {
                     return;
                 auto const c = items::chunk(s, it);
                 vec2 const pos = rw::lerp(world.body_chunk_get_last_pos(c), world.body_chunk_get_pos(c), alpha);
+                if (world.item_get_type(it) == world::item_type::spear) {
+                    // SmallSpear: a thin shaft with a slightly wider head
+                    vec2 tail, tip;
+                    items::spear_ends(s, it, alpha, tail, tip);
+                    vec2 const d = rw::normalized(tip - tail);
+                    vec2 const n = rw::custom::perpendicular_vector(d);
+                    uint32_t const col = world.item_get_needle(it) ? col_needle : col_rock;
+                    p.line(tail, tip - d * 6.f, 2.f, col);
+                    p.tri(tip, tip - d * 8.f + n * 2.f, tip - d * 8.f - n * 2.f, col);
+                    return;
+                }
                 vec2 const rot = rw::normalized(rw::lerp(world.item_get_last_rotation(it), world.item_get_rotation(it), alpha));
                 vec2 const side = rw::custom::perpendicular_vector(rot);
                 // an irregular pentagon, rotated with the rock
@@ -715,7 +727,10 @@ void main() {
             glUniform1f(u.night_time, r.night_time);
             glUniform1f(u.fog_factor, 0.5f);
             glUniform1f(u.rooftop_blend, 0.f);
-            glUniform1f(u.timer, float(SDL_GetTicks() % 100000) / 1000.f);
+            // the grime noise drifts with this clock: keep it slow, and wrap on
+            // whole sine periods so it never jumps
+            constexpr double grime_speed = 0.004; // radians per second
+            glUniform1f(u.timer, float(std::fmod(double(SDL_GetTicks()) / 1000.0 * grime_speed, 6.283185307179586)));
             float const zeros[max_lights * 4] = {};
             glUniform4fv(u.lighting_data, max_lights, zeros);
             glUniform2fv(u.lighting_pos, max_lights, zeros);

@@ -1,8 +1,10 @@
 #pragma once
 
-// Items: Rock (Weapon/PlayerCarryableItem) and the item half of the player
-// (Player.GrabUpdate, ThrowObject, PickupCandidate, carrying). Spears and
-// the other carryables are not ported yet.
+// Items: Rock and Spear (Weapon/PlayerCarryableItem) and the item half of
+// the player (Player.GrabUpdate, ThrowObject, PickupCandidate, carrying,
+// Spearmaster's needles). Spears stick in walls when thrown straight at them
+// (turning their tiles into beams) and bounce off otherwise; only Artificer
+// can pull them back out, like vanilla without Remix.
 
 #include <cstdint>
 
@@ -13,6 +15,11 @@
 namespace items {
     // Rock constructor + Weapon.PlaceInRoom
     dcon::item_id create_rock(sys::game_state& state, dcon::room_id room, rw::vec2 pos);
+    // Spear constructor + PlaceInRoom
+    dcon::item_id create_spear(sys::game_state& state, dcon::room_id room, rw::vec2 pos);
+    // the spear's ends (tail, tip) for drawing, interpolated between ticks
+    void spear_ends(sys::game_state const& state, dcon::item_id spear, float alpha, rw::vec2& tail, rw::vec2& tip);
+    inline constexpr float spear_length = 44.f;
     void destroy(sys::game_state& state, dcon::item_id item);
     // Room.Loaded on the first realisation: placed rocks from the room file
     // and RandomItemDensity rocks (no-op after the first call for a room)

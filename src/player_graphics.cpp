@@ -174,6 +174,78 @@ namespace player_graphics {
         bool consious(dcon::data_container const& w, dcon::player_id p) {
             return w.player_get_stun(p) <= 0 && !w.player_get_dead(p);
         }
+
+        // AxolotlGills constructor constants, per scale (scalesPositions[i * 2 + j])
+        struct gill_shape {
+            float length, width, backwards, y;
+        };
+        constexpr float gill_rigor = 0.5873646f;
+        gill_shape gill(int s) {
+            constexpr float rows[3][4] = { // y, x, length factor, backwards factor
+                {0.03570603f, 0.659981f, 0.9722961f, 0.3644831f},
+                {0.02899241f, 0.76459f, 0.6056554f, 0.9129724f},
+                {0.02639332f, 0.7482835f, 0.7223744f, 0.4567381f},
+            };
+            auto const& r = rows[s / 2];
+            return gill_shape{mathf::lerp(2.5f, 15.f, 1.310689f * r[2]), mathf::lerp(0.65f, 1.2f, 0.1542603f * 1.310689f),
+                0.1759363f * r[3], r[0]};
+        }
+
+        // AxolotlGills.Update: six scales on the sides of the head
+        void gills_update(player::graphics_state& g, vec2 c0, vec2 c1, room_view const& room) {
+            for (int i = 0; i < 6; ++i) {
+                auto& sc = g.gills[i];
+                auto const shape = gill(i);
+                vec2 pos = c0;
+                pos.x += i >= 3 ? 5.f : -5.f;
+                float const step = i % 3;
+                vec2 const a = custom::deg_to_vec(step * 30.f - 45.f + 90.f);
+                vec2 const fan = custom::deg_to_vec(step * 30.f - 45.f);
+                // vanilla lerps by the look direction's angle in degrees,
+                // so any look direction means "along the body"
+                float const look_deg = std::atan2(g.look_direction.x, g.look_direction.y) * 57.29578f;
+                vec2 dir = rw::lerp(fan, custom::dir_vec(c1, c0), std::fabs(look_deg));
+                if (shape.y < 0.2f)
+                    dir -= a * mathf::pow(mathf::inverse_lerp(0.2f, 0.f, shape.y), 2.f) * 2.f;
+                dir = rw::normalized(rw::lerp(dir, fan, shape.backwards));
+                vec2 const goal = pos + dir * shape.length;
+                if (!custom::dist_less(sc.pos, goal, shape.length / 2.f)) {
+                    vec2 const d = custom::dir_vec(sc.pos, goal);
+                    float const over = rw::distance(sc.pos, goal) - shape.length / 2.f;
+                    sc.pos += d * over;
+                    sc.vel += d * over;
+                }
+                sc.vel += rw::clamp_magnitude(goal - sc.pos, 10.f) / mathf::lerp(5.f, 1.5f, gill_rigor);
+                sc.vel *= mathf::lerp(1.f, 0.8f, gill_rigor);
+                connect_to_point(sc, pos, shape.length, true, 0.f, vec2{0.f, 0.f}, 0.f, 0.f);
+                // AxolotlScale.Update
+                sc.vel *= room.point_submerged(sc.pos) ? 0.5f : 0.9f;
+                sc.last_pos = sc.pos;
+                sc.pos += sc.vel;
+            }
+        }
+
+        struct spine_data {
+            vec2 pos, dir, perp;
+            float rad;
+        };
+        // PlayerGraphics.SpinePosition: a point along the tail, s in [0, 1]
+        spine_data spine_position(player::graphics_state const& g, float s, float alpha) {
+            constexpr int n = 4;
+            int i0 = int(std::floor(s * float(n) - 1.f));
+            int i1 = std::min(int(std::floor(s * float(n))), n - 1);
+            i0 = std::max(i0, 0);
+            auto const at = [&](int i) { return rw::lerp(g.tail[i].last_pos, g.tail[i].pos, alpha); };
+            vec2 const a0 = at(i0);
+            vec2 const a2 = at(std::min(i1 + 1, n - 1));
+            vec2 const a1 = at(i1);
+            float const t = mathf::inverse_lerp(float(i0 + 1), float(i1 + 1), s * float(n));
+            vec2 dir = rw::normalized(rw::lerp(a1 - a0, a2 - a1, t));
+            if (dir == vec2{0.f, 0.f})
+                dir = rw::normalized(g.tail[n - 1].pos - g.tail[n - 2].pos);
+            float const r = mathf::lerp(g.tail[i0].rad * g.tail[i0].stretched, g.tail[i1].rad * g.tail[i1].stretched, t);
+            return spine_data{rw::lerp(a0, a1, t), dir, custom::perpendicular_vector(dir), r};
+        }
     }
 
     void reset(sys::game_state& state, dcon::player_id p) {
@@ -194,6 +266,8 @@ namespace player_graphics {
         place(g.legs, c1, legs_rad);
         for (int i = 0; i < 4; ++i)
             place(g.tail[i], c1 - vec2{0.f, float(i + 1) * 4.f}, tail_rad[i]);
+        for (auto& gl : g.gills)
+            place(gl, c0, 1.f);
         g.initialized = 1;
     }
 
@@ -305,6 +379,9 @@ namespace player_graphics {
         }
         g.legs_direction = rw::normalized(g.legs_direction);
 
+        if (w.player_get_stats(p).name == player::slugcat_name::rivulet)
+            gills_update(g, c0, c1, room);
+
         // blinking
         g.last_look_direction = g.look_direction;
         --g.blink;
@@ -334,9 +411,21 @@ namespace player_graphics {
             out.push_back(c);
         };
 
+        auto const name = w.player_get_stats(p).name;
+        // Gourmand is wide, Spearmaster thin (body, hips and head scaleX)
+        float body_width = 1.f, hips_width = 1.f, head_width = 1.f;
+        if (name == player::slugcat_name::gourmand) {
+            body_width = 1.4f;
+            hips_width = 1.6f;
+        } else if (name == player::slugcat_name::spear) {
+            body_width = 0.76f;
+            hips_width = 0.76f;
+            head_width = 0.85f;
+        }
+
         // 0 body, 1 hips
-        push("BodyA", v, aim(v2, v), vec2{1.f, 1.f}, vec2{0.5f, 0.7894737f}, body_color);
-        push("HipsA", (v2 * 2.f + v) / 3.f, aim(v, lerp_part(g.tail[0])), vec2{1.f, 1.f}, vec2{0.5f, 0.5f}, body_color);
+        push("BodyA", v, aim(v2, v), vec2{body_width, 1.f}, vec2{0.5f, 0.7894737f}, body_color);
+        push("HipsA", (v2 * 2.f + v) / 3.f, aim(v, lerp_part(g.tail[0])), vec2{hips_width, 1.f}, vec2{0.5f, 0.5f}, body_color);
 
         // 2 tail TriangleMesh (15 vertices, 13 triangles)
         {
@@ -413,7 +502,7 @@ namespace player_graphics {
         head_index = custom::int_clamp(head_index, 0, 17);
 
         // 3 head
-        push(head_names[size_t(head_index)], v3, head_rot, vec2{head_rot < 0.f ? -1.f : 1.f, 1.f}, vec2{0.5f, 0.5f}, body_color);
+        push(head_names[size_t(head_index)], v3, head_rot, vec2{(head_rot < 0.f ? -1.f : 1.f) * head_width, 1.f}, vec2{0.5f, 0.5f}, body_color);
 
         // 4 legs
         {
@@ -462,6 +551,85 @@ namespace player_graphics {
         }
 
         // 9 face
-        push(face_element, v3 + look + vec2{0.f, -2.f}, face_rot, vec2{face_scale_x, 1.f}, vec2{0.5f, 0.5f}, eye_color);
+        vec2 const face_pos = v3 + look + vec2{0.f, -2.f};
+        push(face_element, face_pos, face_rot, vec2{face_scale_x, 1.f}, vec2{0.5f, 0.5f}, eye_color);
+
+        // 12 Artificer: the mushroom (scar) by one eye, always on the same side
+        if (name == player::slugcat_name::artificer) {
+            vec2 at = face_pos + vec2{3.f, 3.f};
+            if (anim == player::animation_index::flip)
+                at = face_pos + custom::deg_to_vec(face_rot) * 4.f;
+            push("MushroomA", at, face_rot, vec2{1.f, 1.f}, vec2{0.5f, 0.5f}, rw::vec3{0.27059f, 0.15686f, 0.23529f});
+        }
+
+        // Rivulet: AxolotlGills, the base scales then their coloured tips
+        if (name == player::slugcat_name::rivulet) {
+            rw::vec3 const effect{0.87451f, 0.17647f, 0.91765f};
+            for (int layer = 0; layer < 2; ++layer) {
+                for (int i = 5; i >= 0; --i) {
+                    auto const shape = gill(i);
+                    bool const left = i < 3;
+                    vec2 const at = face_pos + vec2{left ? -5.f : 5.f, 0.f};
+                    // every scale trails to the left; vanilla turns the right
+                    // side's sprites around to mirror them
+                    float const rot = aim(at, lerp_part(g.gills[i])) + (left ? 0.f : 180.f);
+                    // the packed scale sprite keeps only the drawn part of
+                    // LizardScaleA3 (18px above its anchor)
+                    float sx = shape.width * (left ? -1.f : 1.f);
+                    push(layer == 0 ? "LizardScaleA3" : "LizardScaleB3", at, rot, vec2{sx, shape.length / 18.f}, vec2{0.5f, 0.5f},
+                        layer == 0 ? body_color : effect);
+                }
+            }
+        }
+
+        // Spearmaster: TailSpeckles, 5 rows of 3 dots down the tail, one of
+        // them growing a needle while it pulls a spear out
+        if (name == player::slugcat_name::spear) {
+            constexpr int rows = 5, lines = 3;
+            float const prog = w.player_get_spear_prog(p);
+            int const spear_row = w.player_get_spear_row(p);
+            int const spear_line = w.player_get_spear_line(p);
+            for (int i = 0; i < rows; ++i) {
+                float const f = mathf::inverse_lerp(0.f, float(rows - 1), float(i));
+                auto const sd = spine_position(g, mathf::lerp(0.4f, 0.95f, mathf::pow(f, 0.8f)), alpha);
+                float const k = 0.8f * mathf::pow(f, 0.5f);
+                float const k2 = (0.8f - k) * prog;
+                rw::vec3 const pale = rw::vec3{1.f, 1.f, 1.f} + (body_color - rw::vec3{1.f, 1.f, 1.f}) * 0.3f;
+                rw::vec3 const col = body_color + (pale - body_color) * mathf::clamp01(0.2f + k + k2);
+                for (int j = 0; j < lines; ++j) {
+                    float t = (float(j) + (i % 2 != 0 ? 0.f : 0.5f)) / float(lines - 1);
+                    t = -1.f + 2.f * t;
+                    if (t < -1.f)
+                        t += 2.f;
+                    else if (t > 1.f)
+                        t -= 2.f;
+                    t = mathf::sign(t) * mathf::pow(std::fabs(t), 0.6f);
+                    vec2 const at = sd.pos + sd.perp * (sd.rad + 0.5f) * t;
+                    vec2 scale{custom::lerp_map(std::fabs(t), 0.4f, 1.f, 1.f, 0.f), 1.f};
+                    if (prog > 0.f) {
+                        if (i == spear_row && j == spear_line)
+                            scale *= 1.f + prog * 2.f;
+                        else if ((std::abs(i - spear_row) == 1 && j == spear_line) || (i == spear_row && std::abs(j - spear_line) == 1))
+                            scale *= 1.f + prog;
+                    }
+                    push("tinyStar", at, aim(vec2{0.f, 0.f}, sd.dir), scale, vec2{0.5f, 0.5f}, col);
+                    if (i == spear_row && j == spear_line && prog > 0.f) {
+                        // the BioSpear growing out of it (drawn as a shaft)
+                        vec2 side = custom::perpendicular_vector(sd.dir);
+                        if (side.y > 0.35f)
+                            side = -side;
+                        draw_cmd c;
+                        c.is_triangle = true;
+                        vec2 const tip = at + side * (prog * 0.5f * 44.f);
+                        vec2 const n = custom::perpendicular_vector(side) * 1.f;
+                        c.tri[0] = at + n;
+                        c.tri[1] = at - n;
+                        c.tri[2] = tip;
+                        c.color = rw::vec3{1.f, 1.f, 1.f};
+                        out.push_back(c);
+                    }
+                }
+            }
+        }
     }
 }

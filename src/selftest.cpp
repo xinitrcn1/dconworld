@@ -79,8 +79,9 @@ namespace selftest {
             dcon::player_id p;
             uint32_t ticks = 0;
 
-            sim(sys::game_state& gs, dcon::room_id rid, vec2 feet) : gs{gs}, room{world::get_room_view(gs, rid)} {
-                p = player::create(gs, rid, feet);
+            sim(sys::game_state& gs, dcon::room_id rid, vec2 feet, player::slugcat_name name = player::slugcat_name::white)
+                : gs{gs}, room{world::get_room_view(gs, rid)} {
+                p = player::create(gs, rid, feet, name);
                 gs.world.player_set_flip_direction(p, 1);
             }
             ~sim() { player::destroy(gs, p); }
@@ -102,11 +103,11 @@ namespace selftest {
                     step(x, y, jmp);
             }
             // run until the predicate holds, at most n ticks
-            bool until(uint32_t n, std::function<bool()> const& pred, int32_t x = 0, int32_t y = 0, bool jmp = false) {
+            bool until(uint32_t n, std::function<bool()> const& pred, int32_t x = 0, int32_t y = 0, bool jmp = false, bool pckp = false) {
                 for (uint32_t i = 0; i < n; ++i) {
                     if (pred())
                         return true;
-                    step(x, y, jmp);
+                    step(x, y, jmp, false, pckp);
                 }
                 return pred();
             }
@@ -335,6 +336,82 @@ namespace selftest {
             items::destroy(gs, rock);
         }
         {
+            // a spear thrown at a wall from up close sticks and becomes a beam
+            auto& w = gs.world;
+            auto const spear_room = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, spear_room, feet_at(33, 1));
+            auto const spear = items::create_spear(gs, spear_room, feet_at(34, 1));
+            s.run(30);
+            s.step(0, 0, false, false, true);
+            s.run(5);
+            bool const held = items::grabber(gs, spear) == s.p;
+            s.step(0, 1);
+            s.run(20);
+            s.step(1, 0, false, true);
+            bool const stuck = s.until(30, [&] { return w.item_get_mode(spear) == world::weapon_mode::stuck_in_wall; });
+            s.run(2);
+            auto const view = world::get_room_view(gs, spear_room);
+            vec2 const sp = w.body_chunk_get_pos(items::chunk(gs, spear));
+            bool const beam = view.get_tile(sp).horizontal_beam();
+            // Survivor can't pull it out
+            s.run(50);
+            s.until(200, [&] { return std::fabs(s.pos(0).x - sp.x) < 20.f; }, 1);
+            s.run(45);
+            s.step(0, 0, false, false, true);
+            s.run(5);
+            bool const stays = w.item_get_mode(spear) == world::weapon_mode::stuck_in_wall && !items::grabber(gs, spear);
+            char d[128];
+            std::snprintf(d, sizeof(d), " held=%d stuck=%d beam=%d stays=%d", int(held), int(stuck), int(beam), int(stays));
+            r.check("spear sticks in wall", held && stuck && beam && stays, s.describe() + d);
+        }
+        {
+            // thrown from across the room it rarely sticks: count bounces
+            auto& w = gs.world;
+            auto const spear_room = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            int bounced = 0, stuck = 0;
+            for (int k = 0; k < 12; ++k) {
+                sim s(gs, spear_room, feet_at(12, 1));
+                auto const spear = items::create_spear(gs, spear_room, feet_at(13, 1));
+                s.run(20);
+                s.step(0, 0, false, false, true);
+                s.run(5);
+                s.step(0, 1);
+                s.run(20);
+                s.step(1, 0, false, true);
+                s.until(60, [&] { return w.item_get_mode(spear) != world::weapon_mode::thrown && w.item_get_mode(spear) != world::weapon_mode::carried; });
+                if (w.item_get_mode(spear) == world::weapon_mode::stuck_in_wall)
+                    ++stuck;
+                else
+                    ++bounced;
+                // destroying a stuck spear gives its tiles their beams back
+                items::destroy(gs, spear);
+            }
+            char d[64];
+            std::snprintf(d, sizeof(d), "stuck %d, bounced %d of 12", stuck, bounced);
+            r.check("far spears mostly bounce", bounced > stuck && stuck > 0, d);
+        }
+        {
+            // Spearmaster holding pick up pulls a needle out of its tail
+            sim s(gs, flat, feet_at(10, 1), player::slugcat_name::spear);
+            s.run(30);
+            dcon::item_id needle;
+            bool const made = s.until(200, [&] {
+                gs.world.player_for_each_grasp_as_grabber(s.p, [&](dcon::grasp_id g) { needle = gs.world.grasp_get_grabbed(g); });
+                return bool(needle);
+            }, 0, 0, false, true);
+            bool const is_needle = made && gs.world.item_get_type(needle) == world::item_type::spear && gs.world.item_get_needle(needle);
+            r.check("spearmaster makes a spear", is_needle, s.describe());
+            s.run(5);
+            s.step(1, 0);
+            s.step(0, 0, false, true);
+            bool const flying = needle && gs.world.item_get_mode(needle) == world::weapon_mode::thrown;
+            char d[64];
+            std::snprintf(d, sizeof(d), " mode=%d grabbed=%d", needle ? int(gs.world.item_get_mode(needle)) : -1, needle ? int(bool(items::grabber(gs, needle))) : -1);
+            r.check("spearmaster throws it", flying, s.describe() + d);
+            if (needle)
+                items::destroy(gs, needle);
+        }
+        {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';
@@ -373,6 +450,7 @@ namespace selftest {
         // one player body reused across every room
         auto const first = dcon::room_id{0};
         auto const p = player::create(gs, first, vec2{0.f, 0.f});
+        uint32_t music_requests = 0;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -391,6 +469,9 @@ namespace selftest {
                 }
                 auto const in = player::make_input(float(ix), float(iy), jmp, rng.value() < 0.05f, rng.value() < 0.05f);
                 simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                music_requests += uint32_t(gs.music.size());
+                gs.music.clear();
+                gs.sounds.clear();
                 if (simulation::player_room(gs, p) != rid)
                     break; // went through a pipe
                 bool finite = true;
@@ -407,7 +488,8 @@ namespace selftest {
         });
         uint32_t rocks = 0;
         w.for_each_item([&](dcon::item_id) { ++rocks; });
-        std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks spawned\n", w.room_size(), ticks_per_room, bad, rocks);
+        std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
+            w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
 
         // every connected room exit pipe: sit in the entrance, push into it and
         // expect to come out in the connected room

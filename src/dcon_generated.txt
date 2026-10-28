@@ -17,6 +17,7 @@
 //     ~3000 once all 760 rooms were visited -> 8192
 //   physical objects / body chunks: players + items -> 8192 / 16384
 //   region gates ~20          -> 64
+//   music triggers ~80 (+MSC/Watcher) -> 512
 //   shortcut path tiles pooled (~6266 paths)
 //
 // Tags: `scenario` = static world data loaded from the game files,
@@ -226,6 +227,40 @@ relationship{
 	link{ object{shortcut} name{shortcut} type{unique} }
 	link{ object{room_exit} name{exit} type{many} index_storage{array} }
 	primary_key{shortcut}
+}
+
+// Music triggers of the room settings ("Triggers:" line): a SpotTrigger or
+// RegionBump with a MusicEvent or StopMusicEvent
+object{
+	name{music_trigger}
+	storage_type{contiguous}
+	size{512}
+	tag{scenario}
+	// spot triggers fire within `rad` of `pos`; region bumps on entering the room
+	property{ name{spot} type{bitfield} }
+	property{ name{pos} type{rw::vec2} }
+	property{ name{rad} type{float} }
+	property{ name{fire_chance} type{float} }
+	property{ name{delay} type{int16_t} }
+	property{ name{multi_use} type{bitfield} }
+	// StopMusicEvent instead of MusicEvent
+	property{ name{stop} type{bitfield} }
+	property{ name{song} type{text_key} }
+	property{ name{vol} type{float} }
+	property{ name{prio} type{float} }
+	property{ name{fade_in} type{float} }
+	property{ name{fade_out} type{float} }
+	property{ name{rooms} type{int16_t} }
+	// ActiveTriggerChecker state
+	property{ name{fired} type{bitfield} }
+	property{ name{counter} type{int16_t} }
+}
+relationship{
+	name{music_trigger_location}
+	tag{scenario}
+	link{ object{music_trigger} name{trigger} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{trigger}
 }
 
 // AbstractRoomNode as serialised on the connectivity line of the room file
@@ -447,6 +482,14 @@ object{
 	property{ name{dont_grab_stuff} type{int32_t} }
 	// Player.touchedNoInputCounter (gates wait for players standing still)
 	property{ name{touched_no_input_counter} type{int32_t} }
+	// Spearmaster pulling a needle out of its tail (TailSpeckles.spearProg, the
+	// speckle it grows from, smSpearSoundReady)
+	property{ name{spear_prog} type{float} }
+	property{ name{spear_row} type{uint8_t} }
+	property{ name{spear_line} type{uint8_t} }
+	property{ name{spear_sound_ready} type{uint8_t} }
+	// room the music triggers were last armed for (re-armed on entering a room)
+	property{ name{trigger_room} type{room_id} }
 }
 // the physical body a player controls
 relationship{
@@ -491,6 +534,23 @@ object{
 	property{ name{throw_mode_frames} type{int32_t} }
 	// Weapon.thrownBy (invalid when not thrown by a player)
 	property{ name{thrown_by} type{player_id} }
+	property{ name{vibrate} type{int32_t} }
+	// Spear: stuckInWall (has_stuck = HasValue), AbstractSpear.stuckInWallCycles
+	// (negative: stuck vertically), the beams it lends to its tiles
+	property{ name{has_stuck} type{uint8_t} }
+	property{ name{stuck_pos} type{rw::vec2} }
+	property{ name{stuck_cycles} type{int8_t} }
+	property{ name{add_poles} type{uint8_t} }
+	property{ name{has_beam_state} type{uint8_t} }
+	// Spear.wasHorizontalBeam, bit per tile (-1, 0, +1)
+	property{ name{was_beam} type{uint8_t} }
+	property{ name{spinning} type{uint8_t} }
+	property{ name{still_counter} type{int32_t} }
+	property{ name{pivot_at_tip} type{uint8_t} }
+	property{ name{last_pivot_at_tip} type{uint8_t} }
+	property{ name{always_stick} type{uint8_t} }
+	// Spearmaster's needles
+	property{ name{needle} type{uint8_t} }
 }
 relationship{
 	name{item_body}

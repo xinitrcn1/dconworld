@@ -133,6 +133,9 @@ namespace shortcuts {
         float& progress = w.player_get_vessel_progress(p);
         w.player_set_vessel_last_progress(p, progress);
         progress += vessel_speed;
+        // ShortcutHandler ticks once per tile
+        if (std::floor(progress) != std::floor(progress - vessel_speed))
+            state.play_sound(sound::sound_id::player_tick_along_in_shortcut, dcon::room_id{}, vec2{0.f, 0.f});
         if (progress < len - 1.f)
             return;
         progress = len - 1.f;

@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
@@ -116,6 +119,21 @@ namespace world {
             rw::ivec2 tile;
             item_type type = item_type::rock;
         };
+        struct parsed_trigger {
+            bool spot = true;
+            rw::vec2 pos{0.f, 0.f};
+            float rad = 0.f;
+            float fire_chance = 1.f;
+            int16_t delay = 0;
+            bool multi_use = false;
+            bool stop = false;
+            std::string song;
+            float vol = 0.3f;
+            float prio = 0.5f;
+            float fade_in = 0.f;
+            float fade_out = 0.f;
+            int16_t rooms = -1;
+        };
         struct parsed_shortcut {
             rw::ivec2 start;
             rw::ivec2 dest;
@@ -153,6 +171,7 @@ namespace world {
 
             bool has_settings = false;
             parsers::room_template settings;
+            std::vector<parsed_trigger> triggers;
 
             room_view view() const noexcept {
                 room_view v;
@@ -584,6 +603,24 @@ namespace world {
                 dc.room_camera_set_position(cid, c);
                 dc.try_create_camera_location(cid, rid);
             }
+            for (auto const& t : r.triggers) {
+                auto const tid = dc.create_music_trigger();
+                dc.music_trigger_set_spot(tid, t.spot);
+                dc.music_trigger_set_pos(tid, t.pos);
+                dc.music_trigger_set_rad(tid, t.rad);
+                dc.music_trigger_set_fire_chance(tid, t.fire_chance);
+                dc.music_trigger_set_delay(tid, t.delay);
+                dc.music_trigger_set_multi_use(tid, t.multi_use);
+                dc.music_trigger_set_stop(tid, t.stop);
+                dc.music_trigger_set_song(tid, s.add_text(t.song));
+                dc.music_trigger_set_vol(tid, t.vol);
+                dc.music_trigger_set_prio(tid, t.prio);
+                dc.music_trigger_set_fade_in(tid, t.fade_in);
+                dc.music_trigger_set_fade_out(tid, t.fade_out);
+                dc.music_trigger_set_rooms(tid, t.rooms);
+                dc.music_trigger_set_counter(tid, -1);
+                dc.try_create_music_trigger_location(tid, rid);
+            }
             for (auto const& it : r.items) {
                 auto const iid = dc.create_placed_item();
                 dc.placed_item_set_tile(iid, it.tile);
@@ -774,6 +811,82 @@ namespace world {
             }
         }
 
+        // The "Triggers:" line of a room settings file (EventTrigger.FromString):
+        // ", " separated triggers of "<type><tA>key<tB>value<tA>..." where the
+        // event value is "<EventType><eA>key<eB>value<eA>...". Only music events
+        // are kept.
+        void parse_triggers(std::string_view text, std::vector<parsed_trigger>& out) {
+            constexpr std::string_view key = "Triggers: ";
+            size_t at = text.find(key);
+            while (at != std::string_view::npos && at != 0 && text[at - 1] != '\n')
+                at = text.find(key, at + 1);
+            if (at == std::string_view::npos)
+                return;
+            std::string_view line = text.substr(at + key.size());
+            line = line.substr(0, line.find('\n'));
+            auto const split = [](std::string_view sv, std::string_view sep) {
+                std::vector<std::string_view> r;
+                for (size_t p = 0;;) {
+                    size_t const q = sv.find(sep, p);
+                    r.push_back(sv.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p));
+                    if (q == std::string_view::npos)
+                        return r;
+                    p = q + sep.size();
+                }
+            };
+            auto const num = [](std::string_view sv) { return std::strtof(std::string{sv}.c_str(), nullptr); };
+            for (auto entry : split(line, ",")) {
+                while (!entry.empty() && (entry.front() == ' ' || entry.front() == '\r'))
+                    entry.remove_prefix(1);
+                while (!entry.empty() && (entry.back() == ' ' || entry.back() == '\r'))
+                    entry.remove_suffix(1);
+                auto const parts = split(entry, "<tA>");
+                if (parts.empty() || (parts[0] != "Spot" && parts[0] != "RegionBump" && parts[0] != "PreRegionBump"))
+                    continue;
+                parsed_trigger t;
+                t.spot = parts[0] == "Spot";
+                bool music = false;
+                rw::vec2 handle{0.f, 0.f};
+                for (size_t i = 1; i < parts.size(); ++i) {
+                    auto const kv = split(parts[i], "<tB>");
+                    if (kv.size() < 2)
+                        continue;
+                    if (kv[0] == "event") {
+                        auto const ev = split(kv[1], "<eA>");
+                        if (ev[0] != "MusicEvent" && ev[0] != "StopMusicEvent")
+                            break;
+                        music = true;
+                        t.stop = ev[0] == "StopMusicEvent";
+                        for (size_t j = 1; j < ev.size(); ++j) {
+                            auto const ekv = split(ev[j], "<eB>");
+                            if (ekv.size() < 2)
+                                continue;
+                            if (ekv[0] == "songName") t.song = std::string{ekv[1]};
+                            else if (ekv[0] == "vol") t.vol = num(ekv[1]);
+                            else if (ekv[0] == "prio") t.prio = num(ekv[1]);
+                            else if (ekv[0] == "fadeIn") t.fade_in = num(ekv[1]);
+                            else if (ekv[0] == "fadeOut") t.fade_out = num(ekv[1]);
+                            else if (ekv[0] == "rooms") t.rooms = int16_t(num(ekv[1]));
+                        }
+                    } else if (kv[0] == "multiUse") {
+                        t.multi_use = num(kv[1]) != 0.f;
+                    } else if (kv[0] == "delay") {
+                        t.delay = int16_t(num(kv[1]));
+                    } else if (kv[0] == "fireChance") {
+                        t.fire_chance = num(kv[1]);
+                    } else if (kv[0] == "pos" && kv.size() >= 3) {
+                        t.pos = rw::vec2{num(kv[1]), num(kv[2])};
+                    } else if (kv[0] == "handlePos" && kv.size() >= 3) {
+                        handle = rw::vec2{num(kv[1]), num(kv[2])};
+                    }
+                }
+                // SpotTrigger.rad is the length of the radius handle
+                t.rad = rw::magnitude(handle);
+                if (music)
+                    out.push_back(std::move(t));
+            }
+        }
+
         // Settings of one room: template (explicit or region default) then the room file
         void resolve_settings(sys::game_state const& s, parsed_room& r, layered_fs::directory const& dir, std::string const& region_name,
             template_map const& templates, parsers::room_template const& region_default) {
@@ -786,6 +899,7 @@ namespace world {
             r.has_settings = true;
             r.err.filename = f.path;
             auto const t = parse_template(s, of->to_string_view(), r.err);
+            parse_triggers(of->to_string_view(), r.triggers);
             auto const lname = text::to_lowercase_native(t.template_);
             if (lname == "none") {
                 // explicitly no template

@@ -10,6 +10,9 @@ JSON:
 
     <name> <x> <y> <w> <h>        (pixels, origin at the atlas' top left)
 
+The extras sheet adds the class cosmetics (MushroomA, LizardScaleA3/B3,
+tinyStar); the gill scales are trimmed to the part that is drawn.
+
 A 4x4 opaque white block named "pixel" is added for untextured geometry
 (the tail mesh) so the whole slugcat draws with one texture.
 
@@ -21,7 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
-SHEETS = ["body", "hips", "head", "face", "legs", "arm"]
+SHEETS = ["body", "hips", "head", "face", "legs", "arm", "extras"]
 ATLAS_WIDTH = 1024
 PAD = 2
 
@@ -45,7 +48,13 @@ def main():
                 for x in range(crop.width):
                     if is_marker(*px[x, y]):
                         px[x, y] = (0, 0, 0, 0)
-            frames.append((key.removesuffix(".png"), crop))
+            name = key.removesuffix(".png")
+            if name.startswith("LizardScale"):
+                # 12x180 element whose art is the 18px above its anchor
+                # (anchorY 0.1, 18px from the bottom): keep the bottom 36 rows
+                # so the art sits right above the middle (anchor 0.5)
+                crop = crop.crop((0, crop.height - 36, crop.width, crop.height))
+            frames.append((name, crop))
     frames.append(("pixel", Image.new("RGBA", (4, 4), (255, 255, 255, 255))))
 
     # shelf packing, tallest first

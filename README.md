@@ -28,6 +28,7 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
 ./build/rwcpp --selftest         # scripted movement/item/gate tests (no game data needed)
 ./build/rwcpp --fuzz 600         # random input soak test in every room, then every room exit pipe
+./build/rwcpp --audio-check      # load the sound effects, decode whole songs, report
 ```
 
 The game data is read straight from the installed game. Roots are layered:
@@ -41,7 +42,10 @@ the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
 step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
-Rivulet, Spearmaster, Saint, Sofanthiel, Watcher. A gamepad (left stick, d-pad,
+Rivulet, Spearmaster, Saint, Sofanthiel, Watcher, M plays a song of the
+region (again for another one; the game itself has long silent stretches),
+Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
+pick up with a free hand. A gamepad (left stick, d-pad,
 south button jump, west throw, east pick up) also drives player one when
 playing alone.
 
@@ -59,7 +63,7 @@ chunks of an object, body of a player...) is modelled with relationships.
 | --- | --- |
 | `src/gamestate.hpp` | `sys::game_state`: the `dcon::data_container world` plus non-SoA globals (constants, strings, lookup maps, filesystem) |
 | `src/dcon_generated.txt` | DataContainer definitions for every object (regions, rooms, tiles, cameras, exits, shortcuts, nodes, physical objects, body chunks, connections, players) with their size bounds |
-| `deps/` | FetchContent scripts for DataContainer, TBB, glm, GLEW and stb |
+| `deps/` | FetchContent scripts for DataContainer, TBB, glm, GLEW, stb (images, stb_vorbis), dr_libs (dr_mp3, for mod songs) and vgmstream's FMOD Vorbis setup header table (one pinned, hash checked file) |
 | `assets/` | our own assets, copied next to the binary: anthiel's VGA font, the room shaders (`shaders/`, from anthiel) and the slugcat sprite atlas (`slugcat.png` + `slugcat.txt`) |
 | `tools/pack_dms.py` | packs DressMySlugcat template atlases into `assets/slugcat.*` (strips the guide markers, transcribes the frames to plain text) |
 | `src/player_graphics.*` | simplified `PlayerGraphics` port: head/legs/tail body parts and vanilla sprite selection |
@@ -72,6 +76,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/shortcuts.*` | shortcut travel: suck-in, the vessel moving along the pipe path, spit out, room to room transfers through `world_<region>.txt` connections |
 | `src/items.*` | rocks (`Rock`/`Weapon`): vanilla spawning on a room's first visit, flight/bounces/wall hits, `Player.GrabUpdate`/`ThrowObject` |
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
+| `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
+| `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of players, vessels, items and gates of the occupied rooms |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/selftest.*` | scripted movement scenarios and the fuzzer |
@@ -114,6 +120,22 @@ climbable vines, Remix (MMF) options, the other Downpour/Watcher slugcat
 abilities, sand terrain (`TerrainManager`), and the `modify/` mod merge
 system (needed for Downpour/Watcher regions).
 
+### Audio
+
+The game's loose sound and music files are empty placeholders; the real ones
+live in `StreamingAssets/AssetBundles` (`loadedsoundeffects`, `music_songs`).
+Those are read directly: UnityFS with LZ4 blocks, the AudioClips of the
+serialized file, and their FMOD FSB5 data, PCM16 or Vorbis whose stripped
+setup header is restored from vgmstream's table and rewrapped as Ogg for
+stb_vorbis. Sound effects follow `soundeffects/sounds.txt` (volume and pitch
+ranges, PLAYALL, `_1`.. `_n` variants), panned and attenuated around the
+camera; the slugcat's jumps, rolls, landings and fall impacts, throws, pick
+ups, weapons hitting walls, shortcut ticks and gate doors play them (30 of
+31 ported sounds; the death impact uses a UI sample outside the bundles).
+Music follows the rooms' `Triggers:` (MusicEvent/StopMusicEvent spot and
+region triggers with fire chance, delay, priority, fade in/out and room
+count). Threat music and the procedural region ambience aren't ported.
+
 ### Shortcuts, items, gates
 
 Pushing into a pipe entrance pulls the slugcat in like
@@ -125,9 +147,13 @@ other end; room exits follow `world_<region>.txt` connections (merged across
 region files, gates included) to the destination's matching exit. Every one
 of the 1414 connected room exits is exercised by `--fuzz`.
 
-Rocks spawn on a room's first visit like `Room.Loaded`: placed rocks at 75%,
-then `RandomItemDensity` random rocks on tiles with three solid tiles below
-(not in shelters or gates; spear rolls are made but spears aren't ported).
+Rocks and spears spawn on a room's first visit like `Room.Loaded`: placed
+rocks at 75% and spears at 60%, then `RandomItemDensity` random items on
+tiles with three solid tiles below (not in shelters or gates). Spears stick
+in a wall they hit straight on (from up close, or a third of the time from
+further away) and lend their tiles a beam to climb; otherwise they bounce
+off. Like vanilla without Remix, only Artificer can pull them back out.
+Spearmaster grows needles out of its tail speckles.
 Picking up, dropping (down + pick up), throwing (with recoil, flip
 down-throws and the belly slide boosts), flight, floor bounces, slope
 deflection and wall hits follow `Weapon`/`Rock`/`Player`. Carried rocks sit
@@ -149,7 +175,10 @@ grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 anchors, plus the 4 segment tail mesh. The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,
 rocks, gate doors), then only the foreground depths over them, so pipes and
-foreground plants occlude the slugcat. Not done yet: arms/hands, skyboxes and
+foreground plants occlude the slugcat. Slugcat specifics: Gourmand's wide
+torso, Spearmaster's thin body and tail speckles, Artificer's mushroom
+scar, Rivulet's axolotl gills (sprites from the DressMySlugcat extras sheet).
+The grime noise drifts very slowly. Not done yet: arms/hands, skyboxes and
 other room effects, vanilla water, `RegionGateGraphics`.
 
 ## License

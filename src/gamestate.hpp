@@ -18,6 +18,7 @@
 #include "config.h"
 #include "dcon_generated.hpp"
 #include "layered_fs.hpp"
+#include "sound_types.hpp"
 
 namespace sys {
     struct game_state {
@@ -34,6 +35,16 @@ namespace sys {
         float screen_height = 768.f;
         // UnityEngine.Random for world level rolls (item spawns...)
         rw::rng random{0x2545F491u};
+        // sound/music requests of the last ticks, consumed by audio::update
+        // (or dropped when nothing plays them)
+        std::vector<sound::sound_request> sounds;
+        std::vector<sound::music_request> music;
+
+        // Room.PlaySound
+        void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {
+            if (sounds.size() < 256)
+                sounds.push_back(sound::sound_request{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch});
+        }
 
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;

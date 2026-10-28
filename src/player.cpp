@@ -249,7 +249,11 @@ namespace player {
     X(want_to_pick_up) \
     X(want_to_throw) \
     X(dont_grab_stuff) \
-    X(touched_no_input_counter)
+    X(touched_no_input_counter) \
+    X(spear_prog) \
+    X(spear_row) \
+    X(spear_line) \
+    X(spear_sound_ready)
 
         // Reference accessors into the data container for one player, so the
         // port reads like the C# ("this.canJump" -> p.can_jump())
@@ -297,6 +301,8 @@ namespace player {
             float gravity() const { return physics::gravity(state, o, room); }
             float eff_gravity() const { return room.gravity; }
             float& surface_friction() { return state.world.physical_object_get_surface_friction(o); }
+            // room.PlaySound(id, mainBodyChunk, ...)
+            void sound(sound::sound_id id, float vol = 1.f, float pitch = 1.f) { state.play_sound(id, room.id, pos(0), vol, pitch); }
             float& water_friction() { return state.world.physical_object_get_water_friction(o); }
             float& water_retardation_immunity() { return state.world.physical_object_get_water_retardation_immunity(o); }
             float& connection_distance() { return state.world.chunk_connection_get_distance(k); }
@@ -350,16 +356,32 @@ namespace player {
                 p.animation() = animation_index::roll;
                 p.roll_direction() = x.in(0).down_diagonal;
                 p.roll_counter() = 0;
+                x.sound(sound::sound_id::slugcat_roll_init);
                 x.vel(0).x = mathf::lerp(x.vel(0).x, 9.f * float(x.in(0).x), 0.7f);
                 x.vel(1).x = mathf::lerp(x.vel(1).x, 9.f * float(x.in(0).x), 0.7f);
                 p.standing() = false;
             } else if (first_contact) {
-                float const death_speed = 60.f;
-                float const stun_speed = 35.f;
+                bool const gourmand = p.stats().name == slugcat_name::gourmand;
+                float const death_speed = gourmand ? 80.f : 60.f;
+                float const stun_speed = gourmand ? 40.f : 35.f;
+                float const light_speed = gourmand ? 1.f : 3.f;
+                float const medium_speed = gourmand ? 8.f : 16.f;
+                using sound::sound_id;
                 if (speed > death_speed && p.immune_to_fall_damage() <= 0 && direction.y < 0) {
+                    x.sound(sound_id::slugcat_terrain_impact_death);
                     die_impl(p);
                 } else if (speed > stun_speed && p.immune_to_fall_damage() <= 0) {
+                    x.sound(sound_id::slugcat_terrain_impact_hard);
                     stun_impl(p, int32_t(custom::lerp_map(speed, stun_speed, death_speed, 40.f, 140.f, 2.5f)));
+                } else if (direction.y < 0 && x.consious()) {
+                    x.sound(p.standing() && chunk == 1 ? sound_id::slugcat_floor_impact_standard : sound_id::slugcat_floor_impact_stealthy,
+                        mathf::inverse_lerp(8.f, 11.f, speed));
+                } else if (speed < light_speed) {
+                    x.sound(sound_id::slugcat_terrain_impact_light, mathf::inverse_lerp(0.f, 2.f, speed), 3.f);
+                } else if (speed < medium_speed) {
+                    x.sound(sound_id::slugcat_terrain_impact_medium);
+                } else {
+                    x.sound(sound_id::slugcat_terrain_impact_hard);
                 }
             }
         }
@@ -2121,6 +2143,7 @@ namespace player {
                     k *= 0.7f;
                 x.vel(0).y = (x.rivulet() ? 9.f : 8.f) * k;
                 x.vel(1).y = (x.rivulet() ? 8.f : 7.f) * k;
+                x.sound(sound::sound_id::slugcat_normal_jump);
                 x.pos(0).y += 10.f * mathf::min(1.f, k);
                 x.pos(1).y += 10.f * mathf::min(1.f, k);
                 p.jump_boost() = 0.f;
@@ -2139,6 +2162,7 @@ namespace player {
                 p.standing() = true;
                 p.jump_boost() = x.rivulet() ? 4.f : 0.f;
                 p.jump_stun() = 8 * direction;
+                x.sound(sound::sound_id::slugcat_wall_jump);
             }
             p.can_wall_jump() = 0;
         }
@@ -2177,6 +2201,7 @@ namespace player {
                 p.jump_boost() = 0.f;
                 if (in.x != 0) {
                     p.animation() = animation_index::none;
+                    x.sound(sound::sound_id::slugcat_from_vertical_pole_jump);
                     float const fd = float(p.flip_direction());
                     if (x.rivulet()) {
                         x.vel(0).y = 9.f * k;
@@ -2193,6 +2218,7 @@ namespace player {
                 }
                 if (in.y <= 0) {
                     p.animation() = animation_index::none;
+                    x.sound(sound::sound_id::slugcat_from_vertical_pole_jump, 0.3f);
                     x.vel(0).y = 2.f * k;
                     if (in.y > -1)
                         x.vel(0).x = 2.f * float(p.flip_direction()) * k;
@@ -2220,6 +2246,7 @@ namespace player {
                 x.vel(1).x *= x.rivulet() ? 1.5f : 1.f;
                 p.animation() = animation_index::rocket_jump;
                 p.roll_direction() = 0;
+                x.sound(sound::sound_id::slugcat_rocket_jump);
                 return;
             }
             if (p.animation() == animation_index::belly_slide) {
@@ -2234,6 +2261,7 @@ namespace player {
                     p.animation() = animation_index::rocket_jump;
                     p.rocket_jump_from_belly_slide() = true;
                     p.roll_direction() = 0;
+                    x.sound(sound::sound_id::slugcat_rocket_jump);
                     return;
                 }
                 // whiplash: backflip out of the slide
@@ -2255,6 +2283,7 @@ namespace player {
                 p.flip_from_slide() = true;
                 p.whiplash_jump() = false;
                 p.jump_boost() = 0.f;
+                x.sound(sound::sound_id::slugcat_flip_jump);
                 return;
             }
             if (p.animation() == animation_index::zero_g_swim || p.animation() == animation_index::zero_g_pole_grab || p.animation() == animation_index::antler_climb)
@@ -2268,6 +2297,7 @@ namespace player {
                 p.roll_counter() = 0;
                 p.standing() = false;
                 slide = true;
+                x.sound(sound::sound_id::slugcat_belly_slide_init);
             }
             if (slide)
                 return;
@@ -2283,10 +2313,13 @@ namespace player {
                     p.jump_boost() = x.rivulet() ? 9.f : 5.f;
                     p.animation() = animation_index::flip;
                     p.slide_counter() = 0;
+                    x.sound(sound::sound_id::slugcat_flip_jump);
                 } else {
                     x.vel(0).y = (x.rivulet() ? 6.f : 4.f) * k;
                     x.vel(1).y = (x.rivulet() ? 5.f : 3.f) * k;
                     p.jump_boost() = 8.f;
+                    x.sound(p.body_mode() == body_mode_index::climbing_on_beam ? sound::sound_id::slugcat_from_horizontal_pole_jump
+                        : sound::sound_id::slugcat_normal_jump);
                 }
             } else {
                 float horizontal = 1.5f;
@@ -2304,6 +2337,7 @@ namespace player {
                 }
                 x.vel(1).y += 4.f * k;
                 p.jump_boost() = 6.f;
+                x.sound(horizontal >= 9.f ? sound::sound_id::slugcat_super_jump : sound::sound_id::slugcat_crouch_jump);
                 if (dir != 0 && (x.pos(0).x > x.pos(1).x) == (dir > 0)) {
                     x.vel(0).x += float(dir) * horizontal * k;
                     x.vel(1).x += float(dir) * horizontal * k;

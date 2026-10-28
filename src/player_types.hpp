@@ -122,6 +122,8 @@ namespace player {
         body_part legs;
         rw::vec2 legs_direction{0.f, -1.f};
         body_part tail[4];
+        // AxolotlGills scales (Rivulet)
+        body_part gills[6];
         rw::vec2 look_direction{0.f, 0.f};
         rw::vec2 last_look_direction{0.f, 0.f};
         int32_t blink = 0;

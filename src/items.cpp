@@ -45,17 +45,93 @@ namespace items {
             }
         }
 
-        // Weapon.SetRandomSpin
+        bool is_spear(sys::game_state const& state, dcon::item_id it) {
+            return state.world.item_get_type(it) == world::item_type::spear;
+        }
+
+        // Weapon.SetRandomSpin / Spear.SetRandomSpin
         void set_random_spin(sys::game_state& state, dcon::item_id it) {
             float const g = room_gravity(state, room_of(state, body(state, it)));
+            if (is_spear(state, it)) {
+                float const sign = state.random.value() < 0.5f ? -1.f : 1.f;
+                state.world.item_set_rotation_speed(it, sign * mathf::lerp(50.f, 150.f, state.random.value()) * mathf::lerp(0.05f, 1.f, g));
+                state.world.item_set_spinning(it, 1);
+                return;
+            }
             state.world.item_set_rotation_speed(it, mathf::lerp(-100.f, 100.f, state.random.value()) * mathf::lerp(0.05f, 1.f, g));
         }
 
-        // Weapon.ChangeMode
+        // a tile's flags in the data container (null out of bounds)
+        uint8_t* tile_flags(sys::game_state& state, dcon::room_id room, ivec2 t) {
+            auto& w = state.world;
+            int32_t const width = w.room_get_width(room);
+            if (t.x < 0 || t.y < 0 || t.x >= width || t.y >= w.room_get_height(room))
+                return nullptr;
+            dcon::tile_id const id{dcon::tile_id::value_base_t(w.room_get_first_tile(room).id.index() + t.y * width + t.x)};
+            return &w.tile_get_flags(id);
+        }
+
+        // the tiles a stuck spear lends its beam to: its own and the free
+        // neighbours along it
+        template<typename F>
+        void for_each_pole_tile(sys::game_state& state, dcon::item_id it, F&& f) {
+            auto& w = state.world;
+            auto const room = room_of(state, body(state, it));
+            auto const view = world::get_room_view(state, room);
+            bool const vertical = w.item_get_stuck_cycles(it) < 0;
+            ivec2 const center = room_view::get_tile_position(w.item_get_stuck_pos(it));
+            for (int32_t k = -1; k < 2; ++k) {
+                ivec2 const t = center + (vertical ? ivec2{0, k} : ivec2{k, 0});
+                if (k != 0 && view.get_tile(t).solid())
+                    continue;
+                if (uint8_t* flags = tile_flags(state, room, t))
+                    f(*flags, uint8_t(1u << (k + 1)), vertical ? uint8_t(world::tile_vertical_beam) : uint8_t(world::tile_horizontal_beam));
+            }
+        }
+
+        // Spear.resetHorizontalBeamState
+        void reset_beam_state(sys::game_state& state, dcon::item_id it) {
+            auto& w = state.world;
+            if (w.item_get_has_stuck(it)) {
+                uint8_t const was = w.item_get_was_beam(it);
+                for_each_pole_tile(state, it, [&](uint8_t& flags, uint8_t bit, uint8_t beam) {
+                    flags = uint8_t((flags & ~beam) | ((was & bit) ? beam : 0));
+                });
+            }
+            w.item_set_has_beam_state(it, 0);
+            w.item_set_stuck_cycles(it, 0);
+        }
+
+        // Weapon.ChangeMode (+ Spear.ChangeMode)
         void change_mode(sys::game_state& state, dcon::item_id it, weapon_mode m) {
             auto& w = state.world;
             if (w.item_get_mode(it) == m)
                 return;
+            if (is_spear(state, it)) {
+                if (m == weapon_mode::stuck_in_wall) {
+                    if (w.item_get_stuck_cycles(it) == 0)
+                        w.item_set_stuck_cycles(it, int8_t(state.random.range(3, 7) * (w.item_get_throw_dir(it).y != 0 ? -1 : 1)));
+                    bool const vertical = w.item_get_stuck_cycles(it) < 0;
+                    auto const view = world::get_room_view(state, room_of(state, body(state, it)));
+                    vec2 const stuck = w.item_get_stuck_pos(it);
+                    for (int32_t i = -1; i < 2; i += 2) {
+                        vec2 const probe = stuck + (vertical ? vec2{0.f, 20.f * float(i)} : vec2{20.f * float(i), 0.f});
+                        if (!view.get_tile(probe).solid()) {
+                            // points into the wall, half a tile out of it
+                            vec2 const rot = vertical ? vec2{0.f, float(-i)} : vec2{float(-i), 0.f};
+                            w.item_set_rotation(it, rot);
+                            w.item_set_add_poles(it, 1);
+                            w.item_set_stuck_pos(it, room_view::middle_of_tile(stuck) - rot * 5.f);
+                            break;
+                        }
+                    }
+                    w.item_set_rotation_speed(it, 0.f);
+                }
+                if (m != weapon_mode::free)
+                    w.item_set_spinning(it, 0);
+                if (m != weapon_mode::stuck_in_wall)
+                    w.item_set_has_stuck(it, 0);
+            }
             if (m != weapon_mode::thrown)
                 w.item_set_throw_mode_frames(it, -1);
             auto const c = chunk(state, it);
@@ -68,6 +144,9 @@ namespace items {
 
         // Weapon.HitWall
         void hit_wall(sys::game_state& state, dcon::item_id it) {
+            auto const c = chunk(state, it);
+            state.play_sound(is_spear(state, it) ? sound::sound_id::spear_bounce_off_wall : sound::sound_id::rock_hit_wall,
+                room_of(state, body(state, it)), state.world.body_chunk_get_pos(c));
             set_random_spin(state, it);
             change_mode(state, it, weapon_mode::free);
             state.world.item_set_forbidden_to_player(it, 10);
@@ -120,7 +199,7 @@ namespace items {
                 vel.y = main_vel.y * 0.5f;
                 vel.x = main_vel.x * 0.2f;
                 vel.x += float(throw_dir.x) * 40.f * frc;
-                vel.y += 3.f;
+                vel.y += is_spear(state, it) ? 1.5f : 3.f;
             } else {
                 if (throw_dir.y == 0) {
                     change_mode(state, it, weapon_mode::free);
@@ -133,6 +212,9 @@ namespace items {
             change_mode(state, it, weapon_mode::thrown);
             w.item_set_rotation(it, rw::to_vec2(throw_dir));
             w.item_set_rotation_speed(it, 0.f);
+            w.item_set_always_stick(it, 0);
+            state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_throw_spear : sound::sound_id::slugcat_throw_rock,
+                room_of(state, body(state, it)), thrown_pos);
         }
 
         // Player.ThrowObject, for weapons
@@ -154,18 +236,26 @@ namespace items {
             thrown(state, it, p, pos, dir, 1.f);
 
             auto const ic = chunk(state, it);
+            int32_t const skill = throwing_skill(w.player_get_stats(p).name);
+            // Player.ThrownSpear: clumsy throwers' spears fall out of the air sooner
+            if (is_spear(state, it) && skill == 0) {
+                w.item_set_throw_mode_frames(it, 18);
+                w.body_chunk_get_vel(ic).x *= 0.77f;
+            }
             int32_t const roll_dir = w.player_get_roll_direction(p);
             int32_t const roll_counter = w.player_get_roll_counter(p);
             if (w.player_get_animation(p) == ::player::animation_index::belly_slide && roll_counter > 8 && roll_counter < 15) {
-                if (dir.x == roll_dir && throwing_skill(w.player_get_stats(p).name) > 0) {
+                if (dir.x == roll_dir && skill > 0) {
                     w.body_chunk_get_vel(ic).x += float(dir.x) * 15.f;
-                    // Rock is a HeavyWeapon
+                    // rocks and spears are heavy weapons
                     w.item_set_floor_bounce_frames(it, 30);
+                    if (is_spear(state, it))
+                        w.item_set_always_stick(it, 1);
                     w.body_chunk_set_go_through_floors(ic, false);
                     w.body_chunk_get_vel(ic).y -= 5.f;
                     w.item_set_change_dir_counter(it, 0);
                 } else if (dir.x == -roll_dir && !w.player_get_long_belly_slide(p)) {
-                    w.body_chunk_get_vel(ic).y += 5.f;
+                    w.body_chunk_get_vel(ic).y += is_spear(state, it) ? 3.f : 5.f;
                     w.item_set_change_dir_counter(it, 0);
                     w.player_set_roll_counter(p, 8);
                     w.body_chunk_get_pos(c0).x += float(roll_dir) * 6.f;
@@ -186,9 +276,12 @@ namespace items {
             release_grasp(state, g);
         }
 
-        // Player.CanIPickThisUp, rocks
-        bool can_pick_up(sys::game_state const& state, dcon::item_id it) {
+        // Player.CanIPickThisUp, weapons: spears stuck in walls stay there,
+        // except for Artificer (no Remix "dislodge spears" option)
+        bool can_pick_up(sys::game_state const& state, dcon::player_id p, dcon::item_id it) {
             auto const m = state.world.item_get_mode(it);
+            if (m == weapon_mode::stuck_in_wall)
+                return state.world.player_get_stats(p).name == ::player::slugcat_name::artificer;
             return m == weapon_mode::free;
         }
 
@@ -210,7 +303,7 @@ namespace items {
                     return;
                 if (!custom::dist_less(p0, ip, rad + 20.f) && !room.visual_contact(p0, ip))
                     return;
-                if (!can_pick_up(state, it))
+                if (!can_pick_up(state, p, it))
                     return;
                 float d = rw::distance(p0, ip);
                 if (w.item_get_type(it) == world::item_type::spear)
@@ -233,8 +326,93 @@ namespace items {
                 return;
             w.grasp_set_hand(g, uint8_t(hand));
             ++w.physical_object_get_grabbed_by_count(body(state, it));
+            // Spear.PickedUp: pulled out of a wall
+            if (is_spear(state, it) && w.item_get_has_beam_state(it)) {
+                reset_beam_state(state, it);
+                w.item_set_vibrate(it, 20);
+            }
             change_mode(state, it, weapon_mode::carried);
             w.item_set_thrown_by(it, dcon::player_id{});
+            state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_pick_up_spear : sound::sound_id::slugcat_pick_up_rock,
+                room_of(state, body(state, it)), w.body_chunk_get_pos(chunk(state, it)));
+        }
+
+        // Spear.Update, after the Weapon/PhysicalObject update
+        void spear_update(sys::game_state& state, dcon::item_id it, room_view const& room) {
+            auto& w = state.world;
+            auto const c = chunk(state, it);
+            vec2& pos = w.body_chunk_get_pos(c);
+            vec2& vel = w.body_chunk_get_vel(c);
+            w.item_set_last_pivot_at_tip(it, w.item_get_pivot_at_tip(it));
+            w.item_set_pivot_at_tip(it, w.item_get_mode(it) == weapon_mode::thrown);
+            if (w.item_get_add_poles(it)) {
+                uint8_t was = 0;
+                for_each_pole_tile(state, it, [&](uint8_t& flags, uint8_t bit, uint8_t beam) {
+                    if (flags & beam)
+                        was |= bit;
+                    flags |= beam;
+                });
+                w.item_set_was_beam(it, was);
+                w.item_set_add_poles(it, 0);
+                w.item_set_has_beam_state(it, 1);
+            }
+            switch (w.item_get_mode(it)) {
+            case weapon_mode::free:
+                if (w.item_get_spinning(it)) {
+                    int32_t& still = w.item_get_still_counter(it);
+                    if (custom::dist_less(pos, w.body_chunk_get_last_pos(c), 4.f * room.gravity))
+                        ++still;
+                    else
+                        still = 0;
+                    if (w.body_chunk_get_contact_point(c).y < 0 || still > 20) {
+                        // comes to rest lying on the ground
+                        w.item_set_spinning(it, 0);
+                        w.item_set_rotation_speed(it, 0.f);
+                        w.item_set_rotation(it, custom::deg_to_vec(mathf::lerp(-50.f, 50.f, state.random.value()) + 180.f));
+                        vel *= 0.f;
+                        state.play_sound(sound::sound_id::spear_stick_in_ground, room.id, pos);
+                    }
+                } else if (!custom::dist_less(w.body_chunk_get_last_pos(c), pos, 6.f)) {
+                    set_random_spin(state, it);
+                }
+                break;
+            case weapon_mode::thrown: {
+                vel.y += 0.45f; // spears fly flatter than rocks
+                ivec2 const dir = w.item_get_throw_dir(it);
+                vec2 const thrown_pos = w.item_get_thrown_pos(it);
+                // sticks when it hits a wall it was aimed at: straight on, close
+                // enough, and a third of the time unless thrown from up close
+                if (custom::dist_less(thrown_pos, pos, 560.f) && w.body_chunk_get_contact_point(c) == dir
+                && room.get_tile(pos).t == world::terrain::air && room.get_tile(pos + rw::to_vec2(dir) * 20.f).t == world::terrain::solid
+                && (state.random.value() < 0.33f || custom::dist_less(thrown_pos, pos, 140.f) || w.item_get_always_stick(it))) {
+                    ivec2 const tile = room_view::get_tile_position(pos);
+                    bool ok = tile.x > 0 && tile.y > 0 && tile.x < room.width - 1 && tile.y < room.height - 1;
+                    // one spear per tile
+                    w.for_each_item([&](dcon::item_id other) {
+                        if (ok && other != it && w.item_get_mode(other) == weapon_mode::stuck_in_wall
+                        && room_of(state, body(state, other)) == room.id
+                        && room_view::get_tile_position(w.body_chunk_get_pos(chunk(state, other))) == tile)
+                            ok = false;
+                    });
+                    if (ok) {
+                        w.item_set_has_stuck(it, 1);
+                        w.item_set_stuck_pos(it, room_view::middle_of_tile(pos));
+                        w.item_set_vibrate(it, 10);
+                        change_mode(state, it, weapon_mode::stuck_in_wall);
+                        w.item_set_has_stuck(it, 1);
+                        state.play_sound(sound::sound_id::spear_stick_in_wall, room.id, pos);
+                        w.body_chunk_set_collide_with_terrain(c, false);
+                    }
+                }
+                break;
+            }
+            case weapon_mode::stuck_in_wall:
+                pos = w.item_get_stuck_pos(it);
+                vel *= 0.f;
+                break;
+            default:
+                break;
+            }
         }
 
         // Weapon.Update + PlayerCarryableItem.Update + PhysicalObject.Update + Rock.Update
@@ -244,6 +422,8 @@ namespace items {
             auto const c = chunk(state, it);
             float const exit_speed = w.item_get_override_exit_thrown_speed(it) > 0.f ? w.item_get_override_exit_thrown_speed(it) : exit_thrown_mode_speed;
             ivec2 const contact = w.body_chunk_get_contact_point(c);
+            if (w.item_get_vibrate(it) > 0)
+                --w.item_get_vibrate(it);
 
             int32_t& floor_bounce = w.item_get_floor_bounce_frames(it);
             if (floor_bounce > 0 && w.item_get_throw_dir(it).y == 0) {
@@ -319,6 +499,10 @@ namespace items {
             if (w.item_get_mode(it) != weapon_mode::carried)
                 physics::update_object(state, room, o, nullptr, nullptr);
 
+            if (is_spear(state, it)) {
+                spear_update(state, it, room);
+                return;
+            }
             // Rock.Update
             if (w.body_chunk_get_contact_point(c).y != 0)
                 w.item_set_rotation_speed(it, (w.item_get_rotation_speed(it) * 2.f + w.body_chunk_get_vel(c).x * 5.f) / 3.f);
@@ -338,40 +522,78 @@ namespace items {
         return g ? state.world.grasp_get_grabber(g) : dcon::player_id{};
     }
 
+    namespace {
+        // Rock/Spear constructors share the body and the weapon state
+        dcon::item_id create_weapon(sys::game_state& state, dcon::room_id room, vec2 pos, world::item_type type) {
+            auto& w = state.world;
+            physics::object_desc d;
+            d.air_friction = 0.999f;
+            d.gravity = 0.9f;
+            d.bounce = 0.4f;
+            d.surface_friction = 0.4f;
+            d.water_friction = 0.98f;
+            d.buoyancy = 0.4f;
+            auto const o = physics::create_object(state, room, d);
+            physics::add_chunk(state, o, pos, 5.f, 0.07f);
+            auto const it = w.create_item();
+            w.item_set_type(it, type);
+            w.item_set_mode(it, weapon_mode::free);
+            w.item_set_rotation(it, custom::deg_to_vec(state.random.value() * 360.f));
+            w.item_set_last_rotation(it, w.item_get_rotation(it));
+            w.item_set_rotation_speed(it, 0.f);
+            w.item_set_throw_dir(it, ivec2{0, 0});
+            w.item_set_thrown_pos(it, pos);
+            w.item_set_change_dir_counter(it, 0);
+            w.item_set_floor_bounce_frames(it, 0);
+            w.item_set_forbidden_to_player(it, 0);
+            w.item_set_override_exit_thrown_speed(it, 0.f);
+            w.item_set_throw_mode_frames(it, -1);
+            w.item_set_thrown_by(it, dcon::player_id{});
+            // erasable slots are reused: clear the spear state too
+            w.item_set_vibrate(it, 0);
+            w.item_set_has_stuck(it, 0);
+            w.item_set_stuck_pos(it, pos);
+            w.item_set_stuck_cycles(it, 0);
+            w.item_set_add_poles(it, 0);
+            w.item_set_has_beam_state(it, 0);
+            w.item_set_was_beam(it, 0);
+            w.item_set_spinning(it, 0);
+            w.item_set_still_counter(it, 0);
+            w.item_set_pivot_at_tip(it, 0);
+            w.item_set_last_pivot_at_tip(it, 0);
+            w.item_set_always_stick(it, 0);
+            w.item_set_needle(it, 0);
+            w.try_create_item_body(it, o);
+            // Weapon.PlaceInRoom
+            physics::hard_set_position(state, physics::chunk(state, o, 0), room_view::middle_of_tile(pos));
+            set_random_spin(state, it);
+            return it;
+        }
+    }
+
+    dcon::item_id create_spear(sys::game_state& state, dcon::room_id room, vec2 pos) {
+        return create_weapon(state, room, pos, world::item_type::spear);
+    }
+
+    void spear_ends(sys::game_state const& state, dcon::item_id spear, float alpha, vec2& tail, vec2& tip) {
+        auto const& w = state.world;
+        auto const c = chunk(state, spear);
+        vec2 const pos = rw::lerp(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c), alpha);
+        vec2 const rot = rw::normalized(rw::lerp(w.item_get_last_rotation(spear), w.item_get_rotation(spear), alpha));
+        // the sprite pivots at its middle, or near the tip while flying
+        float const anchor = mathf::lerp(w.item_get_last_pivot_at_tip(spear) ? 0.85f : 0.5f, w.item_get_pivot_at_tip(spear) ? 0.85f : 0.5f, alpha);
+        tail = pos - rot * (anchor * spear_length);
+        tip = pos + rot * ((1.f - anchor) * spear_length);
+    }
+
     dcon::item_id create_rock(sys::game_state& state, dcon::room_id room, vec2 pos) {
-        auto& w = state.world;
-        physics::object_desc d;
-        d.air_friction = 0.999f;
-        d.gravity = 0.9f;
-        d.bounce = 0.4f;
-        d.surface_friction = 0.4f;
-        d.water_friction = 0.98f;
-        d.buoyancy = 0.4f;
-        auto const o = physics::create_object(state, room, d);
-        physics::add_chunk(state, o, pos, 5.f, 0.07f);
-        auto const it = w.create_item();
-        w.item_set_type(it, world::item_type::rock);
-        w.item_set_mode(it, weapon_mode::free);
-        w.item_set_rotation(it, custom::deg_to_vec(state.random.value() * 360.f));
-        w.item_set_last_rotation(it, w.item_get_rotation(it));
-        w.item_set_rotation_speed(it, 0.f);
-        w.item_set_throw_dir(it, ivec2{0, 0});
-        w.item_set_thrown_pos(it, pos);
-        w.item_set_change_dir_counter(it, 0);
-        w.item_set_floor_bounce_frames(it, 0);
-        w.item_set_forbidden_to_player(it, 0);
-        w.item_set_override_exit_thrown_speed(it, 0.f);
-        w.item_set_throw_mode_frames(it, -1);
-        w.item_set_thrown_by(it, dcon::player_id{});
-        w.try_create_item_body(it, o);
-        // Weapon.PlaceInRoom
-        physics::hard_set_position(state, physics::chunk(state, o, 0), room_view::middle_of_tile(pos));
-        set_random_spin(state, it);
-        return it;
+        return create_weapon(state, room, pos, world::item_type::rock);
     }
 
     void destroy(sys::game_state& state, dcon::item_id item) {
         auto& w = state.world;
+        if (w.item_get_has_beam_state(item))
+            reset_beam_state(state, item);
         if (auto const g = w.item_get_grasp_as_grabbed(item))
             release_grasp(state, g);
         auto const o = body(state, item);
@@ -387,13 +609,12 @@ namespace items {
         w.room_set_items_spawned(room, true);
         auto const view = world::get_room_view(state, room);
 
-        // room file items: rocks 75%, spears 60% (spears not ported, but rolled)
+        // room file items: rocks 75%, spears 60%
         w.room_for_each_item_location(room, [&](dcon::item_location_id il) {
             auto const pi = w.item_location_get_item(il);
             bool const rock = w.placed_item_get_type(pi) == world::item_type::rock;
-            bool const spawn = state.random.value() < (rock ? 0.75f : 0.6f);
-            if (spawn && rock)
-                create_rock(state, room, room_view::middle_of_tile(w.placed_item_get_tile(pi)));
+            if (state.random.value() < (rock ? 0.75f : 0.6f))
+                create_weapon(state, room, room_view::middle_of_tile(w.placed_item_get_tile(pi)), w.placed_item_get_type(pi));
         });
 
         if (w.room_get_is_shelter(room) || w.room_get_is_gate(room))
@@ -413,9 +634,11 @@ namespace items {
                 }
             if (!ok)
                 continue;
+            // (explosive/electric spear rolls aren't ported)
             if (state.random.value() < spear_chance)
-                continue; // a spear
-            create_rock(state, room, room_view::middle_of_tile(t));
+                create_spear(state, room, room_view::middle_of_tile(t));
+            else
+                create_rock(state, room, room_view::middle_of_tile(t));
         }
     }
 
@@ -441,14 +664,22 @@ namespace items {
 
     void carry_update(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
+        vec2 const main_pos = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
         vec2 const main_vel = w.body_chunk_get_vel(player::body_chunk(state, p, 0));
+        float const flip = float(w.player_get_flip_direction(p));
         w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
             auto const it = w.grasp_get_grabbed(g);
             auto const c = chunk(state, it);
+            uint8_t const hand = w.grasp_get_hand(g);
             w.body_chunk_set_last_pos(c, w.body_chunk_get_pos(c));
-            w.body_chunk_set_pos(c, hand_position(state, p, w.grasp_get_hand(g)));
+            w.body_chunk_set_pos(c, hand_position(state, p, hand));
             w.body_chunk_set_vel(c, main_vel);
             w.item_set_rotation_speed(it, 0.f);
+            // Player.GetHeldItemDirection: spears are held level, pointing ahead
+            vec2 dir = custom::perpendicular_vector(custom::dir_vec(main_pos, w.body_chunk_get_pos(c)) * (hand == 0 ? -1.f : 1.f));
+            if (is_spear(state, it))
+                dir = custom::deg_to_vec(80.f * flip);
+            w.item_set_rotation(it, dir);
         });
     }
 
@@ -456,6 +687,77 @@ namespace items {
         for (uint32_t hand = 0; hand < 2; ++hand)
             if (auto const g = grasp_in_hand(state, p, hand))
                 release_grasp(state, g);
+    }
+
+    namespace {
+        // Spearmaster holding pick up with a free hand pulls a needle out of
+        // its tail (Player.GrabUpdate, TailSpeckles)
+        void spearmaster_update(sys::game_state& state, dcon::player_id p, room_view const& room) {
+            auto& w = state.world;
+            if (w.player_get_stats(p).name != ::player::slugcat_name::spear)
+                return;
+            auto const& in = w.player_get_input(p)[0];
+            float& prog = w.player_get_spear_prog(p);
+            if (!in.pckp) {
+                if (prog > 0.f) {
+                    prog = mathf::lerp(prog, 0.f, 0.05f);
+                    if (prog < 0.025f)
+                        prog = 0.f;
+                }
+                return;
+            }
+            bool const free_hand = !grasp_in_hand(state, p, 0) || !grasp_in_hand(state, p, 1);
+            if (!free_hand || in.y != 0)
+                return;
+            auto const c0 = player::body_chunk(state, p, 0);
+            auto const c1 = player::body_chunk(state, p, 1);
+            if (prog == 0.f) {
+                // TailSpeckles.newSpearSlot
+                w.player_set_spear_line(p, uint8_t(state.random.range(0, 2)));
+                w.player_set_spear_row(p, uint8_t(state.random.range(0, 4)));
+            }
+            if (prog < 0.1f) {
+                prog = mathf::lerp(prog, 0.11f, 0.1f);
+            } else {
+                if (!w.player_get_spear_sound_ready(p)) {
+                    w.player_set_spear_sound_ready(p, 1);
+                    state.play_sound(sound::sound_id::sm_spear_pull, room.id, w.body_chunk_get_pos(c0), 1.f, 1.f + state.random.value() * 0.5f);
+                }
+                prog = mathf::lerp(prog, 1.f, 0.05f);
+            }
+            if (prog > 0.6f) {
+                auto& g = w.player_get_graphics(p);
+                g.head.vel += custom::deg_to_vec(state.random.value() * 360.f) * ((prog - 0.6f) / 0.4f) * 2.f;
+            }
+            if (prog > 0.95f)
+                prog = 1.f;
+            if (prog < 1.f)
+                return;
+            state.play_sound(sound::sound_id::sm_spear_grab, room.id, w.body_chunk_get_pos(c0), 1.f, 0.5f + state.random.value() * 1.5f);
+            w.player_set_spear_sound_ready(p, 0);
+            prog = 0.f;
+            vec2 const p0 = w.body_chunk_get_pos(c0);
+            vec2 const p1 = w.body_chunk_get_pos(c1);
+            vec2 at = p0;
+            vec2 dir = custom::dir_vec(p1, p0);
+            if (std::fabs(p0.y - p1.y) > std::fabs(p0.x - p1.x) && p0.y > p1.y) {
+                at += custom::dir_vec(p1, p0) * 5.f;
+                dir *= -1.f;
+                dir.x += 0.4f * float(w.player_get_flip_direction(p));
+                dir = rw::normalized(dir);
+            }
+            auto const spear = create_spear(state, room.id, at);
+            auto const sc = chunk(state, spear);
+            physics::hard_set_position(state, sc, at);
+            w.body_chunk_set_vel(sc, rw::clamp_magnitude((dir * 2.f + custom::deg_to_vec(state.random.value() * 360.f) * state.random.value()) / w.body_chunk_get_mass(sc), 6.f));
+            w.item_set_needle(spear, 1);
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (!grasp_in_hand(state, p, hand)) {
+                    grab(state, p, spear, hand);
+                    break;
+                }
+            w.player_set_want_to_throw(p, 0);
+        }
     }
 
     void grab_update(sys::game_state& state, dcon::player_id p, room_view const& room) {
@@ -468,6 +770,7 @@ namespace items {
         if (dont_grab > 0)
             --dont_grab;
 
+        spearmaster_update(state, p, room);
         auto const candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f) : dcon::item_id{};
         int32_t& want_pick = w.player_get_want_to_pick_up(p);
         int32_t& want_throw = w.player_get_want_to_throw(p);
@@ -512,6 +815,7 @@ namespace items {
                 if (auto const g = grasp_in_hand(state, p, hand)) {
                     want_pick = 0;
                     // Player.ReleaseObject
+                    state.play_sound(sound::sound_id::slugcat_lay_down_object, room.id, w.body_chunk_get_pos(chunk(state, w.grasp_get_grabbed(g))));
                     w.item_set_forbidden_to_player(w.grasp_get_grabbed(g), 40);
                     release_grasp(state, g);
                     return;

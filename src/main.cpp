@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "audio.hpp"
 #include "config.h"
 #include "gamestate.hpp"
 #include "gates.hpp"
@@ -51,6 +52,7 @@ namespace {
             "                      spearmaster | saint | sofanthiel | watcher (or white/yellow/red)\n"
             "  --selftest          run the scripted movement tests and exit\n"
             "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
+            "  --audio-check       load the sound effects, decode a song, report and exit\n"
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
@@ -65,7 +67,8 @@ namespace {
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
             "          1-9/0 slugcat (Survivor, Monk, Hunter, Gourmand, Artificer, Rivulet,\n"
-            "          Spearmaster, Saint, Sofanthiel, Watcher), Esc quit\n",
+            "          Spearmaster, Saint, Sofanthiel, Watcher), M play a song of the region\n"
+            "          (again for another one), Ctrl+M stop the music, Esc quit\n",
             argv0);
     }
 
@@ -198,12 +201,20 @@ namespace {
             auto const p = players[0];
             auto const c0 = player::body_chunk(gs, p, 0);
             auto const c1 = player::body_chunk(gs, p, 1);
-            uint32_t rocks = 0, held = 0;
+            uint32_t rocks = 0, spears = 0, stuck = 0;
             w.for_each_item([&](dcon::item_id it) {
-                if (w.physical_object_get_room_from_object_location(w.item_get_body_from_item_body(it)) == room)
-                    ++rocks;
+                if (w.physical_object_get_room_from_object_location(w.item_get_body_from_item_body(it)) != room)
+                    return;
+                bool const spear = w.item_get_type(it) == world::item_type::spear;
+                ++(spear ? spears : rocks);
+                stuck += w.item_get_mode(it) == world::weapon_mode::stuck_in_wall;
             });
-            w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id) { ++held; });
+            std::string held;
+            w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
+                held += w.item_get_type(w.grasp_get_grabbed(g)) == world::item_type::spear ? " spear" : " rock";
+            });
+            if (held.empty())
+                held = " nothing";
             char buf[896];
             std::snprintf(buf, sizeof(buf),
                 "%s  [%s]%s%s  %s\n"
@@ -212,7 +223,7 @@ namespace {
                 "contact %d %d / %d %d  slope %d\n"
                 "standing %d canJump %d wantJump %d stun %d\n"
                 "air %.2f  aerobic %.2f  players %zu%s\n"
-                "rocks in room %u  held %u%s",
+                "rocks %u  spears %u (%u in walls)  holding%s%s",
                 std::string{gs.to_string_view(w.room_get_display_name(room))}.c_str(),
                 std::string{gs.to_string_view(w.region_get_display_name(w.room_get_region_from_region_membership(room)))}.c_str(),
                 paused ? "  PAUSED" : "", slow ? "  SLOW" : "", player::to_string(w.player_get_stats(p).name),
@@ -222,7 +233,7 @@ namespace {
                 w.body_chunk_get_contact_point(c1).x, w.body_chunk_get_contact_point(c1).y, int(w.body_chunk_get_on_slope(c1)),
                 int(w.player_get_standing(p)), w.player_get_can_jump(p), w.player_get_want_to_jump(p), w.player_get_stun(p),
                 w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), w.player_get_dead(p) ? "  DEAD (R)" : "",
-                rocks, held, w.player_get_in_shortcut(p) ? "  IN PIPE" : "");
+                rocks, spears, stuck, held.c_str(), w.player_get_in_shortcut(p) ? "  IN PIPE" : "");
             std::string out = buf;
             if (auto const g = gates::gate_of(gs, room)) {
                 static char const* const modes[] = {"MiddleClosed", "ClosingAirLock", "Waiting", "OpeningMiddle",
@@ -274,6 +285,7 @@ int main(int argc, char* argv[]) {
     std::string script;
     std::optional<vec2> start_pos;
     bool selftest_mode = false;
+    bool audio_check = false;
     int32_t fuzz_ticks = -1;
     player::slugcat_name slugcat = player::slugcat_name::white;
     for (int i = 1; i < argc; ++i) {
@@ -285,6 +297,8 @@ int main(int argc, char* argv[]) {
             start_room = next();
         } else if (a == "--slugcat") {
             slugcat = parse_slugcat(next());
+        } else if (a == "--audio-check") {
+            audio_check = true;
         } else if (a == "--selftest") {
             selftest_mode = true;
         } else if (a == "--fuzz") {
@@ -339,6 +353,10 @@ int main(int argc, char* argv[]) {
 
     if (fuzz_ticks >= 0)
         return selftest::fuzz(gs, uint32_t(fuzz_ticks));
+    if (audio_check) {
+        auto sound = audio::create(gs);
+        return sound && audio::self_check(*sound, gs) ? 0 : 1;
+    }
 
     // vanilla rolls item spawns with UnityEngine.Random; screenshots stay reproducible
     if (screenshot.empty())
@@ -368,6 +386,8 @@ int main(int argc, char* argv[]) {
         auto const step = [&](player::input_package const& in) {
             simulation::tick(gs, a.players, std::span{&in, 1});
             a.follow_player();
+            gs.sounds.clear(); // nothing plays them headless
+            gs.music.clear();
         };
         for (uint32_t t = 0; t < screenshot_ticks; ++t)
             step(player::input_package{});
@@ -405,6 +425,7 @@ int main(int argc, char* argv[]) {
         return ok ? 0 : 1;
     }
 
+    auto sound = audio::create(gs);
     SDL_Gamepad* pad = nullptr;
     bool running = true;
     bool paused = false;
@@ -496,6 +517,12 @@ int main(int argc, char* argv[]) {
                     }
                     break;
                 case SDLK_P: paused = !paused; break;
+                case SDLK_M:
+                    if (sound && (e.key.mod & SDL_KMOD_CTRL))
+                        audio::stop_song(*sound);
+                    else if (sound)
+                        audio::force_song(*sound, gs, w.room_get_region_from_region_membership(a.room));
+                    break;
                 case SDLK_N: step_once = true; break;
                 case SDLK_T: slow = !slow; break;
                 case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
@@ -543,12 +570,24 @@ int main(int argc, char* argv[]) {
         a.update_camera(float(r.width) / a.cam.zoom, float(r.height) / a.cam.zoom);
         render::use_room(r, gs, a.room);
         float const alpha = paused ? 1.f : float(accumulator) / float(tick_ns);
-        render::draw_frame(r, gs, a.view(), alpha, a.cam, a.hud(paused, slow));
+        std::string hud = a.hud(paused, slow);
+        if (sound) {
+            vec2 const size{float(r.width) / a.cam.zoom, float(r.height) / a.cam.zoom};
+            audio::update(*sound, gs, a.room, a.cam.pos + size * 0.5f, size, float(frame) / 1e9f);
+            auto const song = audio::current_song(*sound);
+            if (!song.empty())
+                hud += "\nmusic: " + song;
+        } else {
+            gs.sounds.clear();
+            gs.music.clear();
+        }
+        render::draw_frame(r, gs, a.view(), alpha, a.cam, hud);
         render::present(r);
     }
 
     if (pad != nullptr)
         SDL_CloseGamepad(pad);
+    sound.reset();
     render::shutdown(r);
     return 0;
 }

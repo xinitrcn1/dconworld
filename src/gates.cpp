@@ -3,6 +3,7 @@
 
 namespace gates {
     using rw::ivec2;
+    using rw::vec2;
     using rw::vec3;
     using world::gate_mode;
     namespace mathf = rw::mathf;
@@ -180,7 +181,13 @@ namespace gates {
 
         // Door.Update
         uint8_t& last_closed = w.gate_get_last_closed(g);
+        vec2 const center{float(w.room_get_width(room)) * 10.f, float(w.room_get_height(room)) * 10.f};
         for (int32_t i = 0; i < 3; ++i) {
+            // RegionGateGraphics: the door machinery starts and slams shut
+            if (closed[i] < goal[i] && closed[i] == 0.f)
+                state.play_sound(sound::sound_id::gate_poles_and_rails_in, room, center);
+            if (closed[i] < goal[i] && closed[i] + close_speed >= 1.f)
+                state.play_sound(sound::sound_id::gate_rails_collide, room, center);
             if (closed[i] > goal[i])
                 closed[i] = mathf::max(0.f, closed[i] - open_speed);
             else if (closed[i] < goal[i])
