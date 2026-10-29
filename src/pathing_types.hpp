@@ -13,10 +13,14 @@ namespace pathing {
 
     // What a creature template may walk on: CreatureTemplate's
     // TileTypeResistances, in tenths (10 is a resistance of 1, 0 forbidden),
-    // per accessibility, and whether deep water is open to it (swimmers)
+    // per accessibility, and whether deep water is open to it (swimmers).
+    // `open_air` is CicadaPather's preference for open space: tenths added
+    // to a step per tile its destination is closer than 10 to the terrain
+    // (AImap.terrainProximity), away from the goal
     struct movement {
         uint8_t resistance[access_count] = {};
         uint8_t swim = 0;
+        uint8_t open_air = 0;
         constexpr bool allows(access a) const noexcept { return resistance[uint32_t(a)] != 0; }
         constexpr bool operator==(movement const&) const = default;
     };
@@ -28,4 +32,10 @@ namespace pathing {
     // StandardGroundCreature: floors and corridors, poles at 2.5 (what
     // DropBugAI measures exit distances with)
     inline constexpr movement standard_ground{{10, 10, 25, 0, 0, 0, 0}, 0};
+    // Cicada: Air at 1, and so everything below it (CreatureTemplate caps
+    // the lesser accessibilities at the highest allowed one), through open
+    // space (CicadaPather: vanilla adds up to 100 resistance a step near
+    // walls on top of 1; here up to 10 on top of 1, so long paths stay inside
+    // the fields' 16 bit costs)
+    inline constexpr movement cicada{{10, 10, 10, 10, 10, 10, 0}, 0, 10};
 }

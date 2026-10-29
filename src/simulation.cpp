@@ -2,6 +2,7 @@
 
 #include "simulation.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "gates.hpp"
 #include "items.hpp"
@@ -124,6 +125,8 @@ namespace simulation {
             centipede::collide(state, view);
             dropbug::update_room(state, view);
             dropbug::collide(state, view);
+            cicada::update_room(state, view);
+            cicada::collide(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
             warps::update_room(state, view);

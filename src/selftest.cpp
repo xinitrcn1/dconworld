@@ -9,6 +9,7 @@
 #include "selftest.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
@@ -555,6 +556,77 @@ namespace selftest {
             dropbug::destroy(gs, d);
         }
         {
+            // a squidcada left alone flies off and settles on the terrain; one
+            // the slugcat picks up boosts its jump, slows a long fall to a
+            // glide and tires doing it
+            auto const hall = make_room(gs, region, box(40, 70, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(3, 1));
+            auto const c = cicada::create(gs, hall, world::room_view::middle_of_tile(30, 20), true);
+            bool const sat = s.until(2000, [&] { return !gs.world.cicada_get_flying(c) && cicada::consious(gs, c); });
+            // a plain jump to compare with
+            auto const jump = [&] {
+                s.step(0, 1); // up off all fours first
+                s.run(30);
+                float const y0 = s.pos(1).y;
+                float peak = y0;
+                for (int i = 0; i < 60; ++i) {
+                    s.step(0, 0, true);
+                    peak = std::max(peak, s.pos(1).y);
+                }
+                s.run(60);
+                return peak - y0;
+            };
+            float const plain = jump();
+            // fetched to the slugcat's hands
+            for (uint32_t i = 0; i < 2; ++i)
+                physics::hard_set_position(gs, cicada::chunk(gs, c, i), s.pos(0) + vec2{6.f, 4.f - float(i) * 12.f});
+            s.step(0, 0, false, false, true);
+            s.step();
+            bool const held = cicada::held_by(gs, s.p) == c;
+            s.run(60); // it gets its breath back
+            float const boosted = jump();
+            // high up in the room, still holding it
+            vec2 const up{0.f, 1000.f};
+            for (uint32_t i = 0; i < 2; ++i) {
+                physics::hard_set_position(gs, s.chunk(int(i)), s.pos(int(i)) + up);
+                physics::hard_set_position(gs, cicada::chunk(gs, c, i), gs.world.body_chunk_get_pos(cicada::chunk(gs, c, i)) + up);
+            }
+            // (a free fall from there takes about 47 ticks)
+            uint32_t const t0 = s.ticks;
+            s.step(0, 0, true);
+            bool const landed = s.until(1500, [&] { return s.contact(1).y == -1 || s.dead(); }, 0, 0, true);
+            uint32_t const glide = s.ticks - t0;
+            bool const tired = gs.world.cicada_get_stamina(c) < 0.5f;
+            bool const still_held = cicada::held_by(gs, s.p) == c;
+            char d[192];
+            std::snprintf(d, sizeof(d), " sat=%d held=%d jump=%.0f/%.0fpx glide=%u ticks tired=%d alive=%d", int(sat), int(held), boosted, plain, glide, int(tired), int(!s.dead()));
+            r.check("squidcada lifts the slugcat", sat && held && boosted > plain * 1.2f && landed && glide > 80 && tired && still_held && !s.dead(), s.describe() + d);
+            // let go with pick up
+            s.run(20);
+            s.step(0, 0, false, false, true);
+            s.step();
+            r.check("squidcada let go", !cicada::held_by(gs, s.p), s.describe());
+            cicada::destroy(gs, c);
+        }
+        {
+            // a dark squidcada near the slugcat pesters it: bump attacks and
+            // clinging on
+            auto const hall = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(20, 1));
+            auto const c = cicada::create(gs, hall, world::room_view::middle_of_tile(24, 6), false);
+            bool antagonized = false, charged = false, clung = false;
+            s.until(2400, [&] {
+                antagonized = antagonized || gs.world.cicada_get_behavior(c) == cicada::behavior::antagonize;
+                charged = charged || cicada::charging(gs, c);
+                clung = clung || gs.world.cicada_get_sticky_player(c) != 0;
+                return antagonized && (charged || clung) && s.stun() == 0;
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " antagonized=%d charged=%d clung=%d", int(antagonized), int(charged), int(clung));
+            r.check("squidcada pesters the slugcat", antagonized && (charged || clung), s.describe() + d);
+            cicada::destroy(gs, c);
+        }
+        {
             // a rot vine across a tall room: dropping onto it holding up grabs
             // it, climbing moves along it, jumping lets go
             auto const room = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
@@ -893,6 +965,9 @@ namespace selftest {
         rw::rng bug_rng{0x51ED27u};
         uint32_t bugs_in_ceiling = 0, bugs_dropped = 0, bugs_lost = 0;
         bool bug_dropped = false;
+        rw::rng cicada_rng{0xC1CADAu};
+        uint32_t cicadas_sat = 0, cicadas_charged = 0, cicadas_lost = 0, cicadas_held = 0, cicadas_carried = 0;
+        bool cicada_sat = false, cicada_charged = false, cicada_held = false;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -917,6 +992,13 @@ namespace selftest {
             }
             if (bug && dropbug::sitting_in_ceiling(gs, bug))
                 ++bugs_in_ceiling;
+            // and a squidcada somewhere in the air, alternating the colours
+            dcon::cicada_id cic;
+            for (int k = 0; k < 50 && !cic; ++k) {
+                ivec2 const t{cicada_rng.range(1, std::max(2, room.width - 1)), cicada_rng.range(1, std::max(2, room.height - 1))};
+                if (pathing::accessible(room, t, pathing::cicada))
+                    cic = cicada::create(gs, rid, world::room_view::middle_of_tile(t), cicada_rng.value() < 0.5f);
+            }
             int32_t ix = 0, iy = 0;
             bool jmp = false;
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
@@ -949,6 +1031,15 @@ namespace selftest {
                     }
                     bug_dropped = bug_dropped || w.dropbug_get_from_ceiling_jump(bug);
                 }
+                if (cic) {
+                    for (uint32_t i = 0; i < 2; ++i) {
+                        vec2 const q = w.body_chunk_get_pos(cicada::chunk(gs, cic, i));
+                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    }
+                    cicada_sat = cicada_sat || !w.cicada_get_flying(cic);
+                    cicada_charged = cicada_charged || cicada::charging(gs, cic);
+                    cicada_held = cicada_held || cicada::held_by(gs, p) == cic;
+                }
                 if (!finite) {
                     std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
                     ++bad;
@@ -975,6 +1066,21 @@ namespace selftest {
                 bug_dropped = false;
                 dropbug::destroy(gs, bug);
             }
+            if (cic) {
+                vec2 const hp = w.body_chunk_get_pos(cicada::chunk(gs, cic, 0));
+                if (w.physical_object_get_room_from_object_location(cicada::body(gs, cic)) != rid)
+                    ++cicadas_carried; // through a pipe, in the slugcat's hands
+                else if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
+                    ++cicadas_lost;
+                    if (cicadas_lost <= 5)
+                        std::printf("  squidcada left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                }
+                cicadas_sat += cicada_sat ? 1 : 0;
+                cicadas_charged += cicada_charged ? 1 : 0;
+                cicadas_held += cicada_held ? 1 : 0;
+                cicada_sat = cicada_charged = cicada_held = false;
+                cicada::destroy(gs, cic);
+            }
             if (w.player_get_eaten(p))
                 ++eaten;
             else if (w.player_get_dead(p))
@@ -986,6 +1092,8 @@ namespace selftest {
             w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
         std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
         std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
+        std::printf("squidcadas: one per room, %u sat down, %u bump attacked, %u picked up (%u carried through a pipe), %u fell out of their room\n",
+            cicadas_sat, cicadas_charged, cicadas_held, cicadas_carried, cicadas_lost);
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
             auto const k = w.rot_tube_get_kind(t);

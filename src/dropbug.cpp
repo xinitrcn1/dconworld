@@ -91,26 +91,8 @@ namespace dropbug {
         // The AImap fields DropBugAI looks at (AImapper), from the tiles
         //
 
-        // AItile.narrowSpace: solid on both sides along an axis or a diagonal
-        bool narrow_space(room_view const& room, ivec2 t) {
-            for (int i = 0; i < 4; ++i)
-                if (solid(room, t + custom::eight_directions[i]) && solid(room, t - custom::eight_directions[i]))
-                    return true;
-            return false;
-        }
-
-        // AItile.floorAltitude: tiles up from the closest floor below (a
-        // Floor tile, or a solid one with open space over it)
-        int32_t floor_altitude(room_view const& room, ivec2 t) {
-            if (solid(room, t))
-                return 100000;
-            for (int32_t y = t.y - 1; y >= 0; --y) {
-                auto const tt = room.get_terrain(t.x, y);
-                if (tt == world::terrain::floor || tt == world::terrain::solid)
-                    return t.y - y;
-            }
-            return 100000;
-        }
+        using pathing::narrow_space;
+        using pathing::floor_altitude;
 
         // AItile.smoothedFloorAltitude (AImapper.FindFallRiskOfCurrentTile)
         int32_t smoothed_floor_altitude(room_view const& room, ivec2 t) {

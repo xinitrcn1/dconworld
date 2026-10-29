@@ -4,6 +4,7 @@
 #include "player.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "items.hpp"
 #include "rot.hpp"
@@ -1191,6 +1192,31 @@ namespace player {
                     x.vel(1) = rw::clamp_magnitude(x.vel(1), 9.f);
                     p.animation() = animation_index::hang_under_vertical_beam;
                 }
+            }
+
+            // carrying a cicada (HeavyCarry, the only one here): it lifts the
+            // slugcat while flapping, and weighs it down once tired
+            if (auto const cc = cicada::held_by(x.state, p.id)) {
+                float const lift = cicada::lift_player_power(x.state, cc);
+                if (p.body_mode() == body_mode_index::default_ && p.animation() == animation_index::none) {
+                    x.vel(0).y += lift * 1.2f;
+                    x.vel(1).y += lift * 0.25f;
+                    cicada::set_currently_lifting_player(x.state, cc, true);
+                    if (lift > 0.6666667f)
+                        p.standing() = false;
+                } else {
+                    x.vel(0).y += lift * 0.5f;
+                    cicada::set_currently_lifting_player(x.state, cc, false);
+                }
+                if (x.contact(1).y < 0 && x.last_contact(1).y == 0 && lift > 0.33333334f)
+                    p.standing() = true;
+                float mass = 0.f;
+                for (uint32_t i = 0; i < 2; ++i)
+                    mass += x.state.world.body_chunk_get_mass(cicada::chunk(x.state, cc, i));
+                float slow = 1.f + mathf::max(0.f, mass - 0.2f) * 1.5f;
+                slow = mathf::lerp(slow, 1.f, mathf::pow(mathf::inverse_lerp(0.1f, 0.5f, lift), 0.2f));
+                p.dynamic_run_speed()[0] /= slow;
+                p.dynamic_run_speed()[1] /= slow;
             }
 
             bool run = p.body_mode() != body_mode_index::corridor_climb;
@@ -2703,6 +2729,19 @@ namespace player {
                     if (d < rad) {
                         float const k = 1.f - d / rad;
                         dropbug::violence(state, b, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
+                        break;
+                    }
+                }
+            });
+            w.for_each_cicada([&](dcon::cicada_id cc) {
+                if (w.physical_object_get_room_from_object_location(cicada::body(state, cc)) != x.room.id)
+                    return;
+                for (uint32_t i = 0; i < 2; ++i) {
+                    vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, cc, i));
+                    float const d = rw::distance(cp, at);
+                    if (d < rad) {
+                        float const k = 1.f - d / rad;
+                        cicada::violence(state, cc, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
                         break;
                     }
                 }

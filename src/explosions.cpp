@@ -2,6 +2,7 @@
 
 #include "explosions.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
@@ -57,6 +58,19 @@ namespace explosions {
                 }
             }
         });
+        w.for_each_cicada([&](dcon::cicada_id c) {
+            if (w.physical_object_get_room_from_object_location(cicada::body(state, c)) != room.id)
+                return;
+            for (uint32_t i = 0; i < 2; ++i) {
+                vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, c, i));
+                float const dist = rw::distance(cp, at);
+                if (dist < d.rad) {
+                    float const k = 1.f - dist / d.rad;
+                    cicada::violence(state, c, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
+                    break;
+                }
+            }
+        });
         if (d.kill_rad > 0.f) {
             w.for_each_player([&](dcon::player_id p) {
                 auto const o = player::body(state, p);
@@ -107,6 +121,13 @@ namespace explosions {
             vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, 0));
             if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
                 dropbug::violence(state, b, 0, vec2{0.f, 0.f}, 0.f, 120.f);
+        });
+        w.for_each_cicada([&](dcon::cicada_id c) {
+            if (w.physical_object_get_room_from_object_location(cicada::body(state, c)) != room.id)
+                return;
+            vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, c, 0));
+            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
+                cicada::violence(state, c, 0, vec2{0.f, 0.f}, 0.f, 120.f);
         });
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.35f, 1.2f, rw::vec3{1.f, 1.f, 0.95f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.12f, 0.6f, rw::vec3{1.f, 1.f, 1.f}, 1.f);

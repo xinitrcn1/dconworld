@@ -32,6 +32,16 @@ namespace pathing {
     bool accessible(world::room_view const& room, rw::ivec2 t, movement const& m) noexcept;
     // AImap.getTerrainProximity, capped: tiles to the nearest solid tile
     int32_t terrain_proximity(world::room_view const& room, rw::ivec2 t, int32_t cap = 4) noexcept;
+    // AItile.narrowSpace: solid on both sides along an axis or a diagonal
+    bool narrow_space(world::room_view const& room, rw::ivec2 t) noexcept;
+    // AItile.floorAltitude: tiles up from the closest floor below (a Floor
+    // tile, or a solid one with open space over it)
+    int32_t floor_altitude(world::room_view const& room, rw::ivec2 t) noexcept;
+    // AImap.getTerrainProximity as AImapper's TerrainProximityMapper fills
+    // it: four direction steps to the nearest solid tile (0 solid, 1 beside
+    // one), uncapped, -1 outside the room. Kept per room in
+    // sys::game_state::terrain_proximity_cache
+    int32_t ai_terrain_proximity(sys::game_state& state, dcon::room_id room, rw::ivec2 t);
 
     // The field to `goal`, built if no fresh one exists. An inaccessible goal
     // (a slugcat in mid air) is approached through the accessible tiles near it

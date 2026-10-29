@@ -121,6 +121,14 @@ namespace sys {
             std::vector<rw::ivec2> tiles;
         };
         std::vector<ceiling_tiles> ceiling_tile_cache;
+        // AImap.terrainProximity of the rooms flying creatures are in
+        // (pathing.cpp), derived like the path fields and never saved
+        struct terrain_proximity_map {
+            dcon::room_id room;
+            uint16_t geometry_version = 0;
+            std::vector<uint16_t> proximity; // row major
+        };
+        std::vector<terrain_proximity_map> terrain_proximity_cache;
 
         // cosmetic state, never saved (particles.hpp, water.hpp)
         struct particle {

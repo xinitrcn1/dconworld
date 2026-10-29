@@ -4,6 +4,7 @@
 
 #include "player_graphics.hpp"
 #include "body_parts.hpp"
+#include "cicada.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -318,6 +319,20 @@ namespace player_graphics {
                 h.reaching_for_object = 0;
             } else {
                 flag = engage_in_movement(state, p, g, limb, room);
+            }
+            // HeavyCarry (a cicada): the first hand always holds on to it, the
+            // other one unless it is busy climbing (no Remix)
+            auto const carried = cicada::held_by(state, p);
+            if (limb == 0 && carried)
+                flag = true;
+            if (flag && carried) {
+                auto const gc = cicada::chunk(state, carried, w.cicada_get_held_chunk(carried));
+                vec2 const gp = w.body_chunk_get_pos(gc);
+                h.mode = limb_mode::hunt_absolute_position;
+                h.absolute_hunt_pos = gp + custom::perpendicular_vector(c0 - gp) * w.body_chunk_get_rad(gc) * 0.8f * (limb == 0 ? -1.f : 1.f);
+                h.hunt_speed = 20.f;
+                h.quickness = 1.f;
+                flag = false;
             }
             if (flag && items::held(state, p, uint32_t(limb))) {
                 // holding something: out to the side, spears swinging along while walking

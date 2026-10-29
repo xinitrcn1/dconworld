@@ -16,6 +16,8 @@
 #include "unity_assets.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
+#include "cicada.hpp"
+#include "cicada_graphics.hpp"
 #include "dropbug.hpp"
 #include "dropbug_graphics.hpp"
 #include "gates.hpp"
@@ -1471,6 +1473,75 @@ void main() {
             });
         }
 
+        // the room's palette as CicadaGraphics.ApplyPalette reads it
+        cicada_graphics::palette cicada_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            cicada_graphics::palette pal;
+            pal.black = palette_black(r, s, room);
+            pal.fog = palette_texel(r, s, room, 1, 7);
+            return pal;
+        }
+
+        // Squidcadas through CicadaGraphics and the game's atlases
+        void build_cicada_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            auto const pal = cicada_palette(r, s, room.id);
+            w.for_each_cicada([&](dcon::cicada_id c) {
+                if (w.physical_object_get_room_from_object_location(cicada::body(s, c)) != room.id)
+                    return;
+                cmds.clear();
+                cicada_graphics::build(s, c, alpha, pal, cmds);
+                emit_game_cmds(r, cmds);
+            });
+        }
+
+        // Without the game's atlases: squidcadas with shapes of our own over
+        // the simulated CicadaGraphics parts: the tentacles as lines to their
+        // ends, a round body and head in the ApplyPalette colours, the shield
+        // and eyes, and the wings as translucent strokes (folded ones to
+        // where they trail, deployed ones beating on the wing timer)
+        void build_cicadas(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            auto const pal = cicada_palette(r, s, room.id);
+            w.for_each_cicada([&](dcon::cicada_id c) {
+                if (w.physical_object_get_room_from_object_location(cicada::body(s, c)) != room.id)
+                    return;
+                auto const& g = w.cicada_get_graphics(c);
+                auto const& iv = w.cicada_get_ivars(c);
+                rw::vec3 body, shield, eyes;
+                cicada_graphics::colors(s, c, pal, body, shield, eyes);
+                auto const at = [&](uint32_t i) {
+                    auto const k = cicada::chunk(s, c, i);
+                    return rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
+                };
+                vec2 const head = at(0), back = at(1);
+                vec2 const dir = rw::custom::dir_vec(back, head);
+                vec2 const perp = rw::custom::perpendicular_vector(dir);
+                uint32_t const body_col = to_rgba(body);
+                for (auto const& side : g.tentacles)
+                    for (auto const& t : side)
+                        p.line(head + dir * 6.f, rw::lerp(t.last_pos, t.pos, alpha), 2.f * iv.tentacle_thickness, body_col);
+                p.circle(back, 7.f * iv.fatness, body_col);
+                p.circle(head, 6.5f, body_col);
+                p.circle(rw::lerp(head, back, 0.4f), 5.f, to_rgba(shield));
+                if (g.blink_counter > 0)
+                    p.circle(head + dir * 3.f + g.look_dir * 2.f, 2.f, to_rgba(eyes));
+                float const flap = std::sin((g.wing_offset + (g.wing_time_add + alpha) / 3.f) * 6.2831853f);
+                for (int k = 0; k < 2; ++k)
+                    for (int j = 0; j < 2; ++j) {
+                        float const side = k == 0 ? -1.f : 1.f;
+                        vec2 const root = rw::lerp(head, back, 0.3f);
+                        vec2 tip;
+                        if (g.wing_deployment[k][j] < 1.f)
+                            tip = rw::lerp(g.wings[k][j].last_pos, g.wings[k][j].pos, alpha);
+                        else
+                            tip = root + rw::normalized(perp * side * (1.f + 0.6f * flap) - dir * (j == 0 ? 0.4f : 1.f)) * (j == 0 ? 23.f : 17.f) * iv.wing_length;
+                        p.line(root, tip, 6.f * iv.wing_thickness, to_rgba(shield, 0.45f));
+                    }
+            });
+        }
+
         // the sand: shaded by its slope, with fine wind ripples, its far side
         // a lighter band above the front edge
         void build_sand(state& r, sys::game_state const& s, world::room_view const& room, camera const& cam) {
@@ -2531,10 +2602,12 @@ void main() {
         if (atlas) {
             build_centipede_sprites(r, s, room, alpha);
             build_dropbug_sprites(r, s, room, alpha);
+            build_cicada_sprites(r, s, room, alpha);
             build_seed_cobs(r, s, room, alpha);
         } else {
             build_centipedes(r, s, room, alpha);
             build_dropbugs(r, s, room, alpha);
+            build_cicadas(r, s, room, alpha);
         }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);

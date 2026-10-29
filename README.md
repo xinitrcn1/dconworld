@@ -39,7 +39,8 @@ Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
 (hold down while pressing it to drop), push into a pipe entrance to travel it,
 stand still in a gate's middle zone to cycle it, K spawns a centipede at the
 cursor (Shift+K a big one, Ctrl+K removes them all), V spawns a dropwig on the
-ceiling above the cursor (Ctrl+V removes them all), R respawn, left click teleports
+ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada at
+the cursor (Shift+Q a dark one, Ctrl+Q removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
@@ -90,6 +91,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
 | `src/dropbug.*` | `DropBug`/`DropBugAI`: the dropwig sitting in the ceiling, dropping on prey, pouncing, biting and carrying, its `CeilingSitModule` |
 | `src/dropbug_graphics.*` | `DropBugGraphics`: long legs and knees, mandibles, tail pincers, antennae, ceiling camouflage, `DrawSprites` with the game's elements |
+| `src/cicada.*` | `Cicada`/`CicadaAI`: the squidcada flying, sitting on the terrain, circling, bump attacks and tentacle clinging, being carried by the slugcat and lifting it |
+| `src/cicada_graphics.*` | `CicadaGraphics`: wings, tentacles, the body's turn and the eyes, `DrawSprites` with the game's elements |
 | `src/body_parts.*`, `src/sprites.hpp` | `BodyPart`/`GenericBodyPart`/`Limb` helpers and the Futile sprite/mesh commands the graphics ports hand the renderer |
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
@@ -171,6 +174,31 @@ spot. A grabbed slugcat is worried and slashed loose, a dead one carried off
 like `DropBug.Violence`. Not ported: items it carries as bait, threats
 (nothing here scares it), rain, dens and leaving rooms, being grabbed,
 the AImap visibility terms, mud, Safari control.
+
+The squidcada (`--cicada x,y[,b]`, Q, Shift+Q for the dark one) follows
+`Cicada`/`CicadaAI`, white CicadaA and dark CicadaB alike: two chunks
+that fly with a fluttering lift tied to their stamina, follow paths through
+the air (`CicadaPather`'s preference for open space far from the terrain,
+as an `open_air` cost in the distance fields) and land next to the
+terrain or on poles to sit, wings folding back. Idle ones pick sit spots
+around the room and now and then two of them dance in a circle
+(`CicadaAI.CircleGroup`). A slugcat coming close is antagonized like
+vanilla's dynamic relationship works it out (closer is worse, worse still
+when it carries a squidcada; a timid one fears an armed slugcat and flees
+instead): it swoops to spots around it, charges bump attacks that knock
+it and stun both, and clings to it with its tentacles, flapping away with
+it. The slugcat picks one up with both hands (Grab, it can't while it charges
+or keeps its distance) and the squidcada flaps to hold it up:
+`LiftPlayerPower` from its stamina, a boost when jumping, a slow glide
+when falling, tiring while it lifts and resting while it doesn't; pick up
+lets go of it, throw tosses it, and it panics away when let go. It goes
+through pipes with the slugcat. Rocks, spears and explosions hurt it
+through `Creature.Violence`. Not ported: the looping wing sounds (no
+looping sound emitters here, only the one shot sounds), the `CicadaWing`
+shader (the wings are their sprites tinted and faded), dens, swarm rooms
+and rain, flies and leeches to hunt and carry, the social memory beyond
+this cycle, `CreatureLooker`'s interest scores (it looks at the slugcat
+it is busy with or sees), screen shake, mud, Safari control.
 
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
@@ -339,7 +367,7 @@ palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
 anchors, plus the 4 segment tail mesh. Other ported `DrawSprites` (centipedes,
-dropwigs, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
+dropwigs, squidcadas, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
 `rainworldmsc`, `uiSprites`, `uispritesmsc`) out of `resources.assets` in the
 game's `RainWorld_Data` (`--unity <dir>`; nothing of it is bundled). The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,

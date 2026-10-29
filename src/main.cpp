@@ -13,6 +13,7 @@
 
 #include "audio.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "config.h"
 #include "gamestate.hpp"
@@ -64,6 +65,7 @@ namespace {
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
             "  --centipede <x,y[,size]>  spawn a centipede (repeatable)\n"
             "  --dropbug <x,y>     spawn a dropwig, on the ceiling above if there is one (repeatable)\n"
+            "  --cicada <x,y[,b]>  spawn a squidcada, white (CicadaA) or with b dark (CicadaB) (repeatable)\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -73,7 +75,8 @@ namespace {
             "          (hold down to drop), push into a pipe entrance to travel it,\n"
             "          R respawn, left click teleport, K spawn a centipede at the cursor\n"
             "          (Shift+K a big one, Ctrl+K removes them all), V a dropwig on the\n"
-            "          ceiling above the cursor (Ctrl+V removes them all),\n"
+            "          ceiling above the cursor (Ctrl+V removes them all), Q a white\n"
+            "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
@@ -225,6 +228,8 @@ namespace {
             w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
                 held += w.item_get_type(w.grasp_get_grabbed(g)) == world::item_type::spear ? " spear" : " rock";
             });
+            if (cicada::held_by(gs, p))
+                held += " squidcada";
             if (held.empty())
                 held = " nothing";
             char buf[896];
@@ -306,6 +311,7 @@ int main(int argc, char* argv[]) {
     std::optional<vec2> start_pos;
     std::vector<rw::vec3> spawn_centipedes; // x, y, size
     std::vector<vec2> spawn_dropbugs;
+    std::vector<rw::vec3> spawn_cicadas; // x, y, 1 for a CicadaA
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
@@ -348,6 +354,11 @@ int main(int argc, char* argv[]) {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
                 spawn_dropbugs.push_back(vec2{x, y});
+        } else if (a == "--cicada") {
+            float x = 0.f, y = 0.f;
+            char kind = 'a';
+            if (std::sscanf(next().c_str(), "%f,%f,%c", &x, &y, &kind) >= 2)
+                spawn_cicadas.push_back(rw::vec3{x, y, kind == 'b' ? 0.f : 1.f});
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -411,6 +422,8 @@ int main(int argc, char* argv[]) {
         centipede::create(gs, start, vec2{c.x, c.y}, c.z);
     for (auto const& d : spawn_dropbugs)
         dropbug::create(gs, start, d);
+    for (auto const& c : spawn_cicadas)
+        cicada::create(gs, start, vec2{c.x, c.y}, c.z != 0.f);
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);
@@ -472,6 +485,12 @@ int main(int argc, char* argv[]) {
             reports::add_log("dropbug at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
                 + std::to_string(int(gs.world.dropbug_get_behavior(d))) + (dropbug::sitting_in_ceiling(gs, d) ? " in the ceiling" : "")
                 + (gs.world.dropbug_get_dead(d) ? " dead" : ""));
+        });
+        gs.world.for_each_cicada([&](dcon::cicada_id c) {
+            vec2 const hp = gs.world.body_chunk_get_pos(cicada::chunk(gs, c, 0));
+            reports::add_log(std::string{gs.world.cicada_get_gender(c) ? "white" : "dark"} + " squidcada at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y))
+                + " behavior " + std::to_string(int(gs.world.cicada_get_behavior(c))) + (gs.world.cicada_get_flying(c) ? " flying" : " sitting")
+                + " stamina " + std::to_string(gs.world.cicada_get_stamina(c)) + (gs.world.cicada_get_dead(c) ? " dead" : ""));
         });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
@@ -630,6 +649,22 @@ int main(int argc, char* argv[]) {
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
                     auto const d = dropbug::create(gs, a.room, at);
                     reports::add_log(std::string{"dropwig"} + (dropbug::sitting_in_ceiling(gs, d) ? " in the ceiling" : ""));
+                    break;
+                }
+                case SDLK_Q: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        std::vector<dcon::cicada_id> all;
+                        w.for_each_cicada([&](dcon::cicada_id c) { all.push_back(c); });
+                        for (auto const c : all)
+                            cicada::destroy(gs, c);
+                        break;
+                    }
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    bool const white = (e.key.mod & SDL_KMOD_SHIFT) == 0;
+                    cicada::create(gs, a.room, at, white);
+                    reports::add_log(white ? "white squidcada" : "dark squidcada");
                     break;
                 }
                 case SDLK_I: {

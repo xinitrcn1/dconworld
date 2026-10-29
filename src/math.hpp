@@ -164,6 +164,18 @@ namespace rw {
         // Custom.RNV: a random unit vector from `r` (rw::rng or rw::unity_random)
         template<typename R>
         vec2 rnv(R& r) noexcept { return deg_to_vec(r.value() * 360.f); }
+        // Custom.ClampedRandomVariation (with Custom.RandomDeviation) from `r`
+        template<typename R>
+        float clamped_random_variation(float base, float max_deviation, float k, R& r) noexcept {
+            float const dev = s_curve(r.value() * 0.5f, k) * 2.f * (r.value() < 0.5f ? 1.f : -1.f);
+            return mathf::clamp(base + dev * max_deviation, 0.f, 1.f);
+        }
+        // Custom.Decimal: the fractional part
+        inline float decimal(float f) noexcept { return f - std::floor(f); }
+        // Custom.ManhattanDistance
+        constexpr int32_t manhattan_distance(ivec2 a, ivec2 b) noexcept {
+            return (a.x > b.x ? a.x - b.x : b.x - a.x) + (a.y > b.y ? a.y - b.y : b.y - a.y);
+        }
         inline constexpr ivec2 eight_directions[8] = {
             {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}
         };

@@ -42,12 +42,6 @@ namespace dropbug_graphics {
             return a + (b - a) * mathf::clamp01(t);
         }
 
-        // Custom.ClampedRandomVariation
-        float clamped_random_variation(float base, float max_deviation, float k, rw::rng& rng) {
-            float const dev = custom::s_curve(rng.value() * 0.5f, k) * 2.f * (rng.value() < 0.5f ? 1.f : -1.f);
-            return mathf::clamp(base + dev * max_deviation, 0.f, 1.f);
-        }
-
         // one TriangleMesh.MakeLongMesh segment: the quad from the last point
         // (`prev`, half width `prev_w`) to `at` (half width `w`)
         void long_mesh_quad(vec2* v, int i, vec2 prev, vec2 at, float prev_w, float w, float k = 0.5f) {
@@ -72,7 +66,7 @@ namespace dropbug_graphics {
         g.antennae_length = mathf::lerp(0.5f, 1.5f, rng.value());
         g.pinchers_length = mathf::lerp(40.f, 60.f, rng.value());
         g.colored_antennae = rng.value() < 0.5f ? rng.value() : 0.f;
-        g.hue = 0.6722222f + (1.f - clamped_random_variation(0.5f, 0.5f, 0.3f, rng) * 2.f) * 0.2f;
+        g.hue = 0.6722222f + (1.f - custom::clamped_random_variation(0.5f, 0.5f, 0.3f, rng) * 2.f) * 0.2f;
         // Reset
         for (uint32_t i = 0; i < 3; ++i)
             g.draw_positions[i][0] = g.draw_positions[i][1] = chunk_pos(state, d, i);

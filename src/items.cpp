@@ -2,6 +2,7 @@
 
 #include "items.hpp"
 #include "centipede.hpp"
+#include "cicada.hpp"
 #include "dropbug.hpp"
 #include "explosions.hpp"
 #include "particles.hpp"
@@ -315,6 +316,65 @@ namespace items {
             release_grasp(state, g);
         }
 
+        // Player.ThrowObject for a carried cicada: Player.TossObject, the
+        // creature lobbed in the throw direction, then let go
+        void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::cicada_id cc) {
+            auto& w = state.world;
+            auto const& in = w.player_get_input(p)[0];
+            auto const o = cicada::body(state, cc);
+            auto const room = room_of(state, o);
+            // AerobicIncrease(0.75f)
+            w.player_set_aerobic_level(p, mathf::min(1.f, w.player_get_aerobic_level(p) + 0.75f / 9.f));
+            state.play_sound(sound::sound_id::slugcat_throw_creature, room, w.body_chunk_get_pos(cicada::chunk(state, cc, 0)));
+            float mass = 0.f, own = 0.f;
+            for (uint32_t i = 0; i < 2; ++i) {
+                mass += w.body_chunk_get_mass(cicada::chunk(state, cc, i));
+                own += w.body_chunk_get_mass(player::body_chunk(state, p, i));
+            }
+            float ang = 45.f, force = 4.f;
+            if (in.x != 0 && in.y == 0) {
+                ang = custom::lerp_map(mass, 0.2f, 0.3f, 60.f, 50.f);
+                force = custom::lerp_map(mass, 0.2f, 0.3f, 12.5f, 8.f, 2.f);
+            } else if (in.x != 0 && in.y == 1) {
+                ang = 25.f;
+                force = 9.f;
+            } else if (in.x == 0 && in.y == 1) {
+                ang = 5.f;
+                force = 8.f;
+            }
+            if (w.player_get_animation(p) == ::player::animation_index::flip && in.y < 0 && in.x == 0) {
+                ang = 180.f;
+                force = 8.f;
+                physics::set_go_through_floors(state, o, true);
+            }
+            int32_t const dir = throw_direction(state, p);
+            vec2 const p0 = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
+            vec2 const p1 = w.body_chunk_get_pos(player::body_chunk(state, p, 1));
+            float const edge = dir < 0 ? mathf::min(p0.x, p1.x) : mathf::max(p0.x, p1.x);
+            vec2 const main_vel = w.body_chunk_get_vel(player::body_chunk(state, p, 0));
+            for (uint32_t i = 0; i < 2; ++i) {
+                auto const c = cicada::chunk(state, cc, i);
+                vec2& cp = w.body_chunk_get_pos(c);
+                vec2& cv = w.body_chunk_get_vel(c);
+                // out in front of the slugcat
+                if (mass < own * 2.f && dir != 0) {
+                    if (dir < 0) {
+                        cp.x = mathf::min(cp.x, edge - 8.f);
+                        cv.x = mathf::min(cv.x, 0.f);
+                    } else {
+                        cp.x = mathf::max(cp.x, edge + 8.f);
+                        cv.x = mathf::max(cv.x, 0.f);
+                    }
+                }
+                if (cv.y < 0.f)
+                    cv.y = 0.f;
+                cv = rw::lerp(cv * 0.35f, main_vel, custom::lerp_map(mass, 0.2f, 0.5f, 0.6f, 0.3f));
+                cv += custom::deg_to_vec(ang * float(dir)) * mathf::clamp(force / (mathf::lerp(mass, 0.4f, 0.2f) * 2.f), 4.f, 14.f);
+            }
+            w.player_set_dont_grab_stuff(p, 15);
+            cicada::release(state, cc);
+        }
+
         // Player.CanIPickThisUp, weapons: spears stuck in walls stay there,
         // except for Artificer (no Remix "dislodge spears" option)
         bool can_pick_up(sys::game_state const& state, dcon::player_id p, dcon::item_id it) {
@@ -324,13 +384,13 @@ namespace items {
             return m == weapon_mode::free;
         }
 
-        // Player.PickupCandidate
-        dcon::item_id pickup_candidate(sys::game_state const& state, dcon::player_id p, room_view const& room, float favor_spears) {
+        // Player.PickupCandidate over the items: the best one and its score (`best`)
+        dcon::item_id pickup_candidate(sys::game_state const& state, dcon::player_id p, room_view const& room, float favor_spears, float& best) {
             auto const& w = state.world;
             vec2 const p0 = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
             int32_t const flip = w.player_get_flip_direction(p);
             dcon::item_id result;
-            float best = std::numeric_limits<float>::max();
+            best = std::numeric_limits<float>::max();
             w.for_each_item([&](dcon::item_id it) {
                 auto const o = body(state, it);
                 if (room_of(state, o) != room.id || w.item_get_forbidden_to_player(it) >= 1)
@@ -535,6 +595,7 @@ namespace items {
                     // SharedPhysics.TraceProjectileAgainstBodyChunks (creatures)
                     dcon::centipede_id hit;
                     dcon::dropbug_id hit_bug;
+                    dcon::cicada_id hit_cicada;
                     uint32_t hit_chunk = 0;
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
@@ -576,6 +637,8 @@ namespace items {
                         hit_creature([&](vec2 m, float dmg, float st) { centipede::violence(state, hit, hit_chunk, m, dmg, st); });
                     else if (dropbug::trace(state, room.id, pos, pos + vel, rad, hit_bug, hit_chunk))
                         hit_creature([&](vec2 m, float dmg, float st) { dropbug::violence(state, hit_bug, hit_chunk, m, dmg, st); });
+                    else if (cicada::trace(state, room.id, pos, pos + vel, rad, hit_cicada, hit_chunk))
+                        hit_creature([&](vec2 m, float dmg, float st) { cicada::violence(state, hit_cicada, hit_chunk, m, dmg, st); });
                 }
                 break;
             }
@@ -879,12 +942,15 @@ namespace items {
                 dir = custom::deg_to_vec(80.f * flip);
             w.item_set_rotation(it, dir);
         });
+        // a carried cicada (HeavyCarry)
+        cicada::carry_update(state, p);
     }
 
     void release_all(sys::game_state& state, dcon::player_id p) {
         for (uint32_t hand = 0; hand < 2; ++hand)
             if (auto const g = grasp_in_hand(state, p, hand))
                 release_grasp(state, g);
+        cicada::release_player(state, p);
     }
 
 
@@ -1068,7 +1134,18 @@ namespace items {
         spearmaster_update(state, p, room);
         if (hunter(state, p))
             back_spear_logic(state, p);
-        auto const candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f) : dcon::item_id{};
+        float item_score = 0.f, cicada_score = 0.f;
+        auto candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f, item_score) : dcon::item_id{};
+        // the creatures PickupCandidate looks at too: cicadas
+        auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::cicada_id{};
+        if (candidate && cicada_candidate) {
+            if (cicada_score < item_score)
+                candidate = dcon::item_id{};
+            else
+                cicada_candidate = dcon::cicada_id{};
+        }
+        // a carried cicada takes both hands (grasps[0], HeavyCarry)
+        auto const carried = cicada::held_by(state, p);
         int32_t& want_pick = w.player_get_want_to_pick_up(p);
         int32_t& want_throw = w.player_get_want_to_throw(p);
         if (want_pick > 0)
@@ -1077,6 +1154,10 @@ namespace items {
             --want_throw;
         if (input[0].thrw && !input[1].thrw)
             want_throw = 5;
+        if (want_throw > 0 && carried) {
+            toss_cicada(state, p, carried);
+            want_throw = 0;
+        }
         if (want_throw > 0) {
             for (uint32_t hand = 0; hand < 2; ++hand)
                 if (auto const g = grasp_in_hand(state, p, hand)) {
@@ -1107,6 +1188,14 @@ namespace items {
                     break;
                 }
         }
+        // HeavyCarry: pick up alone lets go of it (no Remix)
+        if (carried) {
+            want_pick = 0;
+            // Player.ReleaseObject
+            state.play_sound(sound::sound_id::slugcat_lay_down_creature, room.id, w.body_chunk_get_pos(cicada::chunk(state, carried, 0)));
+            cicada::release(state, carried);
+            return;
+        }
         if (drop) {
             if (!grasp_in_hand(state, p, 0) && !grasp_in_hand(state, p, 1) && back_spear(state, p)
             && w.body_chunk_get_contact_point(player::body_chunk(state, p, 0)).y < 0) {
@@ -1122,6 +1211,12 @@ namespace items {
                     release_grasp(state, g);
                     return;
                 }
+        } else if (cicada_candidate) {
+            // TwoHands: whatever the hands hold is let go of first
+            release_all(state, p);
+            state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(cicada::chunk(state, cicada_candidate, 0)));
+            cicada::grab(state, p, cicada_candidate);
+            want_pick = 0;
         } else if (candidate) {
             // a spear goes straight to the back when the hands are full
             if (hunter(state, p) && is_spear(state, candidate) && !w.player_get_back_locked(p) && !back_spear(state, p)

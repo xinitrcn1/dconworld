@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "shortcuts.hpp"
+#include "cicada.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
@@ -36,6 +37,7 @@ namespace shortcuts {
                 auto const item = w.grasp_get_grabbed(g);
                 w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             });
+            cicada::follow_player(state, p, room, false);
         }
 
         // Creature/Player.SpitOutOfShortCut
@@ -52,6 +54,7 @@ namespace shortcuts {
             w.player_set_shortcut_delay(p, 20);
             w.player_get_entering_shortcut(p).reset();
             player_graphics::reset(state, p);
+            cicada::follow_player(state, p, room.id, true);
         }
 
         // the vessel heads back to where it came from

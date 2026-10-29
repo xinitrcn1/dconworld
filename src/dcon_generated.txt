@@ -22,6 +22,8 @@
 //   centipedes: a few per realised room -> 64 (17 chunks, 136 push
 //     connections each at most, within the chunk/connection bounds)
 //   dropbugs: a few per realised room -> 64 (3 chunks, 3 connections each)
+//   cicadas: a few per realised room, swarms in some -> 64 (2 chunks, 1
+//     connection each)
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
@@ -42,6 +44,7 @@ include{"physics_types.hpp"}
 include{"player_types.hpp"}
 include{"centipede_types.hpp"}
 include{"dropbug_types.hpp"}
+include{"cicada_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -893,6 +896,90 @@ relationship{
 	link{ object{dropbug} name{dropbug} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{dropbug}
+}
+
+//
+// Creatures: Squidcada (Cicada.cs + CicadaAI), CicadaA (white) and CicadaB
+// (dark); the body is a physical_object with two chunks: head
+// (mainBodyChunk) and body
+//
+object{
+	name{cicada}
+	storage_type{erasable}
+	size{64}
+	tag{save}
+	property{ name{random} type{rw::rng} }
+	// Cicada.gender: CicadaA
+	property{ name{gender} type{uint8_t} }
+	property{ name{ivars} type{::cicada::individual_variations} }
+	// AbstractCreature.personality.bravery
+	property{ name{bravery} type{float} }
+	// Creature / HealthState
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{health} type{float} }
+	// Cicada
+	property{ name{sin_counter} type{float} }
+	property{ name{flying} type{uint8_t} }
+	property{ name{wait_to_fly_counter} type{int32_t} }
+	property{ name{flying_power} type{float} }
+	property{ name{flip_h} type{int8_t} }
+	property{ name{charge_counter} type{int32_t} }
+	property{ name{charge_dir} type{rw::vec2} }
+	// stickyCling: a player's chunk (player index + 1, 0 none)
+	property{ name{sticky_player} type{uint8_t} }
+	property{ name{sticky_chunk} type{uint8_t} }
+	property{ name{no_sticky_counter} type{int32_t} }
+	property{ name{cant_pick_up_counter} type{int32_t} }
+	property{ name{cant_pick_up_player} type{uint8_t} }
+	property{ name{sit_direction} type{rw::ivec2} }
+	property{ name{stamina} type{float} }
+	property{ name{struggle_against_player} type{float} }
+	property{ name{currently_lifting_player} type{uint8_t} }
+	property{ name{player_jump_boost} type{float} }
+	// grabbedBy: the player holding it (index + 1, 0 none) in its grasps[0]
+	// (both hands: TwoHands), and the chunk it holds
+	property{ name{held_by} type{uint8_t} }
+	property{ name{held_chunk} type{uint8_t} }
+	// SocialMemory: the temporary like of the player (one slot, every
+	// player counts as the same one)
+	property{ name{temp_like} type{float} }
+	// CicadaAI
+	property{ name{behavior} type{::cicada::behavior} }
+	property{ name{current_utility} type{float} }
+	property{ name{destination} type{rw::ivec2} }
+	property{ name{idle_sit_spot} type{rw::ivec2} }
+	property{ name{forbidden_idle_sit_spot} type{rw::ivec2} }
+	property{ name{idle_sit_counter} type{int32_t} }
+	property{ name{no_circle_group_counter} type{int32_t} }
+	// circleGroup: the leader's index + 1 (itself when it leads), 0 none
+	property{ name{circle_leader} type{uint8_t} }
+	// order of joining, for the place in the circle
+	property{ name{circle_slot} type{uint32_t} }
+	property{ name{circle} type{::cicada::circle_group} }
+	property{ name{swoosh_to_pos} type{std::optional<rw::vec2>} }
+	property{ name{antagonize_method} type{uint8_t} }
+	property{ name{antagonize_method_counter} type{int32_t} }
+	// panicFleeCrit, focusCreature: player index + 1, 0 none
+	property{ name{panic_flee_player} type{uint8_t} }
+	property{ name{focus_player} type{uint8_t} }
+	// tracker: the player it last saw (index + 1, 0 none), whether it sees
+	// it now, and the representation's age
+	property{ name{seen_player} type{uint8_t} }
+	property{ name{sees_player} type{uint8_t} }
+	property{ name{ticks_since_seen} type{int32_t} }
+	property{ name{seen_age} type{int32_t} }
+	property{ name{last_seen_pos} type{rw::vec2} }
+	property{ name{stuck} type{::cicada::stuck_tracker} }
+	// CicadaGraphics: wings, tentacles, the body's turn and the eyes
+	property{ name{graphics} type{::cicada::graphics_state} }
+}
+relationship{
+	name{cicada_body}
+	tag{save}
+	link{ object{cicada} name{cicada} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{cicada}
 }
 
 //
