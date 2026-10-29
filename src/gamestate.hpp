@@ -113,6 +113,14 @@ namespace sys {
             std::vector<uint16_t> distance;
         };
         std::vector<path_field> path_fields;
+        // Room.ceilingTiles of the rooms dropbugs sat in (dropbug.cpp), derived
+        // from the tiles like the path fields and never saved
+        struct ceiling_tiles {
+            dcon::room_id room;
+            uint16_t geometry_version = 0;
+            std::vector<rw::ivec2> tiles;
+        };
+        std::vector<ceiling_tiles> ceiling_tile_cache;
 
         // cosmetic state, never saved (particles.hpp, water.hpp)
         struct particle {

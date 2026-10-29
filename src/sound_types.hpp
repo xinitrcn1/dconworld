@@ -50,6 +50,12 @@ namespace sound {
         centipede_attach,
         grab_corruption_tube,
         fire_spear_explode,
+        drop_bug_step,
+        drop_bug_drop_from_ceiling,
+        drop_bug_prepare_jump,
+        drop_bug_jump,
+        drop_bug_grab_creature,
+        drop_bug_voice,
         count
     };
     char const* to_string(sound_id id) noexcept;

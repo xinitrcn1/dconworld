@@ -21,6 +21,7 @@
 //   music triggers ~80 (+MSC/Watcher) -> 512
 //   centipedes: a few per realised room -> 64 (17 chunks, 136 push
 //     connections each at most, within the chunk/connection bounds)
+//   dropbugs: a few per realised room -> 64 (3 chunks, 3 connections each)
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
@@ -40,6 +41,7 @@ include{"world_types.hpp"}
 include{"physics_types.hpp"}
 include{"player_types.hpp"}
 include{"centipede_types.hpp"}
+include{"dropbug_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -812,6 +814,85 @@ relationship{
 	link{ object{centipede} name{centipede} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{centipede}
+}
+
+//
+// Creatures: Dropwig (DropBug.cs + DropBugAI), the body is a physical_object
+// with three chunks: head (mainBodyChunk), middle and tail
+//
+object{
+	name{dropbug}
+	storage_type{erasable}
+	size{64}
+	tag{save}
+	property{ name{random} type{rw::rng} }
+	// AbstractCreature.personality.dominance
+	property{ name{dominance} type{float} }
+	// Creature / HealthState
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{health} type{float} }
+	// DropBug
+	property{ name{footing_counter} type{int32_t} }
+	property{ name{out_of_water_footing} type{int32_t} }
+	property{ name{special_move_counter} type{int32_t} }
+	property{ name{special_move_destination} type{rw::ivec2} }
+	property{ name{last_followed_connection} type{::dropbug::movement_connection} }
+	property{ name{run_cycle} type{float} }
+	property{ name{sitting} type{uint8_t} }
+	property{ name{swimming} type{uint8_t} }
+	property{ name{travel_dir} type{rw::vec2} }
+	property{ name{charging} type{float} }
+	// jumpAtChunk: a player's chunk (player index + 1, 0 none), else jumpAtPos
+	property{ name{jump_at_player} type{uint8_t} }
+	property{ name{jump_at_chunk} type{uint8_t} }
+	property{ name{jump_at_pos} type{rw::vec2} }
+	property{ name{attempt_bite} type{float} }
+	property{ name{jumping} type{uint8_t} }
+	property{ name{from_ceiling_jump} type{uint8_t} }
+	property{ name{drop_anticipation} type{float} }
+	property{ name{grab_on_next_attack} type{int32_t} }
+	property{ name{release_grabbed_counter} type{int32_t} }
+	property{ name{lured_to_drop_counter} type{int32_t} }
+	property{ name{after_drop_attack_delay} type{int32_t} }
+	property{ name{carry_object_mass} type{float} }
+	property{ name{walk_backwards_dist} type{float} }
+	property{ name{stuck_shake} type{float} }
+	property{ name{in_ceiling_mode} type{float} }
+	// voiceSound still playing: ticks left of the hiss
+	property{ name{voice} type{int32_t} }
+	// grasps[0] (players only for now): index + 1, and the chunk
+	property{ name{grasp_player} type{uint8_t} }
+	property{ name{grasp_chunk} type{uint8_t} }
+	// DropBugAI
+	property{ name{behavior} type{::dropbug::behavior} }
+	property{ name{current_utility} type{float} }
+	property{ name{noise_reaction_delay} type{int32_t} }
+	// targetCreature: player index + 1, 0 none
+	property{ name{target_player} type{uint8_t} }
+	property{ name{attack_counter} type{int32_t} }
+	property{ name{idle_pos_counter} type{int32_t} }
+	property{ name{temp_idle_pos} type{rw::ivec2} }
+	property{ name{walk_with_bug} type{std::optional<rw::ivec2>} }
+	// the pathfinder's destination
+	property{ name{destination} type{rw::ivec2} }
+	// tracker: the player it last saw (index + 1, 0 none), whether it sees it now
+	property{ name{seen_player} type{uint8_t} }
+	property{ name{sees_player} type{uint8_t} }
+	property{ name{ticks_since_seen} type{int32_t} }
+	property{ name{last_seen_pos} type{rw::vec2} }
+	property{ name{utilities} type{::dropbug::utilities} }
+	property{ name{stuck} type{::dropbug::stuck_tracker} }
+	property{ name{ceiling} type{::dropbug::ceiling_module} }
+	// DropBugGraphics: legs, knees, mandibles, pinchers, antennae, tail
+	property{ name{graphics} type{::dropbug::graphics_state} }
+}
+relationship{
+	name{dropbug_body}
+	tag{save}
+	link{ object{dropbug} name{dropbug} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{dropbug}
 }
 
 //

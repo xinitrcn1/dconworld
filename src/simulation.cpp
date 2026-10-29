@@ -2,6 +2,7 @@
 
 #include "simulation.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "player.hpp"
@@ -121,6 +122,8 @@ namespace simulation {
             auto const view = world::get_room_view(state, room);
             centipede::update_room(state, view);
             centipede::collide(state, view);
+            dropbug::update_room(state, view);
+            dropbug::collide(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
             warps::update_room(state, view);

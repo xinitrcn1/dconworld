@@ -142,6 +142,28 @@ namespace rw {
             float const t = std::pow(mathf::inverse_lerp(from_a, to_a, v), exponent);
             return from_b + (to_b - from_b) * t;
         }
+        // Custom.LerpAndTick: a lerp, then at least `tick` closer
+        constexpr float lerp_and_tick(float from, float to, float l, float tick) noexcept {
+            float const v = mathf::lerp(from, to, l);
+            return v < to ? mathf::min(v + tick, to) : mathf::max(v - tick, to);
+        }
+        // Custom.SCurve
+        constexpr float s_curve(float x, float k) noexcept {
+            x = x * 2.f - 1.f;
+            if (x < 0.f) {
+                x = 1.f + x < 0.f ? -(1.f + x) : 1.f + x;
+                return k * x / (k - x + 1.f) * 0.5f;
+            }
+            k = -1.f - k;
+            return 0.5f + k * x / (k - x + 1.f) * 0.5f;
+        }
+        // Custom.DistanceToLine: signed distance of `v` to the line through l2, l1
+        inline float distance_to_line(vec2 v, vec2 l2, vec2 l1) noexcept {
+            return ((l2.y - l1.y) * v.x - (l2.x - l1.x) * v.y + l2.x * l1.y - l2.y * l1.x) / std::sqrt((l2.y - l1.y) * (l2.y - l1.y) + (l2.x - l1.x) * (l2.x - l1.x));
+        }
+        // Custom.RNV: a random unit vector from `r` (rw::rng or rw::unity_random)
+        template<typename R>
+        vec2 rnv(R& r) noexcept { return deg_to_vec(r.value() * 360.f); }
         inline constexpr ivec2 eight_directions[8] = {
             {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}
         };

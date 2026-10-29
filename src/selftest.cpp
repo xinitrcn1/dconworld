@@ -9,6 +9,7 @@
 #include "selftest.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
@@ -533,6 +534,27 @@ namespace selftest {
             centipede::destroy(gs, c);
         }
         {
+            // a dropwig waits in the ceiling, drops on the slugcat walking
+            // under it and bites it (or hunts it down after missing)
+            // (a thick ceiling: the camera doesn't see the top row of the room,
+            // and ValidCeilingSpot wants the spot and the floor under it in view)
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t y) { return y >= 15 ? '#' : ' '; }));
+            sim s(gs, pit, feet_at(3, 1));
+            auto const d = dropbug::create(gs, pit, world::room_view::middle_of_tile(20, 8));
+            s.run(100);
+            bool const waits = dropbug::sitting_in_ceiling(gs, d) && gs.world.dropbug_get_in_ceiling_mode(d) == 1.f
+                && world::room_view::get_tile_position(gs.world.body_chunk_get_pos(dropbug::chunk(gs, d, 1))).y == 14;
+            bool dropped = false;
+            bool const hurt = s.until(1500, [&] {
+                dropped = dropped || gs.world.dropbug_get_from_ceiling_jump(d);
+                return s.stun() > 0 || s.dead() || dropbug::grasped(gs, d) == s.p;
+            }, 1); // walking right, under it and on to the wall
+            char d_[96];
+            std::snprintf(d_, sizeof(d_), " waits=%d dropped=%d hurt=%d behavior=%d", int(waits), int(dropped), int(hurt), int(gs.world.dropbug_get_behavior(d)));
+            r.check("dropwig drops and bites", waits && dropped && hurt, s.describe() + d_);
+            dropbug::destroy(gs, d);
+        }
+        {
             // a rot vine across a tall room: dropping onto it holding up grabs
             // it, climbing moves along it, jumping lets go
             auto const room = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
@@ -868,6 +890,9 @@ namespace selftest {
         uint32_t deaths = 0;
         uint32_t eaten = 0;
         uint32_t lost = 0;
+        rw::rng bug_rng{0x51ED27u};
+        uint32_t bugs_in_ceiling = 0, bugs_dropped = 0, bugs_lost = 0;
+        bool bug_dropped = false;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -883,6 +908,15 @@ namespace selftest {
                 if (pathing::accessible(room, t, pathing::climber))
                     centi = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
             }
+            // and a dropwig, placed in the room's best ceiling spot like a story session does
+            dcon::dropbug_id bug;
+            for (int k = 0; k < 50 && !bug; ++k) {
+                ivec2 const t{bug_rng.range(1, std::max(2, room.width - 1)), bug_rng.range(1, std::max(2, room.height - 1))};
+                if (pathing::accessible(room, t, pathing::drop_bug))
+                    bug = dropbug::create(gs, rid, world::room_view::middle_of_tile(t), true);
+            }
+            if (bug && dropbug::sitting_in_ceiling(gs, bug))
+                ++bugs_in_ceiling;
             int32_t ix = 0, iy = 0;
             bool jmp = false;
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
@@ -908,6 +942,13 @@ namespace selftest {
                         vec2 const q = w.body_chunk_get_pos(centipede::chunk(gs, centi, i));
                         finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
                     }
+                if (bug) {
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        vec2 const q = w.body_chunk_get_pos(dropbug::chunk(gs, bug, i));
+                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    }
+                    bug_dropped = bug_dropped || w.dropbug_get_from_ceiling_jump(bug);
+                }
                 if (!finite) {
                     std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
                     ++bad;
@@ -923,6 +964,17 @@ namespace selftest {
                 }
                 centipede::destroy(gs, centi);
             }
+            if (bug) {
+                vec2 const hp = w.body_chunk_get_pos(dropbug::chunk(gs, bug, 0));
+                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
+                    ++bugs_lost;
+                    if (bugs_lost <= 5)
+                        std::printf("  dropwig left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                }
+                bugs_dropped += bug_dropped ? 1 : 0;
+                bug_dropped = false;
+                dropbug::destroy(gs, bug);
+            }
             if (w.player_get_eaten(p))
                 ++eaten;
             else if (w.player_get_dead(p))
@@ -933,6 +985,7 @@ namespace selftest {
         std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
             w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
         std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
+        std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
             auto const k = w.rot_tube_get_kind(t);

@@ -38,7 +38,8 @@ pass several `--root`s and earlier ones take priority (mergedmods over base).
 Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
 (hold down while pressing it to drop), push into a pipe entrance to travel it,
 stand still in a gate's middle zone to cycle it, K spawns a centipede at the
-cursor (Shift+K a big one, Ctrl+K removes them all), R respawn, left click teleports
+cursor (Shift+K a big one, Ctrl+K removes them all), V spawns a dropwig on the
+ceiling above the cursor (Ctrl+V removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
@@ -87,6 +88,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
 | `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
+| `src/dropbug.*` | `DropBug`/`DropBugAI`: the dropwig sitting in the ceiling, dropping on prey, pouncing, biting and carrying, its `CeilingSitModule` |
+| `src/dropbug_graphics.*` | `DropBugGraphics`: long legs and knees, mandibles, tail pincers, antennae, ceiling camouflage, `DrawSprites` with the game's elements |
 | `src/body_parts.*`, `src/sprites.hpp` | `BodyPart`/`GenericBodyPart`/`Limb` helpers and the Futile sprite/mesh commands the graphics ports hand the renderer |
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
@@ -152,6 +155,22 @@ end reaches it too, the shock kills a lighter slugcat or stuns a heavier one
 like `Centipede.Violence` (shell breaking and spears lodging aren't
 ported). The AI follows `CentipedeAI`: idle wandering by idle score, fleeing
 and hunting from a simplified tracker (sight and contact).
+
+The dropwig (`--dropbug x,y`, V) follows `DropBug`/`DropBugAI`: three
+chunks that cling to floors, walls and ceilings (its StaticWorld tile
+resistances), and a `CeilingSitModule` that scores the room's ceiling tiles
+like vanilla (floor altitude, fall risk tile, narrow spaces, the camera,
+exit distances for a ground creature) and takes the best one. There it folds
+up into the ceiling, its colour fading into the palette's camouflage, and
+waits: a slugcat walking under it makes it drop (one passing nearby makes
+it twitch, one holding a spear close by or a spear thrown at it makes it
+let go early), biting or grabbing on landing, then it hunts for a while,
+charging up and pouncing from the ground, before looking for another
+spot. A grabbed slugcat is worried and slashed loose, a dead one carried off
+(to a room exit: there are no dens). Rocks, spears and explosions hurt it
+like `DropBug.Violence`. Not ported: items it carries as bait, threats
+(nothing here scares it), rain, dens and leaving rooms, being grabbed,
+the AImap visibility terms, mud, Safari control.
 
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
@@ -320,7 +339,7 @@ palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
 anchors, plus the 4 segment tail mesh. Other ported `DrawSprites` (centipedes,
-dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
+dropwigs, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
 `rainworldmsc`, `uiSprites`, `uispritesmsc`) out of `resources.assets` in the
 game's `RainWorld_Data` (`--unity <dir>`; nothing of it is bundled). The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,

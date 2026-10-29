@@ -4,6 +4,7 @@
 
 #include "warps.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -144,6 +145,7 @@ namespace warps {
                 if (!player_usable(state, p, room) || !custom::dist_less(pos, main_chunk(state, p), suck_radius))
                     return;
                 centipede::release_player(state, p);
+                dropbug::release_player(state, p);
                 w.player_set_warp_point_cooldown(p, 80);
                 if (rw::distance(pos, main_chunk(state, p)) >= pull_radius && p != w.warp_point_get_triggered_by(wp))
                     return;
@@ -200,6 +202,13 @@ namespace warps {
                 if (w.physical_object_get_room_from_object_location(o) != room)
                     return;
                 w.centipede_set_stun(c, std::max(w.centipede_get_stun(c), 20));
+                swirl(o);
+            });
+            w.for_each_dropbug([&](dcon::dropbug_id d) {
+                auto const o = dropbug::body(state, d);
+                if (w.physical_object_get_room_from_object_location(o) != room)
+                    return;
+                w.dropbug_set_stun(d, std::max(w.dropbug_get_stun(d), 20));
                 swirl(o);
             });
             w.for_each_player([&](dcon::player_id p) {

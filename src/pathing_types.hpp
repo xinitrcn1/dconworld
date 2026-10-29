@@ -22,4 +22,10 @@ namespace pathing {
     };
     // Centipede: every surface, at one cost
     inline constexpr movement climber{{10, 10, 10, 10, 10, 0, 0}, 0};
+    // DropBug: floors and corridors at 1, poles at 1.5, walls and ceilings
+    // at 3 (it swims on the surface only: AirAndSurface)
+    inline constexpr movement drop_bug{{10, 10, 15, 30, 30, 0, 0}, 0};
+    // StandardGroundCreature: floors and corridors, poles at 2.5 (what
+    // DropBugAI measures exit distances with)
+    inline constexpr movement standard_ground{{10, 10, 25, 0, 0, 0, 0}, 0};
 }

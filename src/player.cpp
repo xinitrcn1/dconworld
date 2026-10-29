@@ -4,6 +4,7 @@
 #include "player.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
@@ -485,6 +486,7 @@ namespace player {
         items::release_all(state, id);
         rot::release_player(state, id);
         centipede::release_player(state, id);
+        dropbug::release_player(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
         if (o)
@@ -494,6 +496,7 @@ namespace player {
     void reset(sys::game_state& state, dcon::player_id id, dcon::room_id room, vec2 pos) {
         items::release_all(state, id);
         centipede::release_player(state, id);
+        dropbug::release_player(state, id);
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -2687,6 +2690,19 @@ namespace player {
                     if (d < rad) {
                         float const k = 1.f - d / rad;
                         centipede::violence(state, c, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
+                        break;
+                    }
+                }
+            });
+            w.for_each_dropbug([&](dcon::dropbug_id b) {
+                if (w.physical_object_get_room_from_object_location(dropbug::body(state, b)) != x.room.id)
+                    return;
+                for (uint32_t i = 0; i < 3; ++i) {
+                    vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, i));
+                    float const d = rw::distance(cp, at);
+                    if (d < rad) {
+                        float const k = 1.f - d / rad;
+                        dropbug::violence(state, b, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
                         break;
                     }
                 }

@@ -16,6 +16,8 @@
 #include "unity_assets.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
+#include "dropbug.hpp"
+#include "dropbug_graphics.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -1377,6 +1379,98 @@ void main() {
             });
         }
 
+        // the room's palette as DropBugGraphics.ApplyPalette reads it
+        dropbug_graphics::palette dropbug_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            dropbug_graphics::palette pal;
+            pal.black = palette_black(r, s, room);
+            pal.fog = palette_texel(r, s, room, 1, 7);
+            pal.fog_amount = 1.f - palette_texel(r, s, room, 9, 7).x;
+            pal.camo = palette_texel(r, s, room, 4, 3);
+            pal.darkness = palette_darkness(r, s, room);
+            pal.light_angle = s.world.room_get_light_angle(room);
+            return pal;
+        }
+
+        // Dropwigs through DropBugGraphics and the game's atlases
+        void build_dropbug_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            auto const pal = dropbug_palette(r, s, room.id);
+            w.for_each_dropbug([&](dcon::dropbug_id d) {
+                if (w.physical_object_get_room_from_object_location(dropbug::body(s, d)) != room.id)
+                    return;
+                cmds.clear();
+                dropbug_graphics::build(s, d, alpha, pal, cmds);
+                emit_game_cmds(r, cmds);
+            });
+        }
+
+        // Without the game's atlases: dropwigs with shapes of our own over the
+        // simulated DropBugGraphics parts: two jointed lines a leg to the
+        // knees and feet, a tapering body from the head to the tail end, the
+        // pincers, mandibles and long antennae, a faint blue sheen along the
+        // back fading into the ceiling's colour while it sits up there
+        void build_dropbugs(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            auto const pal = dropbug_palette(r, s, room.id);
+            w.for_each_dropbug([&](dcon::dropbug_id d) {
+                if (w.physical_object_get_room_from_object_location(dropbug::body(s, d)) != room.id)
+                    return;
+                auto const& g = w.dropbug_get_graphics(d);
+                auto const at = [&](auto const& part) { return rw::lerp(part.last_pos, part.pos, alpha); };
+                vec2 const head = rw::lerp(g.draw_positions[0][1], g.draw_positions[0][0], alpha);
+                vec2 const mid = rw::lerp(g.draw_positions[1][1], g.draw_positions[1][0], alpha);
+                vec2 const tail = rw::lerp(g.draw_positions[2][1], g.draw_positions[2][0], alpha);
+                vec2 const tail_end = at(g.tail_end);
+                vec2 const dir = rw::custom::dir_vec(mid, head);
+                vec2 const perp = rw::custom::perpendicular_vector(dir);
+                float const deep = mathf::lerp(g.last_deep_ceiling_mode, g.deep_ceiling_mode, alpha);
+                rw::vec3 const camo = pal.black + (pal.camo - pal.black) * 0.5f;
+                rw::vec3 const skin = pal.black + (camo - pal.black) * mathf::inverse_lerp(0.1f, 0.5f, deep);
+                rw::vec3 const sheen = rw::custom::hsl2rgb(g.hue, 0.55f, 0.65f);
+                uint32_t const body_col = to_rgba(skin + rw::vec3{0.03f, 0.03f, 0.05f});
+                // legs
+                for (int side = 0; side < 2; ++side)
+                    for (int l = 0; l < 2; ++l) {
+                        vec2 const hip = rw::lerp(head, mid, 0.3f) + perp * (side == 0 ? 3.f : -3.f) + dir * mathf::lerp(5.f, -11.f, float(l));
+                        vec2 const knee = at(g.knees[side][l]);
+                        vec2 const foot = at(g.legs[side][l]);
+                        p.line(hip, knee, 2.6f * g.legs_thickness, body_col);
+                        p.line(knee, foot, 1.4f * g.legs_thickness, body_col);
+                    }
+                // the body: a tapering chain from the head to the tail end
+                vec2 prev = head;
+                for (int i = 1; i <= 10; ++i) {
+                    float const f = float(i) / 10.f;
+                    vec2 const q = rw::custom::bezier(head + dir * 3.f, mid, tail_end, tail, f);
+                    float const wd = mathf::lerp(6.f, 2.f, f) + mathf::clamp01(std::sin(mathf::pow(f, 1.7f) * mathf::pi)) * 6.f * g.body_thickness;
+                    p.line(prev, q, wd * 1.6f, body_col);
+                    p.circle(q, wd * 0.8f, body_col);
+                    prev = q;
+                }
+                // the sheen along its back
+                float const shine = 0.25f * (1.f - mathf::lerp(g.last_ceiling_mode, g.ceiling_mode, alpha));
+                if (shine > 0.f)
+                    p.line(rw::lerp(head, mid, 0.5f), rw::lerp(mid, tail, 0.6f), 2.f, to_rgba(skin + (sheen - skin) * shine));
+                p.circle(head, 6.f, body_col);
+                // pincers, mandibles, antennae
+                for (int m = 0; m < 2; ++m) {
+                    vec2 const pin = at(g.pinchers[m]);
+                    p.line(rw::lerp(tail, tail_end, 0.8f), rw::lerp(rw::lerp(tail, tail_end, 0.8f), pin, 0.5f) + perp * (m == 0 ? -4.f : 4.f), 2.f, body_col);
+                    p.line(rw::lerp(rw::lerp(tail, tail_end, 0.8f), pin, 0.5f) + perp * (m == 0 ? -4.f : 4.f), pin, 1.f, body_col);
+                    p.line(head + dir * 4.f, at(g.mandibles[m]), 2.f, body_col);
+                    vec2 a = head;
+                    vec2 const tip = at(g.antennae[m]);
+                    for (int k = 1; k <= 6; ++k) {
+                        vec2 const q = rw::custom::bezier(head, head + dir * 30.f * g.antennae_length, tip, tip, float(k) / 6.f);
+                        p.line(a, q, mathf::lerp(1.8f, 0.8f, float(k) / 6.f), body_col);
+                        a = q;
+                    }
+                }
+            });
+        }
+
         // the sand: shaded by its slope, with fine wind ripples, its far side
         // a lighter band above the front edge
         void build_sand(state& r, sys::game_state const& s, world::room_view const& room, camera const& cam) {
@@ -2436,9 +2530,11 @@ void main() {
         // the rest of the Midground, then the Items container (seed cobs, items)
         if (atlas) {
             build_centipede_sprites(r, s, room, alpha);
+            build_dropbug_sprites(r, s, room, alpha);
             build_seed_cobs(r, s, room, alpha);
         } else {
             build_centipedes(r, s, room, alpha);
+            build_dropbugs(r, s, room, alpha);
         }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);

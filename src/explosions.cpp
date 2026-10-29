@@ -2,6 +2,7 @@
 
 #include "explosions.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -39,6 +40,19 @@ namespace explosions {
                 if (dist < d.rad) {
                     float const k = 1.f - dist / d.rad;
                     centipede::violence(state, c, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
+                    break;
+                }
+            }
+        });
+        w.for_each_dropbug([&](dcon::dropbug_id b) {
+            if (w.physical_object_get_room_from_object_location(dropbug::body(state, b)) != room.id)
+                return;
+            for (uint32_t i = 0; i < 3; ++i) {
+                vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, i));
+                float const dist = rw::distance(cp, at);
+                if (dist < d.rad) {
+                    float const k = 1.f - dist / d.rad;
+                    dropbug::violence(state, b, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
                     break;
                 }
             }
@@ -86,6 +100,13 @@ namespace explosions {
             vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, centipede::head_index(state, c)));
             if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
                 centipede::violence(state, c, centipede::head_index(state, c), vec2{0.f, 0.f}, 0.f, 120.f);
+        });
+        w.for_each_dropbug([&](dcon::dropbug_id b) {
+            if (w.physical_object_get_room_from_object_location(dropbug::body(state, b)) != room.id)
+                return;
+            vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, 0));
+            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
+                dropbug::violence(state, b, 0, vec2{0.f, 0.f}, 0.f, 120.f);
         });
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.35f, 1.2f, rw::vec3{1.f, 1.f, 0.95f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.12f, 0.6f, rw::vec3{1.f, 1.f, 1.f}, 1.f);

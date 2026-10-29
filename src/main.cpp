@@ -13,6 +13,7 @@
 
 #include "audio.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "config.h"
 #include "gamestate.hpp"
 #include "gates.hpp"
@@ -62,6 +63,7 @@ namespace {
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
             "  --centipede <x,y[,size]>  spawn a centipede (repeatable)\n"
+            "  --dropbug <x,y>     spawn a dropwig, on the ceiling above if there is one (repeatable)\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -70,7 +72,8 @@ namespace {
             "controls: arrows/WASD move, Z/Space jump, X throw, Left Shift pick up/drop\n"
             "          (hold down to drop), push into a pipe entrance to travel it,\n"
             "          R respawn, left click teleport, K spawn a centipede at the cursor\n"
-            "          (Shift+K a big one, Ctrl+K removes them all),\n"
+            "          (Shift+K a big one, Ctrl+K removes them all), V a dropwig on the\n"
+            "          ceiling above the cursor (Ctrl+V removes them all),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
@@ -302,6 +305,7 @@ int main(int argc, char* argv[]) {
     std::string script;
     std::optional<vec2> start_pos;
     std::vector<rw::vec3> spawn_centipedes; // x, y, size
+    std::vector<vec2> spawn_dropbugs;
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
@@ -340,6 +344,10 @@ int main(int argc, char* argv[]) {
             float x = 0.f, y = 0.f, sz = -1.f;
             if (std::sscanf(next().c_str(), "%f,%f,%f", &x, &y, &sz) >= 2)
                 spawn_centipedes.push_back(rw::vec3{x, y, sz});
+        } else if (a == "--dropbug") {
+            float x = 0.f, y = 0.f;
+            if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
+                spawn_dropbugs.push_back(vec2{x, y});
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -401,6 +409,8 @@ int main(int argc, char* argv[]) {
         player_graphics::set_weaver(gs, a.players[0], true);
     for (auto const& c : spawn_centipedes)
         centipede::create(gs, start, vec2{c.x, c.y}, c.z);
+    for (auto const& d : spawn_dropbugs)
+        dropbug::create(gs, start, d);
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);
@@ -456,6 +466,12 @@ int main(int argc, char* argv[]) {
             vec2 const hp = gs.world.body_chunk_get_pos(centipede::chunk(gs, c, centipede::head_index(gs, c)));
             reports::add_log("centipede at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
                 + std::to_string(int(gs.world.centipede_get_behavior(c))) + (gs.world.centipede_get_dead(c) ? " dead" : ""));
+        });
+        gs.world.for_each_dropbug([&](dcon::dropbug_id d) {
+            vec2 const hp = gs.world.body_chunk_get_pos(dropbug::chunk(gs, d, 0));
+            reports::add_log("dropbug at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
+                + std::to_string(int(gs.world.dropbug_get_behavior(d))) + (dropbug::sitting_in_ceiling(gs, d) ? " in the ceiling" : "")
+                + (gs.world.dropbug_get_dead(d) ? " dead" : ""));
         });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
@@ -599,6 +615,21 @@ int main(int argc, char* argv[]) {
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
                     auto const c = centipede::create(gs, a.room, at, (e.key.mod & SDL_KMOD_SHIFT) ? 0.9f : -1.f);
                     reports::add_log("centipede, size " + std::to_string(gs.world.centipede_get_size(c)));
+                    break;
+                }
+                case SDLK_V: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        std::vector<dcon::dropbug_id> all;
+                        w.for_each_dropbug([&](dcon::dropbug_id d) { all.push_back(d); });
+                        for (auto const d : all)
+                            dropbug::destroy(gs, d);
+                        break;
+                    }
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    auto const d = dropbug::create(gs, a.room, at);
+                    reports::add_log(std::string{"dropwig"} + (dropbug::sitting_in_ceiling(gs, d) ? " in the ceiling" : ""));
                     break;
                 }
                 case SDLK_I: {

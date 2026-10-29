@@ -40,6 +40,12 @@ namespace sound {
             "Centipede_Attach",
             "Grab_Corruption_Tube",
             "Fire_Spear_Explode",
+            "Drop_Bug_Step",
+            "Drop_Bug_Drop_From_Ceiling",
+            "Drop_Bug_Prepare_Jump",
+            "Drop_Bug_Jump",
+            "Drop_Bug_Grab_Creature",
+            "Drop_Bug_Voice",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

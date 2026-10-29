@@ -7,6 +7,7 @@
 
 #include "rot.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -993,6 +994,7 @@ namespace rot {
                 auto const pl = prey_player(p);
                 items::release_all(state, pl);
                 centipede::release_player(state, pl);
+                dropbug::release_player(state, pl);
                 release_player(state, pl);
                 player::die(state, pl);
                 w.player_set_eaten(pl, 1);

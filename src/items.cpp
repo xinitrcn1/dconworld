@@ -2,6 +2,7 @@
 
 #include "items.hpp"
 #include "centipede.hpp"
+#include "dropbug.hpp"
 #include "explosions.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
@@ -529,29 +530,33 @@ namespace items {
                     hit_wall(state, it);
                     floor_bounce = 0;
                 } else {
+                    // Weapon.INotifyOfFlyingWeapons
+                    dropbug::flying_weapon(state, room.id, pos, vel, w.item_get_thrown_pos(it));
                     // SharedPhysics.TraceProjectileAgainstBodyChunks (creatures)
                     dcon::centipede_id hit;
+                    dcon::dropbug_id hit_bug;
                     uint32_t hit_chunk = 0;
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
-                    if (centipede::trace(state, room.id, pos, pos + vel, rad, hit, hit_chunk)) {
+                    // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
+                    auto const hit_creature = [&](auto&& violence) {
                         auto& rng = state.random;
                         auto const type = w.item_get_type(it);
                         if (type == world::item_type::bomb || type == world::item_type::flare_bomb) {
                             detonate(state, it, pos);
                         } else if (type == world::item_type::lilly_puck) {
                             // LillyPuck: cuts, then glances off
-                            centipede::violence(state, hit, hit_chunk, vel * w.body_chunk_get_mass(c), 0.7f, 10.f);
+                            violence(vel * w.body_chunk_get_mass(c), 0.7f, 10.f);
                             change_mode(state, it, weapon_mode::free);
                             vel = vel * -0.3f;
                             state.play_sound(sound::sound_id::rock_hit_creature, room.id, pos);
                         } else if (is_spear(state, it)) {
                             // Spear.HitSomething (lodging in the creature isn't ported)
-                            centipede::violence(state, hit, hit_chunk, vel * w.body_chunk_get_mass(c), 1.f, 0.f);
+                            violence(vel * w.body_chunk_get_mass(c), 1.f, 0.f);
                             if (type == world::item_type::explosive_spear) {
                                 detonate(state, it, pos);
                             } else if (type == world::item_type::electric_spear && w.item_get_charge(it) > 0) {
                                 // ElectricSpear: the charge goes into what it hit
-                                centipede::violence(state, hit, hit_chunk, vec2{0.f, 0.f}, 0.3f, 140.f);
+                                violence(vec2{0.f, 0.f}, 0.3f, 140.f);
                                 w.item_set_charge(it, int8_t(w.item_get_charge(it) - 1));
                                 state.play_sound(sound::sound_id::centipede_shock, room.id, pos, 0.7f, 1.3f);
                             }
@@ -559,14 +564,18 @@ namespace items {
                             vel *= -0.1f;
                         } else {
                             // Rock.HitSomething
-                            centipede::violence(state, hit, hit_chunk, vel * w.body_chunk_get_mass(c), 0.01f, 45.f);
+                            violence(vel * w.body_chunk_get_mass(c), 0.01f, 45.f);
                             change_mode(state, it, weapon_mode::free);
                             vel = vel * -0.5f + custom::deg_to_vec(rng.value() * 360.f) * mathf::lerp(0.1f, 0.4f, rng.value()) * rw::magnitude(vel);
                             state.play_sound(sound::sound_id::rock_hit_creature, room.id, pos);
                         }
                         w.item_set_forbidden_to_player(it, 40);
                         w.item_set_thrown_by(it, dcon::player_id{});
-                    }
+                    };
+                    if (centipede::trace(state, room.id, pos, pos + vel, rad, hit, hit_chunk))
+                        hit_creature([&](vec2 m, float dmg, float st) { centipede::violence(state, hit, hit_chunk, m, dmg, st); });
+                    else if (dropbug::trace(state, room.id, pos, pos + vel, rad, hit_bug, hit_chunk))
+                        hit_creature([&](vec2 m, float dmg, float st) { dropbug::violence(state, hit_bug, hit_chunk, m, dmg, st); });
                 }
                 break;
             }

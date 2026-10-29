@@ -71,6 +71,8 @@ add_executable(rwcpp
     src/body_parts.cpp
     src/centipede.cpp
     src/centipede_graphics.cpp
+    src/dropbug.cpp
+    src/dropbug_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp
