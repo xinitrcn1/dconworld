@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include "items.hpp"
+#include "outposts.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "dropbug.hpp"
@@ -170,7 +171,8 @@ namespace items {
             auto const c = chunk(state, it);
             w.body_chunk_set_collide_with_terrain(c, m == weapon_mode::free || m == weapon_mode::thrown);
             w.body_chunk_set_go_through_floors(c, true);
-            if (m == weapon_mode::free)
+            // (DataPearl is a PlayerCarryableItem: no Weapon spin)
+            if (m == weapon_mode::free && w.item_get_type(it) != world::item_type::data_pearl)
                 set_random_spin(state, it);
             w.item_set_mode(it, m);
         }
@@ -440,12 +442,259 @@ namespace items {
                 room_of(state, body(state, it)), w.body_chunk_get_pos(chunk(state, it)));
         }
 
+        // ExplosiveSpear.RagAttachPos(1)
+        vec2 rag_attach_pos(sys::game_state const& state, dcon::item_id it) {
+            return state.world.body_chunk_get_pos(chunk(state, it)) + state.world.item_get_rotation(it) * 15.f;
+        }
+
+        // ExplosiveSpear.ResetRag
+        void reset_rag(sys::game_state& state, dcon::item_id it, spear_extra& x) {
+            vec2 const at = rag_attach_pos(state, it);
+            for (int32_t i = 0; i < x.rag_count; ++i) {
+                x.rag[i].v[0] = at;
+                x.rag[i].v[1] = at;
+                x.rag[i].v[2] = vec2{0.f, 0.f};
+            }
+        }
+
+        // SharedPhysics.TerrainCollisionData for a point (rad 1, floors
+        // stop it from above): HorizontalCollision, VerticalCollision,
+        // SlopesVertically
+        struct point_collision {
+            vec2 pos;
+            vec2 last_pos;
+            vec2 vel;
+            ivec2 contact{0, 0};
+        };
+        void point_terrain_collision(room_view const& room, point_collision& cd) {
+            constexpr float rad = 1.f;
+            // HorizontalCollision
+            {
+                ivec2 const tp = room_view::get_tile_position(cd.last_pos);
+                bool const last_solid = room.get_tile(cd.last_pos).solid();
+                int32_t const y = room_view::get_tile_position(vec2{0.f, cd.pos.y + rad - 1.f}).y;
+                int32_t const y2 = room_view::get_tile_position(vec2{0.f, cd.pos.y - rad + 1.f}).y;
+                bool done = false;
+                if (cd.vel.x > 0.f) {
+                    int32_t const x = room_view::get_tile_position(vec2{cd.pos.x + rad + 0.01f, 0.f}).x;
+                    int32_t const x2 = room_view::get_tile_position(vec2{cd.last_pos.x + rad, 0.f}).x;
+                    for (int32_t i = x2; i <= x && !done; ++i)
+                        for (int32_t j = y2; j <= y && !done; ++j)
+                            if (room.get_tile(i, j).solid() && !room.get_tile(i - 1, j).solid() && (tp.x < i || last_solid)) {
+                                cd.pos.x = float(i) * 20.f - rad;
+                                cd.vel.x = 0.f;
+                                cd.contact.x = 1;
+                                done = true;
+                            }
+                } else if (cd.vel.x < 0.f) {
+                    int32_t const x = room_view::get_tile_position(vec2{cd.pos.x - rad - 0.01f, 0.f}).x;
+                    int32_t const x2 = room_view::get_tile_position(vec2{cd.last_pos.x - rad, 0.f}).x;
+                    for (int32_t i = x2; i >= x && !done; --i)
+                        for (int32_t j = y2; j <= y && !done; ++j)
+                            if (room.get_tile(i, j).solid() && !room.get_tile(i + 1, j).solid() && (tp.x > i || last_solid)) {
+                                cd.pos.x = (float(i) + 1.f) * 20.f + rad;
+                                cd.vel.x = 0.f;
+                                cd.contact.x = -1;
+                                done = true;
+                            }
+                }
+            }
+            // VerticalCollision (SolidFloor: floors hold what comes from above)
+            {
+                ivec2 const tp = room_view::get_tile_position(cd.last_pos);
+                bool const last_solid = room.get_tile(cd.last_pos).solid();
+                int32_t const x = room_view::get_tile_position(vec2{cd.pos.x - rad + 1.f, 0.f}).x;
+                int32_t const x2 = room_view::get_tile_position(vec2{cd.pos.x + rad - 1.f, 0.f}).x;
+                auto const solid_floor = [&](int32_t tx, int32_t ty) {
+                    auto const t = room.get_tile(tx, ty);
+                    return t.solid() || (t.t == world::terrain::floor && tp.y > ty);
+                };
+                bool done = false;
+                if (cd.vel.y > 0.f) {
+                    int32_t const yy = room_view::get_tile_position(vec2{0.f, cd.pos.y + rad + 0.01f}).y;
+                    int32_t const y2 = room_view::get_tile_position(vec2{0.f, cd.last_pos.y + rad}).y;
+                    for (int32_t i = y2; i <= yy && !done; ++i)
+                        for (int32_t j = x; j <= x2 && !done; ++j)
+                            if (room.get_tile(j, i).solid() && !room.get_tile(j, i - 1).solid() && (tp.y < i || last_solid)) {
+                                cd.pos.y = float(i) * 20.f - rad;
+                                cd.vel.y = 0.f;
+                                cd.contact.y = 1;
+                                done = true;
+                            }
+                } else if (cd.vel.y < 0.f) {
+                    int32_t const yy = room_view::get_tile_position(vec2{0.f, cd.pos.y - rad - 0.01f}).y;
+                    int32_t const y2 = room_view::get_tile_position(vec2{0.f, cd.last_pos.y - rad}).y;
+                    for (int32_t i = y2; i >= yy && !done; --i)
+                        for (int32_t j = x; j <= x2 && !done; ++j)
+                            if (solid_floor(j, i) && !solid_floor(j, i + 1) && (tp.y > i || last_solid)) {
+                                cd.pos.y = (float(i) + 1.f) * 20.f + rad;
+                                cd.vel.y = 0.f;
+                                cd.contact.y = -1;
+                                done = true;
+                            }
+                }
+            }
+            // SlopesVertically
+            {
+                using world::slope_direction;
+                ivec2 const tp = room_view::get_tile_position(cd.pos);
+                ivec2 b{0, 0};
+                slope_direction a = room.identify_slope(cd.pos);
+                vec2 const mid = room_view::middle_of_tile(cd.pos);
+                if (room.get_tile(cd.pos).t != world::terrain::slope) {
+                    if (room.identify_slope(tp.x - 1, tp.y) != slope_direction::broken && cd.pos.x - rad <= mid.x - 10.f) {
+                        a = room.identify_slope(tp.x - 1, tp.y);
+                        b.x = -1;
+                    } else if (room.identify_slope(tp.x + 1, tp.y) != slope_direction::broken && cd.pos.x + rad >= mid.x + 10.f) {
+                        a = room.identify_slope(tp.x + 1, tp.y);
+                        b.x = 1;
+                    } else if (cd.pos.y - rad < mid.y - 10.f) {
+                        if (room.identify_slope(tp.x, tp.y - 1) != slope_direction::broken) {
+                            a = room.identify_slope(tp.x, tp.y - 1);
+                            b.y = -1;
+                        }
+                    } else if (cd.pos.y + rad > mid.y + 10.f && room.identify_slope(tp.x, tp.y + 1) != slope_direction::broken) {
+                        a = room.identify_slope(tp.x, tp.y + 1);
+                        b.y = 1;
+                    }
+                }
+                if (a != slope_direction::broken) {
+                    vec2 const v = room_view::middle_of_tile(tp + b);
+                    float num;
+                    int32_t num2;
+                    if (a == slope_direction::up_left) {
+                        num = cd.pos.x - (v.x - 10.f) + (v.y - 10.f);
+                        num2 = -1;
+                    } else if (a == slope_direction::up_right) {
+                        num = 20.f - (cd.pos.x - (v.x - 10.f)) + (v.y - 10.f);
+                        num2 = -1;
+                    } else if (a == slope_direction::down_left) {
+                        num = 20.f - (cd.pos.x - (v.x - 10.f)) + (v.y - 10.f);
+                        num2 = 1;
+                    } else {
+                        num = cd.pos.x - (v.x - 10.f) + (v.y - 10.f);
+                        num2 = 1;
+                    }
+                    if (num2 == -1 && cd.pos.y <= num + rad + rad)
+                        cd.pos.y = num + rad + rad;
+                    else if (num2 == 1 && cd.pos.y >= num - rad - rad)
+                        cd.pos.y = num - rad - rad;
+                }
+            }
+        }
+
+        // ExplosiveSpear.Update's rag: a short cloth strip tied behind the
+        // head, swinging with the spear
+        void rag_update(sys::game_state& state, dcon::item_id it, spear_extra& x, room_view const& room) {
+            auto& rng = state.world.item_get_random(it);
+            int32_t const n = x.rag_count;
+            if (n < 2)
+                return;
+            vec2 const rot = state.world.item_get_rotation(it);
+            // carried through a pipe or teleported: NewRoom's ResetRag
+            if (!custom::dist_less(x.rag[0].v[0], rag_attach_pos(state, it), 200.f))
+                reset_rag(state, it, x);
+            constexpr float con_rad = 7.f;
+            for (int32_t i = 0; i < n; ++i) {
+                auto& r = x.rag[i].v;
+                float const t = float(i) / float(n - 1);
+                r[1] = r[0];
+                r[0] += r[2];
+                r[2] -= rot * mathf::inverse_lerp(1.f, 0.f, float(i)) * 0.8f;
+                r[4] = r[3];
+                r[3] = rw::normalized(r[3] + r[5] * custom::lerp_map(rw::distance(r[0], r[1]), 1.f, 18.f, 0.05f, 0.3f));
+                r[5] = rw::normalized(r[5] + custom::rnv(rng) * rng.value() * mathf::pow(mathf::inverse_lerp(1.f, 18.f, rw::distance(r[0], r[1])), 0.3f));
+                if (room.point_submerged(r[0])) {
+                    r[2] *= custom::lerp_map(rw::magnitude(r[2]), 1.f, 10.f, 1.f, 0.5f, mathf::lerp(1.4f, 0.4f, t));
+                    r[2].y += 0.05f;
+                    r[2] += custom::rnv(rng) * 0.1f;
+                } else {
+                    r[2] *= custom::lerp_map(rw::distance(r[0], r[1]), 1.f, 6.f, 0.999f, 0.7f, mathf::lerp(1.5f, 0.5f, t));
+                    r[2].y -= room.gravity * custom::lerp_map(rw::distance(r[0], r[1]), 1.f, 6.f, 0.6f, 0.f);
+                    if (i % 3 == 2 || i == n - 1) {
+                        point_collision cd{r[0], r[1], r[2]};
+                        point_terrain_collision(room, cd);
+                        r[0] = cd.pos;
+                        r[2] = cd.vel;
+                        if (cd.contact.x != 0)
+                            r[2].y *= 0.6f;
+                        if (cd.contact.y != 0)
+                            r[2].x *= 0.6f;
+                    }
+                }
+            }
+            for (int32_t j = 0; j < n; ++j) {
+                auto& r = x.rag[j].v;
+                if (j == 0) {
+                    r[0] = rag_attach_pos(state, it);
+                    r[2] = vec2{0.f, 0.f};
+                    continue;
+                }
+                auto& p = x.rag[j - 1].v;
+                vec2 dir = rw::normalized(r[0] - p[0]);
+                float const d = rw::distance(r[0], p[0]);
+                float const k = d > con_rad ? 0.5f : 0.25f;
+                r[0] += dir * (con_rad - d) * k;
+                r[2] += dir * (con_rad - d) * k;
+                p[0] -= dir * (con_rad - d) * k;
+                p[2] -= dir * (con_rad - d) * k;
+                if (j > 1) {
+                    auto& pp = x.rag[j - 2].v;
+                    dir = rw::normalized(r[0] - pp[0]);
+                    r[2] += dir * 0.2f;
+                    pp[2] -= dir * 0.2f;
+                }
+                if (j < n - 1) {
+                    auto const& nx = x.rag[j + 1].v;
+                    r[3] = rw::slerp(r[3], (p[3] * 2.f + nx[3]) / 3.f, 0.1f);
+                    r[5] = rw::slerp(r[5], (p[5] * 2.f + nx[5]) / 3.f, custom::lerp_map(rw::distance(r[1], r[0]), 1.f, 8.f, 0.05f, 0.5f));
+                }
+            }
+        }
+
+        // ElectricSpear.Update: the zappers' flicker (ResetFluxSpeed)
+        void flux_update(rw::rng& rng, spear_extra& x) {
+            for (int32_t i = 0; i < 4; ++i) {
+                x.flux_timer[i] += x.flux_speed[i];
+                if (x.flux_timer[i] > 6.2831855f) {
+                    x.flux_speed[i] = rng.value() * 0.2f + 0.025f;
+                    while (x.flux_timer[i] > 6.2831855f)
+                        x.flux_timer[i] -= 6.2831855f;
+                }
+            }
+        }
+
+        // DataPearl.Update: hidden in debris until moved, and the glimmer
+        void pearl_update(sys::game_state& state, dcon::item_id it) {
+            auto& w = state.world;
+            auto& pl = w.item_get_pearl(it);
+            auto& rng = w.item_get_random(it);
+            if (pl.hidden && !custom::dist_less(w.body_chunk_get_pos(chunk(state, it)), pl.hidden_pos, 20.f))
+                pl.hidden = false;
+            pl.last_glimmer = pl.glimmer;
+            pl.glimmer = std::sin(pl.glimmer_prog * mathf::pi) * rng.value();
+            if (pl.glimmer_prog < 1.f) {
+                pl.glimmer_prog = mathf::min(1.f, pl.glimmer_prog + pl.glimmer_speed);
+            } else if (pl.glimmer_wait > 0) {
+                --pl.glimmer_wait;
+            } else {
+                pl.glimmer_wait = rng.range(20, 40);
+                pl.glimmer_prog = 0.f;
+                pl.glimmer_speed = 1.f / mathf::lerp(5.f, 15.f, rng.value());
+            }
+        }
+
         // Spear.Update, after the Weapon/PhysicalObject update
         void spear_update(sys::game_state& state, dcon::item_id it, room_view const& room) {
             auto& w = state.world;
             auto const c = chunk(state, it);
             vec2& pos = w.body_chunk_get_pos(c);
             vec2& vel = w.body_chunk_get_vel(c);
+            // a needle lying or stuck somewhere lets go of Spearmaster and fades
+            if (w.item_get_needle(it) == 2 && w.item_get_needle_fade(it) > 0)
+                --w.item_get_needle_fade(it);
+            if (w.item_get_needle(it) == 1 && (w.item_get_mode(it) == weapon_mode::free || w.item_get_mode(it) == weapon_mode::stuck_in_wall))
+                w.item_set_needle(it, 2);
             w.item_set_last_pivot_at_tip(it, w.item_get_pivot_at_tip(it));
             w.item_set_pivot_at_tip(it, w.item_get_mode(it) == weapon_mode::thrown);
             if (w.item_get_add_poles(it)) {
@@ -542,6 +791,7 @@ namespace items {
             w.item_set_last_rotation(it, w.item_get_rotation(it));
             w.item_set_rotation(it, custom::deg_to_vec(aim(w.item_get_rotation(it)) + w.item_get_rotation_speed(it)));
             w.physical_object_set_water_retardation_immunity(o, w.item_get_mode(it) == weapon_mode::thrown ? 0.9f : 0.f);
+            w.item_set_tail_pos(it, w.body_chunk_get_last_pos(c));
 
             switch (w.item_get_mode(it)) {
             case weapon_mode::carried:
@@ -689,6 +939,14 @@ namespace items {
             // ElectricSpear: sparks while charged
             if (w.item_get_type(it) == world::item_type::electric_spear && w.item_get_charge(it) > 0 && state.random.value() < 0.02f)
                 particles::spawn(state, room.id, particles::kind::spark, w.body_chunk_get_pos(c), custom::deg_to_vec(state.random.value() * 360.f) * 2.f, 1.f, 0.15f, rw::vec3{0.7f, 0.85f, 1.f});
+            if (auto const ex = w.item_get_extra_from_item_extra(it)) {
+                if (w.item_get_type(it) == world::item_type::explosive_spear)
+                    rag_update(state, it, w.weapon_extra_get_data(ex), room);
+                else
+                    flux_update(w.item_get_random(it), w.weapon_extra_get_data(ex));
+            }
+            if (w.item_get_type(it) == world::item_type::data_pearl)
+                pearl_update(state, it);
 
             if (is_spear(state, it)) {
                 spear_update(state, it, room);
@@ -727,9 +985,14 @@ namespace items {
             auto const o = physics::create_object(state, room, d);
             physics::add_chunk(state, o, pos, 5.f, 0.07f);
             auto const it = w.create_item();
+            bool const pearl = type == world::item_type::data_pearl;
             w.item_set_type(it, type);
             w.item_set_mode(it, weapon_mode::free);
-            w.item_set_rotation(it, custom::deg_to_vec(state.random.value() * 360.f));
+            // RainWorldGame.GetNewID
+            w.item_set_seed(it, ++state.next_issued_id);
+            w.item_set_random(it, rw::rng{uint32_t(w.item_get_seed(it)) * 2654435761u | 1u});
+            // the Weapon constructor's roll (DataPearl isn't a Weapon)
+            w.item_set_rotation(it, pearl ? vec2{0.f, 1.f} : custom::deg_to_vec(state.random.value() * 360.f));
             w.item_set_last_rotation(it, w.item_get_rotation(it));
             w.item_set_rotation_speed(it, 0.f);
             w.item_set_throw_dir(it, ivec2{0, 0});
@@ -754,16 +1017,55 @@ namespace items {
             w.item_set_last_pivot_at_tip(it, 0);
             w.item_set_always_stick(it, 0);
             w.item_set_needle(it, 0);
+            w.item_set_needle_fade(it, 400);
+            w.item_set_tail_pos(it, pos);
+            // the Spear constructor's spearmasterNeedleType
+            bool const spear = type == world::item_type::spear || type == world::item_type::explosive_spear || type == world::item_type::electric_spear;
+            // (from the item's own generator, not the world's: the rooms' spawns
+            // don't shift each other's rolls)
+            w.item_set_needle_type(it, uint8_t(spear ? w.item_get_random(it).range(0, 3) : 0));
             w.item_set_charge(it, type == world::item_type::electric_spear ? 3 : 0);
             w.item_set_stalk(it, std::nullopt);
             w.item_set_stalk_length(it, 0.f);
             w.item_set_color(it, rw::vec3{1.f, 1.f, 1.f});
             w.item_set_glow(it, type == world::item_type::slime_mold ? 1.f : 0.f);
             w.item_set_burn(it, 0);
+            w.item_set_pearl(it, pearl_state{});
+            if (pearl)
+                set_pearl_type(state, it, "misc");
             w.try_create_item_body(it, o);
-            // Weapon.PlaceInRoom
+            if (type == world::item_type::explosive_spear) {
+                // the ExplosiveSpear constructor, seeded by the ID: explodeAt,
+                // then the rag's length
+                auto const ex = w.create_weapon_extra();
+                spear_extra x;
+                rw::unity_random r{w.item_get_seed(it)};
+                r.range(60, 100);
+                int32_t const inner = r.range(4, 10);
+                x.rag_count = uint8_t(custom::int_clamp(r.range(4, inner), 2, max_rag));
+                w.weapon_extra_set_data(ex, x);
+                w.try_create_item_extra(ex, it);
+            } else if (type == world::item_type::electric_spear) {
+                // the ElectricSpear constructor: electricColor (from the item's
+                // own generator), the flux speeds seeded by the ID
+                auto& own = w.item_get_random(it);
+                float const h = mathf::lerp(0.55f, 0.7f, own.value());
+                float const sa = mathf::lerp(0.8f, 1.f, own.value());
+                float const l = mathf::lerp(0.3f, 0.6f, own.value());
+                w.item_set_color(it, custom::hsl2rgb(h, sa, l));
+                auto const ex = w.create_weapon_extra();
+                spear_extra x;
+                rw::unity_random r{w.item_get_seed(it)};
+                for (int32_t i = 0; i < 4; ++i)
+                    x.flux_speed[i] = r.value() * 0.2f + 0.025f;
+                w.weapon_extra_set_data(ex, x);
+                w.try_create_item_extra(ex, it);
+            }
+            // Weapon.PlaceInRoom (DataPearl.PlaceInRoom: no spin)
             physics::hard_set_position(state, physics::chunk(state, o, 0), room_view::middle_of_tile(pos));
-            set_random_spin(state, it);
+            if (!pearl)
+                set_random_spin(state, it);
+            placed(state, it);
             return it;
         }
     }
@@ -783,6 +1085,10 @@ namespace items {
         tip = pos + rot * ((1.f - anchor) * spear_length);
     }
 
+    dcon::item_id create_on_tile(sys::game_state& state, dcon::room_id room, vec2 pos, world::item_type type) {
+        return create_weapon(state, room, pos, type);
+    }
+
     dcon::item_id create_rock(sys::game_state& state, dcon::room_id room, vec2 pos) {
         return create_weapon(state, room, pos, world::item_type::rock);
     }
@@ -791,27 +1097,104 @@ namespace items {
         auto const it = create_weapon(state, room, pos, type);
         // placed exactly, not snapped to the middle of the tile
         physics::hard_set_position(state, chunk(state, it), pos);
+        placed(state, it);
         return it;
     }
 
-    rw::vec3 pearl_color(std::string_view name) {
-        // our own colours per pearl type: an even spread of hues from the
-        // name, the plain "misc" pearls a pale grey
-        if (name.empty() || name == "misc")
-            return rw::vec3{0.8f, 0.8f, 0.82f};
-        uint32_t h = 2166136261u;
-        for (char const c : name)
-            h = (h ^ uint8_t(c)) * 16777619u;
-        float const hue = float(h % 360u) / 360.f;
-        auto const f = [&](float n) {
-            float const k = std::fmod(n + hue * 6.f, 6.f);
-            return 1.f - mathf::max(0.f, mathf::min(mathf::min(k, 4.f - k), 1.f)) * 0.55f;
+    void placed(sys::game_state& state, dcon::item_id it) {
+        auto& w = state.world;
+        // ExplosiveSpear.PlaceInRoom: ResetRag
+        if (auto const ex = w.item_get_extra_from_item_extra(it); ex && w.item_get_type(it) == world::item_type::explosive_spear)
+            reset_rag(state, it, w.weapon_extra_get_data(ex));
+        // DataPearl.PlaceInRoom: a hidden one remembers where it lies
+        auto& pl = w.item_get_pearl(it);
+        pl.hidden_pos = w.body_chunk_get_pos(chunk(state, it));
+    }
+
+    void set_pearl_type(sys::game_state& state, dcon::item_id it, std::string_view name) {
+        using pt = pearl_type;
+        struct entry {
+            std::string_view name;
+            pt type;
+            rw::vec3 main;
+            bool highlight;
+            rw::vec3 high;
         };
-        return rw::vec3{f(5.f), f(3.f), f(1.f)};
+        // DataPearl.UniquePearlMainColor / UniquePearlHighLightColor (Downpour
+        // and the Watcher on), by the lower case type name
+        constexpr rw::vec3 no{0.f, 0.f, 0.f};
+        auto const mix = [](rw::vec3 a, rw::vec3 b, float t) { return a + (b - a) * t; };
+        rw::vec3 const g7{0.7f, 0.7f, 0.7f}, wh{1.f, 1.f, 1.f}, jam{0.38431373f, 0.18431373f, 0.9843137f}, wind{0.45f, 0.15f, 0.8f}, dark{0.1f, 0.1f, 0.1f};
+        entry const table[] = {
+            {"misc", pt::misc, g7, false, no},
+            {"misc2", pt::misc2, {1.f, 0.6f, 0.9f}, true, wh},
+            {"cc", pt::cc, {0.9f, 0.6f, 0.1f}, true, {1.f, 1.f, 0.f}},
+            {"ds", pt::ds, {0.f, 0.7f, 0.1f}, false, no},
+            {"gw", pt::gw, {0.f, 0.7f, 0.5f}, true, {0.5f, 1.f, 0.5f}},
+            {"hi", pt::hi, {0.007843138f, 0.19607843f, 1.f}, true, {0.5f, 0.8f, 1.f}},
+            {"lf_bottom", pt::lf_bottom, {1.f, 0.1f, 0.1f}, false, no},
+            {"lf_west", pt::lf_west, {1.f, 0.f, 0.3f}, false, no},
+            {"sb_filtration", pt::sb_filtration, {0.1f, 0.5f, 0.5f}, false, no},
+            {"sh", pt::sh, {0.2f, 0.f, 0.1f}, true, {1.f, 0.2f, 0.6f}},
+            {"si_top", pt::si_top, {0.01f, 0.01f, 0.01f}, true, {0.1f, 0.4f, 0.6f}},
+            {"si_west", pt::si_west, {0.01f, 0.01f, 0.01f}, true, {0.1f, 0.6f, 0.4f}},
+            {"sl_bridge", pt::sl_bridge, {0.4f, 0.1f, 0.9f}, true, {1.f, 0.4f, 1.f}},
+            {"sl_moon", pt::sl_moon, {0.9f, 0.95f, 0.2f}, false, no},
+            {"sb_ravine", pt::sb_ravine, {0.01f, 0.01f, 0.01f}, true, {0.6f, 0.1f, 0.4f}},
+            {"su", pt::su, {0.5f, 0.6f, 0.9f}, false, no},
+            {"uw", pt::uw, {0.4f, 0.6f, 0.4f}, true, {1.f, 0.7f, 1.f}},
+            {"sl_chimney", pt::sl_chimney, {1.f, 0.f, 0.55f}, true, {0.8f, 0.3f, 1.f}},
+            {"red_stomach", pt::red_stomach, {0.6f, 1.f, 0.9f}, true, wh},
+            {"si_chat3", pt::si_chat3, {0.01f, 0.01f, 0.01f}, true, {0.4f, 0.1f, 0.6f}},
+            {"si_chat4", pt::si_chat4, {0.01f, 0.01f, 0.01f}, true, {0.4f, 0.6f, 0.1f}},
+            {"si_chat5", pt::si_chat5, {0.01f, 0.01f, 0.01f}, true, {0.6f, 0.1f, 0.4f}},
+            {"spearmasterpearl", pt::spearmasterpearl, {0.04f, 0.01f, 0.04f}, true, {0.95f, 0.f, 0.f}},
+            {"su_filt", pt::su_filt, {1.f, 0.75f, 0.9f}, false, no},
+            {"dm", pt::dm, {0.95686275f, 0.92156863f, 0.20784314f}, false, no},
+            {"lc", pt::lc, custom::hsl2rgb(0.34f, 1.f, 0.2f), false, no},
+            {"lc_second", pt::lc_second, {0.6f, 0.f, 0.f}, true, {0.8f, 0.8f, 0.f}},
+            {"oe", pt::oe, {0.54901963f, 0.36862746f, 0.8f}, false, no},
+            {"ms", pt::ms, {0.8156863f, 0.89411765f, 0.27058825f}, false, no},
+            {"rm", pt::rm, {0.38431373f, 0.18431373f, 0.9843137f}, true, {1.f, 0.f, 0.f}},
+            {"rivulet_stomach", pt::rivulet_stomach, {0.5882353f, 0.87058824f, 0.627451f}, false, no},
+            {"cl", pt::cl, {0.48431373f, 0.28431374f, 1.f}, true, {1.f, 0.f, 0.f}},
+            {"vs", pt::vs, {0.53f, 0.05f, 0.92f}, true, {1.f, 0.f, 1.f}},
+            {"broadcastmisc", pt::broadcast_misc, {0.9f, 0.7f, 0.8f}, true, {0.4f, 0.9f, 0.4f}},
+            {"waua", pt::waua, {0.95f, 0.2f, 0.1f}, true, {1.f, 0.4f, 0.3f}},
+            {"wora", pt::wora, mix({0.5f, 0.9f, 0.1f}, g7, 0.3f), true, mix({0.8f, 1.f, 0.5f}, wh, 0.3f)},
+            {"drone", pt::drone, {0.9f, 0.7f, 0.5f}, true, {1.f, 0.9f, 0.8f}},
+            {"abstract", pt::abstract, {0.f, 0.45f, 0.45f}, true, {0.7f, 0.58f, 0.58f}},
+            {"text_audio_talkshow", pt::text_audio_talkshow, {0.8f, 0.08f, 0.65f}, true, dark},
+            {"text_stardust", pt::text_stardust, {0.35f, 0.9f, 0.65f}, true, dark},
+            {"text_notionofself", pt::text_notionofself, {0.4f, 0.75f, 0.4f}, true, dark},
+            {"text_kitesday", pt::text_kitesday, {0.95f, 0.65f, 0.02f}, true, dark},
+            {"text_secret", pt::text_secret, {0.5f, 0.2f, 0.6f}, true, dark},
+            {"text_contempt", pt::text_contempt, mix({0.8f, 0.15f, 0.3f}, g7, 0.6f), true, dark},
+            {"audio_jam1", pt::audio_jam1, mix(jam, g7, 0.13f), true, mix({0.45f, 1.f, 0.f}, wh, 0.13f)},
+            {"audio_jam2", pt::audio_jam2, mix(jam, g7, 0.2f), true, mix({1.f, 0.8f, 0.f}, wh, 0.2f)},
+            {"audio_jam3", pt::audio_jam3, mix(jam, g7, 0.08f), true, mix({0.f, 1.f, 0.55f}, wh, 0.08f)},
+            {"audio_jam4", pt::audio_jam4, mix(jam, g7, 0.05f), true, mix({1.f, 0.f, 1.f}, wh, 0.05f)},
+            {"audio_groove", pt::audio_groove, mix(jam, g7, 0.17f), true, mix({1.f, 0.4f, 0.5f}, wh, 0.17f)},
+            {"audio_voicewind1", pt::audio_voicewind1, mix(wind, g7, 0.05f), true, mix({0.35f, 0.f, 0.2f}, wh, 0.05f)},
+            {"audio_voicewind2", pt::audio_voicewind2, mix(wind, g7, 0.1f), true, mix({0.35f, 0.2f, 0.f}, wh, 0.1f)},
+        };
+        // anything else (unknown types too) is a plain grey pearl
+        entry e = table[0];
+        for (auto const& t : table)
+            if (t.name == name)
+                e = t;
+        auto& w = state.world;
+        w.item_set_color(it, e.main);
+        auto& pl = w.item_get_pearl(it);
+        pl.type = e.type;
+        pl.has_highlight = e.highlight;
+        pl.highlight = e.high;
     }
 
     void destroy(sys::game_state& state, dcon::item_id item) {
         auto& w = state.world;
+        if (auto const ex = w.item_get_extra_from_item_extra(item))
+            w.delete_weapon_extra(ex);
         if (w.item_get_has_beam_state(item))
             reset_beam_state(state, item);
         if (auto const g = w.item_get_grasp_as_grabbed(item))
@@ -836,6 +1219,10 @@ namespace items {
             if (state.random.value() < (rock ? 0.75f : 0.6f))
                 create_weapon(state, room, room_view::middle_of_tile(w.placed_item_get_tile(pi)), w.placed_item_get_type(pi));
         });
+
+        // Room.Loaded's first pass over the placed objects: scavenger
+        // outposts and treasuries with their loot, multiplayer items
+        outposts::spawn_room(state, room);
 
         // the placed food, weapons and pearls of the room settings
         w.room_for_each_thing_location(room, [&](dcon::thing_location_id l) {
@@ -873,11 +1260,17 @@ namespace items {
                 break;
             case thing_kind::data_pearl:
             case thing_kind::unique_pearl: {
+                // DataPearl.PlaceInRoom: at the placed object's own position
                 auto const it = create(state, room, pos, item_type::data_pearl);
-                w.item_set_color(it, pearl_color(state.to_string_view(w.placed_thing_get_name(t))));
+                set_pearl_type(state, it, state.to_string_view(w.placed_thing_get_name(t)));
                 w.item_set_glow(it, w.placed_thing_get_kind(t) == thing_kind::unique_pearl ? 1.f : 0.f);
+                w.item_get_pearl(it).hidden = w.placed_thing_get_extra(t) > 0.f;
                 break;
             }
+            case thing_kind::reliable_spear:
+                // Room.Loaded: an AbstractSpear on the object's tile, always there
+                create_weapon(state, room, room_view::middle_of_tile(pos), item_type::spear);
+                break;
             default:
                 break;
             }

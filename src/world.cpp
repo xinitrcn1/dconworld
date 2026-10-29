@@ -1104,6 +1104,8 @@ namespace world {
                         {"DataPearl", thing_kind::data_pearl}, {"UniqueDataPearl", thing_kind::unique_pearl},
                         {"FlareBomb", thing_kind::flare_bomb}, {"MudPit", thing_kind::mud_pit},
                         {"TerrainHandle", thing_kind::terrain_handle},
+                        {"ScavengerOutpost", thing_kind::scav_outpost}, {"ScavengerTreasury", thing_kind::scav_treasury},
+                        {"ReliableSpear", thing_kind::reliable_spear}, {"MultiplayerItem", thing_kind::multiplayer_item},
                     };
                     auto const it = std::find_if(std::begin(kinds), std::end(kinds), [&](auto const& k) { return k.first == parts[0]; });
                     if (it != std::end(kinds)) {
@@ -1119,7 +1121,18 @@ namespace world {
                         } else if (t.kind == thing_kind::mud_pit) {
                             t.extra = f(2);
                         } else if ((t.kind == thing_kind::data_pearl || t.kind == thing_kind::unique_pearl) && d.size() > 4) {
+                            // DataPearlData: the pearl's type, then whether it lies hidden
                             t.name = text::to_lowercase_native(d[4]);
+                            t.extra = f(5) > 0.f ? 1.f : 0.f;
+                        } else if (t.kind == thing_kind::scav_outpost) {
+                            // ScavengerOutpostData: handle, panel, direction, skullSeed, pearlsSeed
+                            t.handle2 = rw::vec2{f(5), f(6)};
+                            t.extra = f(4);
+                        } else if (t.kind == thing_kind::multiplayer_item) {
+                            // MultiplayerItemData: type, panel, chance
+                            t.handle = rw::vec2{0.f, 0.f};
+                            t.name = d.empty() ? std::string{} : text::to_lowercase_native(d[0]);
+                            t.extra = d.size() > 3 ? f(3) : 1.f;
                         }
                         r.things.push_back(std::move(t));
                         continue;

@@ -26,6 +26,8 @@
 #include "daddy_graphics.hpp"
 #include "gates.hpp"
 #include "items.hpp"
+#include "item_graphics.hpp"
+#include "outposts.hpp"
 #include "physics.hpp"
 #include "player_graphics.hpp"
 #include "rot.hpp"
@@ -495,7 +497,7 @@ void main() {
                 reports::add_log("can't read the Unity data in " + r.unity_dir + ", game sprites are drawn as plain shapes");
                 return;
             }
-            char const* const names[] = {"rainWorld", "rainworldmsc", "uiSprites", "uispritesmsc"};
+            char const* const names[] = {"rainWorld", "rainworldmsc", "uiSprites", "uispritesmsc", "outpostSkulls"};
             std::vector<unity::image> images;
             std::vector<std::string> sheets;
             int width = 2, height = 2; // a white corner for untextured shapes
@@ -847,12 +849,121 @@ void main() {
         // `behind`: only the items drawn behind creatures (Hunter's back spear),
         // else every other one
         bool draw_new_item(painter& p, sys::game_state const& s, dcon::item_id it, world::item_type type, vec2 pos, float alpha);
+
+        // what the items' ApplyPalette read
+        item_graphics::palette item_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            item_graphics::palette pal;
+            pal.black = palette_black(r, s, room);
+            pal.darkness = palette_darkness(r, s, room);
+            // the story's timeline
+            pal.saint = s.story_slugcat == player::slugcat_name::saint;
+            return pal;
+        }
+
+
+        // Without the game's atlases: the outposts' pearl strings as lines
+        // (PearlString.DrawSprites' visibility rule)
+        void build_pearl_string_lines(painter& p, sys::game_state const& s, dcon::room_id room, float alpha) {
+            auto const& w = s.world;
+            w.room_for_each_outpost_location(room, [&](dcon::outpost_location_id ol) {
+                w.outpost_for_each_string_outpost(w.outpost_location_get_outpost(ol), [&](dcon::string_outpost_id so) {
+                    auto const st = w.string_outpost_get_string(so);
+                    auto const pearls = w.pearl_string_get_pearls(st);
+                    vec2 v = outposts::attached_pos(s, st);
+                    bool visible = true;
+                    for (uint32_t i = 0; i < pearls.size(); ++i) {
+                        auto const it = outposts::pearl_item(s, pearls.at(i));
+                        if (!pearls.at(i).active || !it || w.physical_object_get_room_from_object_location(items::body(s, it)) != room) {
+                            visible = false;
+                            continue;
+                        }
+                        auto const c = items::chunk(s, it);
+                        vec2 const q = rw::lerp(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c), alpha);
+                        if (visible)
+                            p.line(v, q, 1.f, col_rock);
+                        visible = true;
+                        v = q;
+                    }
+                });
+            });
+        }
+
+        // ScavengerOutpost (the Midground container, behind the creatures):
+        // through ScavengerOutpost.DrawSprites and the game's atlases, or
+        // without them its pole, antler skeleton and skulls as plain shapes
+        void build_outposts(state& r, sys::game_state const& s, world::room_view const& room) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            auto const pal = item_palette(r, s, room.id);
+            painter p{r.batch};
+            w.room_for_each_outpost_location(room.id, [&](dcon::outpost_location_id ol) {
+                auto const o = w.outpost_location_get_outpost(ol);
+                if (r.game_texture != 0) {
+                    cmds.clear();
+                    item_graphics::outpost(s, o, pal, cmds);
+                    emit_game_cmds(r, cmds);
+                    return;
+                }
+                vec2 const pos = w.outpost_get_pos(o);
+                vec2 const handle = w.outpost_get_handle(o);
+                vec2 const antler_pos = w.outpost_get_antler_pos(o);
+                float const flip = w.outpost_get_antler_flip(o);
+                p.line(pos - handle, pos + handle, 4.f, col_rock);
+                auto const points = w.outpost_get_antlers(o);
+                float const rotation = rw::custom::aim(pos, antler_pos);
+                for (int32_t side = -1; side <= 1; side += 2) {
+                    vec2 prev{0.f, 0.f};
+                    int32_t part = -1;
+                    for (uint32_t k = 0; k < points.size(); ++k) {
+                        auto const& ap = points.at(k);
+                        vec2 const q = outposts::transform_to_head_rotat(outposts::transformed_pos(ap, float(side)), antler_pos, rotation, float(side), flip);
+                        if (ap.part == part)
+                            p.line(prev, q, mathf::max(1.f, ap.rad * 0.7f), rgba(200, 196, 170));
+                        part = ap.part;
+                        prev = q;
+                    }
+                }
+                p.circle(pos + handle, 7.f, rgba(210, 205, 180));
+                p.circle(pos + handle + vec2{-2.5f, 1.f}, 1.5f, col_rock);
+                p.circle(pos + handle + vec2{2.5f, 1.f}, 1.5f, col_rock);
+            });
+        }
+
+        // DataPearl's glimmer lights (the Foreground container): a soft
+        // disc, the FlatLightBehindTerrain shader's masking by the level's
+        // depth and what is already drawn isn't reproduced
+        void build_pearl_lights(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            auto const pal = item_palette(r, s, room.id);
+            painter p{r.batch};
+            w.for_each_item([&](dcon::item_id it) {
+                if (w.item_get_type(it) != world::item_type::data_pearl || w.physical_object_get_room_from_object_location(items::body(s, it)) != room.id)
+                    return;
+                item_graphics::light l;
+                if (!item_graphics::pearl_light(s, it, alpha, pal, l) || l.rad < 0.5f)
+                    return;
+                p.glow(l.pos, l.rad, to_rgba(l.color, l.alpha), to_rgba(l.color, 0.f));
+            });
+        }
         void dangle_fruit_cmds(sys::game_state const& s, dcon::item_id it, bool rotted, vec2 pos, float alpha, rw::vec3 black, float darkness,
             std::vector<sprites::draw_cmd>& out);
 
         void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool behind) {
             auto const& world = s.world;
             painter p{r.batch};
+            static std::vector<sprites::draw_cmd> item_cmds;
+            auto const pal = item_palette(r, s, room.id);
+            // the outposts' pearl strings were added to the Items container
+            // before their pearls
+            if (!behind) {
+                if (r.game_texture != 0) {
+                    item_cmds.clear();
+                    item_graphics::pearl_strings(s, room.id, alpha, pal, item_cmds);
+                    emit_game_cmds(r, item_cmds);
+                } else {
+                    build_pearl_string_lines(p, s, room.id, alpha);
+                }
+            }
             world.for_each_item([&](dcon::item_id it) {
                 auto const o = items::body(s, it);
                 if (world.physical_object_get_room_from_object_location(o) != room.id)
@@ -872,6 +983,14 @@ void main() {
                     dangle_fruit_cmds(s, it, type == world::item_type::rotten_fruit, pos, alpha, palette_black(r, s, room.id), palette_darkness(r, s, room.id), cmds);
                     emit_game_cmds(r, cmds);
                     return;
+                }
+                // Rock, Spear and its kinds, DataPearl with the game's sprites
+                if (r.game_texture != 0) {
+                    item_cmds.clear();
+                    if (item_graphics::build(s, room, it, alpha, pal, item_cmds)) {
+                        emit_game_cmds(r, item_cmds);
+                        return;
+                    }
                 }
                 // hanging or growing: its stalk first
                 if (auto const anchor = world.item_get_stalk(it); anchor.has_value() && world.item_get_stalk_length(it) > 0.f)
@@ -2858,7 +2977,8 @@ void main() {
 
         // the sprite layers: rot tubes, back spears, creatures (midground), items, gate doors
         draw_flat([&] { build_rot(r, s, room, alpha, false); });
-        draw_flat([&] { build_items(r, s, room, alpha, true); });
+        draw_game([&] { build_outposts(r, s, room); });
+        draw_game([&] { build_items(r, s, room, alpha, true); });
         r.batch.clear();
         bool const sprites = r.slugcat_texture != 0;
         if (sprites)
@@ -2902,6 +3022,8 @@ void main() {
             if (r.show_geometry)
                 draw_geometry();
         }
+        // the Foreground container: the pearls' glimmer
+        draw_flat([&] { build_pearl_lights(r, s, room, alpha); });
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 

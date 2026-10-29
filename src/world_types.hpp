@@ -250,6 +250,11 @@ namespace world {
         flare_bomb,
         mud_pit,        // handle: the pit's size, extra: its depth
         terrain_handle, // handle: left tangent, handle2: right tangent, extra: back height
+        // the scavengers' loot (without the scavengers)
+        scav_outpost,     // handle: the pole (handlePos), handle2: (skullSeed, pearlsSeed), extra: direction
+        scav_treasury,    // handle: the radius handle
+        reliable_spear,   // ReliableSpear: always a spear
+        multiplayer_item, // MultiplayerItem: name the item type, extra the chance
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]

@@ -268,5 +268,17 @@ namespace rw {
         int32_t range(int32_t lo, int32_t hi) noexcept {
             return hi <= lo ? lo : lo + int32_t(next() % uint32_t(hi - lo));
         }
+        // Random.Range(float, float) (RangedRandom: min * t + (1 - t) * max)
+        float range(float lo, float hi) noexcept {
+            float const t = value();
+            return lo * t + (1.f - t) * hi;
+        }
+        // Random.onUnitSphere (RandomUnitVector)
+        vec3 on_unit_sphere() noexcept {
+            float const z = value() * 2.f - 1.f;
+            float const a = value() * 2.f * mathf::pi;
+            float const r = std::sqrt(mathf::max(0.f, 1.f - z * z));
+            return vec3{r * std::cos(a), r * std::sin(a), z};
+        }
     };
 }

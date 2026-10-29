@@ -74,6 +74,8 @@ namespace {
             "                      blizzard basilisk indigo peach (repeatable)\n"
             "  --daddy <x,y[,variant]>  spawn a daddy long legs (default daddy): daddy\n"
             "                      brother mother (TerrorLongLegs) hunter (repeatable)\n"
+            "  --item <x,y,kind[,pearl]>  place an item (repeatable): rock spear explosive\n"
+            "                      electric pearl (with a DataPearl type, e.g. cc)\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -325,6 +327,12 @@ int main(int argc, char* argv[]) {
     std::vector<rw::vec3> spawn_cicadas; // x, y, 1 for a CicadaA
     std::vector<std::pair<vec2, lizard::breed>> spawn_lizards;
     std::vector<std::pair<vec2, daddy::variant>> spawn_daddies;
+    struct item_spawn {
+        vec2 at;
+        world::item_type type;
+        std::string pearl;
+    };
+    std::vector<item_spawn> spawn_items;
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
@@ -390,6 +398,23 @@ int main(int argc, char* argv[]) {
                     std::fprintf(stderr, "unknown daddy long legs %s, a daddy instead\n", name);
                 spawn_daddies.push_back({vec2{x, y}, v});
             }
+        } else if (a == "--item") {
+            float x = 0.f, y = 0.f;
+            char kind[64] = "rock";
+            if (std::sscanf(next().c_str(), "%f,%f,%63s", &x, &y, kind) >= 2) {
+                std::string k = kind, pearl;
+                if (auto const comma = k.find(','); comma != std::string::npos) {
+                    pearl = k.substr(comma + 1);
+                    k.resize(comma);
+                }
+                auto t = world::item_type::rock;
+                if (k == "spear") t = world::item_type::spear;
+                else if (k == "explosive") t = world::item_type::explosive_spear;
+                else if (k == "electric") t = world::item_type::electric_spear;
+                else if (k == "pearl") t = world::item_type::data_pearl;
+                else if (k != "rock") std::fprintf(stderr, "unknown item %s, a rock instead\n", kind);
+                spawn_items.push_back({vec2{x, y}, t, pearl});
+            }
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -440,6 +465,8 @@ int main(int argc, char* argv[]) {
         gs.random.state ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
     app a{gs};
     a.slugcat = slugcat;
+    // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
+    gs.story_slugcat = slugcat;
     dcon::room_id start = gs.find_room(start_room);
     if (!start) {
         reports::add_log("unknown room \"" + start_room + "\", using the first one");
@@ -459,6 +486,11 @@ int main(int argc, char* argv[]) {
         lizard::create(gs, start, at, b);
     for (auto const& [at, v] : spawn_daddies)
         daddy::create(gs, start, at, v);
+    for (auto const& i : spawn_items) {
+        auto const it = items::create(gs, start, i.at, i.type);
+        if (!i.pearl.empty())
+            items::set_pearl_type(gs, it, i.pearl);
+    }
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);

@@ -14,6 +14,7 @@
 #include "lizard.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
+#include "outposts.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
 #include "rot.hpp"
@@ -1174,6 +1175,122 @@ namespace selftest {
             r.check("region gate cycle", opened && passable && through && reset && view.get_tile(14, 9).t == terrain::air, s.describe() + d);
         }
 
+        // a placed object from the room's settings, spawned on the first visit
+        auto const add_thing = [&](dcon::room_id room, world::thing_kind kind, vec2 pos, vec2 handle = {}, vec2 handle2 = {}, float extra = 0.f,
+                                   std::string_view name = {}) {
+            auto& w = gs.world;
+            auto const t = w.create_placed_thing();
+            w.placed_thing_set_kind(t, kind);
+            w.placed_thing_set_pos(t, pos);
+            w.placed_thing_set_handle(t, handle);
+            w.placed_thing_set_handle2(t, handle2);
+            w.placed_thing_set_extra(t, extra);
+            if (!name.empty())
+                w.placed_thing_set_name(t, gs.add_text(name));
+            w.try_create_thing_location(t, room);
+        };
+        {
+            // a placed CC pearl: its colours, the glimmer, picked up and tossed
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(30, 12, [](int32_t, int32_t) { return ' '; }));
+            add_thing(room, world::thing_kind::data_pearl, vec2{250.f, 30.f}, {}, {}, 0.f, "cc");
+            w.room_set_items_spawned(room, false);
+            items::spawn_room_items(gs, room);
+            dcon::item_id pearl;
+            w.for_each_item([&](dcon::item_id it) {
+                if (w.physical_object_get_room_from_object_location(items::body(gs, it)) == room && w.item_get_type(it) == world::item_type::data_pearl)
+                    pearl = it;
+            });
+            bool const placed = pearl && rw::distance(w.body_chunk_get_pos(items::chunk(gs, pearl)), vec2{250.f, 30.f}) < 1.f;
+            bool const colours = pearl && w.item_get_color(pearl) == rw::vec3{0.9f, 0.6f, 0.1f} && w.item_get_pearl(pearl).has_highlight
+                && w.item_get_pearl(pearl).highlight == rw::vec3{1.f, 1.f, 0.f};
+            sim s(gs, room, feet_at(11, 1));
+            float glimmer = 0.f;
+            s.until(120, [&] {
+                glimmer = std::max(glimmer, pearl ? w.item_get_pearl(pearl).glimmer : 0.f);
+                return false;
+            });
+            s.step(0, 0, false, false, true);
+            s.run(5);
+            bool const held = pearl && items::grabber(gs, pearl) == s.p;
+            s.run(10);
+            s.step(0, 0, false, true);
+            bool const tossed = pearl && !items::grabber(gs, pearl) && w.item_get_mode(pearl) == world::weapon_mode::free;
+            float const x0 = pearl ? w.body_chunk_get_pos(items::chunk(gs, pearl)).x : 0.f;
+            bool const landed = s.until(120, [&] { return pearl && w.body_chunk_get_contact_point(items::chunk(gs, pearl)).y < 0; });
+            float const dx = pearl ? w.body_chunk_get_pos(items::chunk(gs, pearl)).x - x0 : 0.f;
+            char d[160];
+            std::snprintf(d, sizeof(d), " placed=%d colours=%d glimmer=%.2f held=%d tossed=%d landed=%d dx=%.0f", int(placed), int(colours), glimmer,
+                int(held), int(tossed), int(landed), dx);
+            r.check("data pearl placed and tossed", placed && colours && glimmer > 0.f && held && tossed && landed && dx > 10.f, s.describe() + d);
+            if (pearl)
+                items::destroy(gs, pearl);
+        }
+        {
+            // a scavenger toll: the outpost's spears and pearl strings, a
+            // treasury's loot and a reliable spear, on the room's first visit
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(80, 30, [](int32_t, int32_t) { return ' '; }));
+            vec2 const post{800.f, 20.f};
+            add_thing(room, world::thing_kind::scav_outpost, post, vec2{10.f, 224.f}, vec2{25.f, 75.f}, 0.5760869f);
+            add_thing(room, world::thing_kind::scav_treasury, vec2{300.f, 30.f}, vec2{120.f, 0.f});
+            add_thing(room, world::thing_kind::reliable_spear, vec2{1400.f, 30.f});
+            uint32_t const before = w.outpost_size();
+            w.room_set_items_spawned(room, false);
+            items::spawn_room_items(gs, room);
+            dcon::outpost_id o;
+            w.room_for_each_outpost_location(room, [&](dcon::outpost_location_id l) { o = w.outpost_location_get_outpost(l); });
+            dcon::treasury_id tr;
+            w.room_for_each_treasury_location(room, [&](dcon::treasury_location_id l) { tr = w.treasury_location_get_treasury(l); });
+            uint32_t spears = 0, pearls = 0, loot = 0, reliable = 0;
+            w.for_each_item([&](dcon::item_id it) {
+                if (w.physical_object_get_room_from_object_location(items::body(gs, it)) != room)
+                    return;
+                vec2 const p = w.body_chunk_get_pos(items::chunk(gs, it));
+                auto const t = w.item_get_type(it);
+                if (t == world::item_type::data_pearl)
+                    ++pearls;
+                if (t == world::item_type::spear && p.x > 1300.f)
+                    ++reliable;
+                else if (t == world::item_type::spear && std::fabs(p.x - post.x) < 300.f)
+                    ++spears;
+                if (rw::distance(p, vec2{300.f, 30.f}) < 125.f)
+                    ++loot;
+            });
+            uint32_t strings = 0, strung = 0;
+            if (o)
+                w.outpost_for_each_string_outpost(o, [&](dcon::string_outpost_id so) {
+                    ++strings;
+                    strung += w.pearl_string_get_pearls(w.string_outpost_get_string(so)).size();
+                });
+            uint32_t const tolls = o ? w.outpost_get_toll_spears(o) : 0;
+            // the strings hang their pearls from the antlers (a soft rope: gravity
+            // stretches it a little between the constraint passes)
+            sim s(gs, room, feet_at(60, 1));
+            s.run(200);
+            float worst = 0.f;
+            if (o)
+                w.outpost_for_each_string_outpost(o, [&](dcon::string_outpost_id so) {
+                    auto const st = w.string_outpost_get_string(so);
+                    auto const ps = w.pearl_string_get_pearls(st);
+                    vec2 prev = outposts::attached_pos(gs, st);
+                    for (uint32_t i = 0; i < ps.size(); ++i) {
+                        auto const it = outposts::pearl_item(gs, ps.at(i));
+                        if (!it)
+                            continue;
+                        vec2 const p = w.body_chunk_get_pos(items::chunk(gs, it));
+                        worst = std::max(worst, rw::distance(p, prev) - ps.at(i).rad);
+                        prev = p;
+                    }
+                });
+            char d[200];
+            std::snprintf(d, sizeof(d), " outposts=%u toll=%u spears=%u strings=%u strung=%u pearls=%u loot=%u/%u reliable=%u stretch=%.1f",
+                w.outpost_size() - before, tolls, spears, strings, strung, pearls, loot, tr ? uint32_t(w.treasury_get_loot(tr)) : 0u, reliable, worst);
+            bool const ok = o && tolls >= 13 && tolls <= 24 && spears >= tolls && strings >= 5 && strings < 15 && strung >= strings && pearls >= strung
+                && tr && w.treasury_get_loot(tr) > 0 && loot >= w.treasury_get_loot(tr) && reliable == 1 && worst < 15.f;
+            r.check("scavenger toll and treasury", ok, s.describe() + d);
+        }
+
         std::printf("\n%d passed, %d failed\n", r.passed, r.failed);
         return r.failed == 0 ? 0 : 1;
     }
@@ -1398,6 +1515,13 @@ namespace selftest {
         w.for_each_item([&](dcon::item_id) { ++rocks; });
         std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
             w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
+        uint32_t tolls = 0, strung = 0, loot = 0, pearls = 0;
+        w.for_each_outpost([&](dcon::outpost_id o) { tolls += w.outpost_get_toll_spears(o); });
+        w.for_each_pearl_string([&](dcon::pearl_string_id ps) { strung += w.pearl_string_get_pearls(ps).size(); });
+        w.for_each_treasury([&](dcon::treasury_id t) { loot += w.treasury_get_loot(t); });
+        w.for_each_item([&](dcon::item_id it) { pearls += w.item_get_type(it) == world::item_type::data_pearl ? 1 : 0; });
+        std::printf("scavenger loot: %u outposts with %u toll spears and %u pearl strings (%u pearls), %u treasuries with %u items, %u data pearls placed in all\n",
+            w.outpost_size(), tolls, w.pearl_string_size(), strung, w.treasury_size(), loot, pearls);
         std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
         std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
         std::printf("squidcadas: one per room, %u sat down, %u bump attacked, %u picked up (%u carried through a pipe), %u fell out of their room\n",

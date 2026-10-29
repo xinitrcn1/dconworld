@@ -8,6 +8,7 @@
 #include "dropbug.hpp"
 #include "gates.hpp"
 #include "items.hpp"
+#include "outposts.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "rot.hpp"
@@ -133,6 +134,7 @@ namespace simulation {
             lizard::collide(state, view);
             daddy::update_room(state, view);
             daddy::collide(state, view);
+            outposts::update_room(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
             warps::update_room(state, view);

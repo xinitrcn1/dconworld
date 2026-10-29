@@ -2,7 +2,8 @@
 
 // Items: Rock and Spear (Weapon/PlayerCarryableItem) and the item half of
 // the player (Player.GrabUpdate, ThrowObject, PickupCandidate, carrying,
-// Spearmaster's needles). Spears stick in walls when thrown straight at them
+// Spearmaster's needles), data pearls (DataPearl: tossed, glimmering).
+// Spears stick in walls when thrown straight at them
 // (turning their tiles into beams) and bounce off otherwise; only Artificer
 // can pull them back out, like vanilla without Remix.
 
@@ -24,8 +25,15 @@ namespace items {
     void destroy(sys::game_state& state, dcon::item_id item);
     // any item type, placed exactly at `pos`
     dcon::item_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, world::item_type type);
-    // our own colour for a DataPearl type
-    rw::vec3 pearl_color(std::string_view name);
+    // any item type on the middle of `pos`'s tile (an abstract object
+    // realised on its WorldCoordinate, Weapon/DataPearl.PlaceInRoom)
+    dcon::item_id create_on_tile(sys::game_state& state, dcon::room_id room, rw::vec2 pos, world::item_type type);
+    // after the item was put somewhere new (PlaceInRoom/NewRoom): the
+    // explosive spear's rag follows, a hidden pearl remembers its spot
+    void placed(sys::game_state& state, dcon::item_id it);
+    // DataPearl.ApplyPalette's colours for a pearl type (lower case
+    // DataPearlType name; unknown ones are Misc)
+    void set_pearl_type(sys::game_state& state, dcon::item_id it, std::string_view name);
     // Room.Loaded on the first realisation: placed rocks from the room file
     // and RandomItemDensity rocks (no-op after the first call for a room)
     void spawn_room_items(sys::game_state& state, dcon::room_id room);

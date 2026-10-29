@@ -41,6 +41,9 @@
 //   placed things (fruit, mushrooms, molds, cobs, pearls, mud, terrain
 //     handles): ~3700 vanilla + Watcher -> 8192
 //   warp points: 85 Watcher rooms have one or two -> 1024, as many targets
+//   scavenger outposts 5 vanilla, ~10 with Downpour/Watcher -> 64, their
+//     antlers (~80 points each) and pearl strings (5-15 each) pooled;
+//     treasuries ~20 -> 64; explosive/electric spears' extras -> 4096
 //
 // Tags: `scenario` = static world data loaded from the game files,
 //       `save` = simulation state.
@@ -54,6 +57,7 @@ include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
+include{"item_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -749,17 +753,33 @@ object{
 	property{ name{pivot_at_tip} type{uint8_t} }
 	property{ name{last_pivot_at_tip} type{uint8_t} }
 	property{ name{always_stick} type{uint8_t} }
-	// Spearmaster's needles
+	// EntityID.RandomSeed (RainWorldGame.GetNewID's number): what the
+	// graphics seed their rolls with
+	property{ name{seed} type{int32_t} }
+	// its own UnityEngine.Random for the rolls of its update (the pearls'
+	// glimmer, the rag's flutter, the zappers' flicker), so items don't
+	// share a generator
+	property{ name{random} type{rw::rng} }
+	// Weapon.tailPos (the rock's trail while thrown)
+	property{ name{tail_pos} type{rw::vec2} }
+	// Spearmaster's needles: 1 still connected to the slugcat, 2 let go
+	// (spearmasterNeedle_hasConnection), the fade counter, and
+	// Spear.spearmasterNeedleType (rolled for every spear)
 	property{ name{needle} type{uint8_t} }
+	property{ name{needle_fade} type{int16_t} }
+	property{ name{needle_type} type{uint8_t} }
 	// ElectricSpear charges left
 	property{ name{charge} type{int8_t} }
 	// hanging or growing: the point it is attached to (stalk length away)
 	// until something picks it up
 	property{ name{stalk} type{std::optional<rw::vec2>} }
 	property{ name{stalk_length} type{float} }
-	// DataPearl colour, and a glow for the unique ones and the slime mold
+	// DataPearl's main colour (ElectricSpear.electricColor), and a glow for
+	// the unique pearls and the slime mold
 	property{ name{color} type{rw::vec3} }
 	property{ name{glow} type{float} }
+	// DataPearl's type, highlight colour and glimmer
+	property{ name{pearl} type{::items::pearl_state} }
 	// FlareBomb: the flash fading out, ticks
 	property{ name{burn} type{int16_t} }
 }
@@ -769,6 +789,86 @@ relationship{
 	link{ object{item} name{item} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{item}
+}
+
+// ExplosiveSpear's rag and ElectricSpear's flux, for the spears that have them
+object{
+	name{weapon_extra}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{data} type{::items::spear_extra} }
+}
+relationship{
+	name{item_extra}
+	tag{save}
+	link{ object{weapon_extra} name{extra} type{unique} }
+	link{ object{item} name{item} type{unique} }
+	primary_key{extra}
+}
+
+// ScavengerOutpost without its scavengers: the pole, the antlers
+// (DeerGraphics.Antlers rolled from skullSeed) with their skulls, and the toll
+// spears it put around itself on the room's first visit
+object{
+	name{outpost}
+	storage_type{contiguous}
+	size{64}
+	tag{save}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{handle} type{rw::vec2} }
+	property{ name{antler_flip} type{float} }
+	property{ name{antler_pos} type{rw::vec2} }
+	property{ name{paint_job} type{uint8_t} }
+	property{ name{antler_parts} type{uint8_t} }
+	property{ name{antlers} type{vector_pool{8192}{::items::antler_point}} }
+	property{ name{toll_spears} type{uint16_t} }
+}
+relationship{
+	name{outpost_location}
+	tag{save}
+	link{ object{outpost} name{outpost} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{outpost}
+}
+
+// ScavengerOutpost.PearlString: misc pearls strung from an antler tip
+object{
+	name{pearl_string}
+	storage_type{contiguous}
+	size{1024}
+	tag{save}
+	// onAntlerPos: the part, the position on it, the side
+	property{ name{on_part} type{uint8_t} }
+	property{ name{on_pos} type{uint8_t} }
+	property{ name{on_side} type{int8_t} }
+	property{ name{pearls} type{vector_pool{16384}{::items::string_pearl}} }
+}
+relationship{
+	name{string_outpost}
+	tag{save}
+	link{ object{pearl_string} name{string} type{unique} }
+	link{ object{outpost} name{outpost} type{many} index_storage{array} }
+	primary_key{string}
+}
+
+// ScavengerTreasury: what it spawned on the first visit (the loot itself is
+// ordinary items)
+object{
+	name{treasury}
+	storage_type{contiguous}
+	size{64}
+	tag{save}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{rad} type{float} }
+	property{ name{loot} type{uint16_t} }
+}
+relationship{
+	name{treasury_location}
+	tag{save}
+	link{ object{treasury} name{treasury} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{treasury}
 }
 
 //

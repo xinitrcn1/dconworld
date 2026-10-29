@@ -39,6 +39,11 @@ namespace sys {
         uint32_t tick = 0;
         // UnityEngine.Random for world level rolls (item spawns...)
         rw::rng random{0x2545F491u};
+        // RainWorldGame.nextIssuedId: the EntityID numbers handed out so far
+        int32_t next_issued_id = 0;
+        // the campaign being played (SlugcatStats.Timeline): room spawns that
+        // depend on it read this, never a player in the room
+        ::player::slugcat_name story_slugcat = ::player::slugcat_name::white;
         // sound/music requests of the last ticks, consumed by audio::update
         // (or dropped when nothing plays them)
         std::vector<sound::sound_request> sounds;

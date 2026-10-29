@@ -86,6 +86,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/player.*` | slugcat movement (`Player.cs` port); players are data container objects (co-op ready) |
 | `src/shortcuts.*` | shortcut travel: suck-in, the vessel moving along the pipe path, spit out, room to room transfers through `world_<region>.txt` connections |
 | `src/items.*` | rocks (`Rock`/`Weapon`): vanilla spawning on a room's first visit, flight/bounces/wall hits, `Player.GrabUpdate`/`ThrowObject` |
+| `src/item_graphics.*` | `Rock`, `Spear` (and explosive/electric spears, Spearmaster's needles), `DataPearl` and `ScavengerOutpost` `DrawSprites` with the game's elements |
+| `src/outposts.*` | the scavengers' loot without scavengers: `ScavengerOutpost` (toll spears, `DeerGraphics.Antlers`, `PearlString`s), `ScavengerTreasury`, story `MultiplayerItem`s |
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
 | `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
@@ -376,9 +378,21 @@ scavenger bombs (explode on impact), flare bombs (a blinding flash that
 stuns centipedes), lily pucks (cutting discs), and food and pearls that are
 tossed rather than thrown: mushrooms and glowing slime mold growing where
 placed, dangle fruit and rotten fruit hanging from the ceiling on a stalk
-until picked, data pearls coloured by type (unique ones glow). The placed
-ones come from the room settings; a few random spears are explosive or
-electric. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand at
+until picked, data pearls in their type's colours with their highlight
+and glimmer (`DataPearl`). The placed ones come from the room settings,
+`ReliableSpear`s and story `MultiplayerItem`s too; a few random spears are
+explosive or electric. Scavenger outposts stand without their scavengers:
+the pole, the antlers (`DeerGraphics.Antlers` rolled from the outpost's
+skull seed) and skulls, strings of misc pearls hanging from the antler
+tips, and 13 to 24 toll spears lying around; treasuries spread spears
+(three in four explosive), bombs and pearls on the floor around them
+(lanterns aren't ported). The toll, the guards and theft aren't modelled.
+Rocks, spears (the explosive spear's rag swings, the electric spear's
+zappers flicker) and pearls are drawn with the game's sprites
+(`Rock`/`Spear`/`ExplosiveSpear`/`ElectricSpear`/`DataPearl` DrawSprites);
+the rag's and the pole's JaggedSquare edges, the antlers' OutPostAntler
+paint (approximated from its formula with hashed noise) and the pearls'
+FlatLightBehindTerrain glow (a plain soft disc) are approximations. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand at
 rest. Dangle fruit (with its stalk), corn plants and centipedes are drawn
 like vanilla (`DangleFruit`, `SeedCob` and `CentipedeGraphics` DrawSprites)
 with the game's own sprites, read from its Unity data at startup; the corn

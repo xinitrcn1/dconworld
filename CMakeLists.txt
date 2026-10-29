@@ -65,6 +65,8 @@ add_executable(rwcpp
     src/selftest.cpp
     src/shortcuts.cpp
     src/items.cpp
+    src/outposts.cpp
+    src/item_graphics.cpp
     src/gates.cpp
     src/simulation.cpp
     src/pathing.cpp
