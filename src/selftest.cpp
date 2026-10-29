@@ -16,6 +16,7 @@
 #include "warps.hpp"
 #include "particles.hpp"
 #include "water.hpp"
+#include "terrain.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
 
@@ -786,6 +787,45 @@ namespace selftest {
             r.check("artificer explodes under water", blew && drown == 0.f && w.player_get_air_in_lungs(s.p) > 0.5f && flash, s.describe() + d);
         }
         {
+            // sand: standing on it leaves a shallow mark without sinking in;
+            // a sandstorm works the dunes towards smooth sine dunes again
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(60, 20, [](int32_t, int32_t) { return ' '; }));
+            for (int k = 0; k < 5; ++k) {
+                auto const t = w.create_placed_thing();
+                w.placed_thing_set_kind(t, world::thing_kind::terrain_handle);
+                w.placed_thing_set_pos(t, vec2{100.f + float(k) * 250.f, 120.f + (k % 2 == 0 ? 0.f : 40.f)});
+                w.placed_thing_set_handle(t, vec2{-80.f, 0.f});
+                w.placed_thing_set_handle2(t, vec2{80.f, 0.f});
+                w.placed_thing_set_extra(t, 20.f);
+                w.try_create_thing_location(t, room);
+            }
+            sim s(gs, room, vec2{600.f, 200.f});
+            s.run(5);
+            auto const* sand = ::terrain::sand(gs, room);
+            float const before = sand ? ::terrain::sand_height(*sand, 600.f) : 0.f;
+            s.run(400);
+            float const after = sand ? ::terrain::sand_height(*sand, 600.f) : 0.f;
+            bool const on_top = s.pos(1).y - 8.f >= after - 1.f && s.contact(1).y == -1;
+            // a storm, the slugcat out of the way
+            player::reset(gs, s.p, room, vec2{40.f, 300.f});
+            auto const rough = [&] {
+                float worst = 0.f;
+                for (size_t i = 1; i + 1 < sand->h.size(); ++i)
+                    worst = std::max(worst, std::fabs(sand->h[i - 1] - 2.f * sand->h[i] + sand->h[i + 1]));
+                return worst;
+            };
+            float const rough0 = rough();
+            gs.storm = true;
+            s.run(3000);
+            gs.storm = false;
+            float const rough1 = rough();
+            gs.particles.clear();
+            char d[160];
+            std::snprintf(d, sizeof(d), " sand=%d mark=%.2f on_top=%d roughness %.3f -> %.3f", int(sand != nullptr), before - after, int(on_top), rough0, rough1);
+            r.check("sand marks and sandstorm", sand && before - after > 0.2f && before - after < 8.f && on_top && rough1 < rough0, s.describe() + d);
+        }
+        {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';
@@ -910,6 +950,7 @@ namespace selftest {
         // every connected room exit pipe: sit in the entrance, push into it and
         // expect to come out in the connected room
         uint32_t pipes = 0, arrived = 0;
+        std::vector<std::string> failed_pipes;
         w.for_each_shortcut([&](dcon::shortcut_id sc) {
             if (w.shortcut_get_type(sc) != world::shortcut_type::room_exit)
                 return;
@@ -924,6 +965,7 @@ namespace selftest {
             ++pipes;
             player::reset(gs, p, rid, world::room_view::middle_of_tile(start) - vec2{0.f, 8.f});
             auto const in = player::make_input(float(-dir.x), float(-dir.y), false, false, false);
+            uint32_t const before = arrived;
             for (uint32_t t = 0; t < 2400; ++t) {
                 simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
                 if (simulation::player_room(gs, p) == target && !w.player_get_in_shortcut(p)) {
@@ -931,8 +973,12 @@ namespace selftest {
                     break;
                 }
             }
+            if (arrived == before && failed_pipes.size() < 10)
+                failed_pipes.push_back(std::string{gs.to_string_view(w.room_get_name(rid))} + " (" + std::to_string(start.x) + "," + std::to_string(start.y) + ")");
         });
         std::printf("pipes: %u of %u connected room exits delivered the slugcat\n", arrived, pipes);
+        for (auto const& f : failed_pipes)
+            std::printf("  pipe stuck: %s\n", f.c_str());
         player::destroy(gs, p);
         return bad == 0 ? 0 : 1;
     }

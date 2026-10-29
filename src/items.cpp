@@ -2,6 +2,8 @@
 
 #include "items.hpp"
 #include "centipede.hpp"
+#include "explosions.hpp"
+#include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
@@ -17,6 +19,29 @@ namespace items {
     namespace {
         // Weapon.exitThrownModeSpeed
         constexpr float exit_thrown_mode_speed = 30.f;
+
+        // Weapons fly and hurt; the rest (food, pearls) is only tossed
+        bool is_weapon(world::item_type t) {
+            using world::item_type;
+            return t == item_type::rock || t == item_type::spear || t == item_type::explosive_spear || t == item_type::electric_spear
+                || t == item_type::bomb || t == item_type::flare_bomb || t == item_type::lilly_puck;
+        }
+
+        // what goes off after the update loop (items can't be destroyed while it walks them)
+        struct pending_blast {
+            dcon::item_id item;
+            vec2 at;
+        };
+        std::vector<pending_blast>& blasts() {
+            static std::vector<pending_blast> v;
+            return v;
+        }
+        void detonate(sys::game_state& state, dcon::item_id it, vec2 at) {
+            for (auto const& b : blasts())
+                if (b.item == it)
+                    return;
+            blasts().push_back({it, at});
+        }
 
         // Custom.AimFromOneVectorToAnother(0, v)
         float aim(vec2 v) {
@@ -48,7 +73,8 @@ namespace items {
         }
 
         bool is_spear(sys::game_state const& state, dcon::item_id it) {
-            return state.world.item_get_type(it) == world::item_type::spear;
+            auto const t = state.world.item_get_type(it);
+            return t == world::item_type::spear || t == world::item_type::explosive_spear || t == world::item_type::electric_spear;
         }
 
         // Weapon.SetRandomSpin / Spear.SetRandomSpin
@@ -198,6 +224,14 @@ namespace items {
             w.body_chunk_set_last_pos(c, w.body_chunk_get_pos(c));
             w.body_chunk_set_pos(c, thrown_pos);
             vec2& vel = w.body_chunk_get_vel(c);
+            if (!is_weapon(w.item_get_type(it))) {
+                // PlayerCarryableItem: tossed, not thrown
+                vel = main_vel * 0.5f + vec2{float(throw_dir.x) * 6.f, 4.f + float(throw_dir.y) * 6.f};
+                change_mode(state, it, weapon_mode::free);
+                w.item_set_forbidden_to_player(it, 10);
+                state.play_sound(sound::sound_id::slugcat_throw_rock, room_of(state, body(state, it)), thrown_pos, 0.5f);
+                return;
+            }
             if (throw_dir.x != 0) {
                 vel.y = main_vel.y * 0.5f;
                 vel.x = main_vel.x * 0.2f;
@@ -337,6 +371,8 @@ namespace items {
             }
             change_mode(state, it, weapon_mode::carried);
             w.item_set_thrown_by(it, dcon::player_id{});
+            // picked off its stalk (DangleFruit, Mushroom, SlimeMold)
+            w.item_set_stalk(it, std::nullopt);
             state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_pick_up_spear : sound::sound_id::slugcat_pick_up_rock,
                 room_of(state, body(state, it)), w.body_chunk_get_pos(chunk(state, it)));
         }
@@ -486,6 +522,9 @@ namespace items {
                     w.item_set_throw_mode_frames(it, -1);
                     w.item_set_rotation(it, rw::to_vec2(throw_dir));
                     w.item_set_rotation_speed(it, 0.f);
+                } else if ((w.item_get_type(it) == world::item_type::bomb || w.item_get_type(it) == world::item_type::flare_bomb) && contact != ivec2{0, 0}) {
+                    // ScavengerBomb/FlareBomb: anything hard sets them off
+                    detonate(state, it, pos);
                 } else if (contact == throw_dir) {
                     hit_wall(state, it);
                     floor_bounce = 0;
@@ -496,9 +535,26 @@ namespace items {
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     if (centipede::trace(state, room.id, pos, pos + vel, rad, hit, hit_chunk)) {
                         auto& rng = state.random;
-                        if (is_spear(state, it)) {
+                        auto const type = w.item_get_type(it);
+                        if (type == world::item_type::bomb || type == world::item_type::flare_bomb) {
+                            detonate(state, it, pos);
+                        } else if (type == world::item_type::lilly_puck) {
+                            // LillyPuck: cuts, then glances off
+                            centipede::violence(state, hit, hit_chunk, vel * w.body_chunk_get_mass(c), 0.7f, 10.f);
+                            change_mode(state, it, weapon_mode::free);
+                            vel = vel * -0.3f;
+                            state.play_sound(sound::sound_id::rock_hit_creature, room.id, pos);
+                        } else if (is_spear(state, it)) {
                             // Spear.HitSomething (lodging in the creature isn't ported)
                             centipede::violence(state, hit, hit_chunk, vel * w.body_chunk_get_mass(c), 1.f, 0.f);
+                            if (type == world::item_type::explosive_spear) {
+                                detonate(state, it, pos);
+                            } else if (type == world::item_type::electric_spear && w.item_get_charge(it) > 0) {
+                                // ElectricSpear: the charge goes into what it hit
+                                centipede::violence(state, hit, hit_chunk, vec2{0.f, 0.f}, 0.3f, 140.f);
+                                w.item_set_charge(it, int8_t(w.item_get_charge(it) - 1));
+                                state.play_sound(sound::sound_id::centipede_shock, room.id, pos, 0.7f, 1.3f);
+                            }
                             change_mode(state, it, weapon_mode::free);
                             vel *= -0.1f;
                         } else {
@@ -526,6 +582,28 @@ namespace items {
 
             if (w.item_get_mode(it) != weapon_mode::carried && w.item_get_mode(it) != weapon_mode::on_back)
                 physics::update_object(state, room, o, nullptr, nullptr);
+
+            // hanging or growing on its stalk
+            if (auto const anchor = w.item_get_stalk(it); anchor.has_value() && w.item_get_mode(it) == weapon_mode::free) {
+                vec2& pos = w.body_chunk_get_pos(c);
+                vec2& vel = w.body_chunk_get_vel(c);
+                float const len = w.item_get_stalk_length(it);
+                if (len <= 0.f) {
+                    pos = *anchor;
+                    vel = vec2{0.f, 0.f};
+                } else if (!custom::dist_less(pos, *anchor, len)) {
+                    vec2 const dir = custom::dir_vec(*anchor, pos);
+                    pos = *anchor + dir * len;
+                    vel -= dir * rw::dot(vel, dir);
+                    vel *= 0.98f;
+                }
+            }
+            // ExplosiveSpear: goes off where it sticks
+            if (w.item_get_type(it) == world::item_type::explosive_spear && w.item_get_mode(it) == weapon_mode::stuck_in_wall)
+                detonate(state, it, w.body_chunk_get_pos(c));
+            // ElectricSpear: sparks while charged
+            if (w.item_get_type(it) == world::item_type::electric_spear && w.item_get_charge(it) > 0 && state.random.value() < 0.02f)
+                particles::spawn(state, room.id, particles::kind::spark, w.body_chunk_get_pos(c), custom::deg_to_vec(state.random.value() * 360.f) * 2.f, 1.f, 0.15f, rw::vec3{0.7f, 0.85f, 1.f});
 
             if (is_spear(state, it)) {
                 spear_update(state, it, room);
@@ -591,6 +669,12 @@ namespace items {
             w.item_set_last_pivot_at_tip(it, 0);
             w.item_set_always_stick(it, 0);
             w.item_set_needle(it, 0);
+            w.item_set_charge(it, type == world::item_type::electric_spear ? 3 : 0);
+            w.item_set_stalk(it, std::nullopt);
+            w.item_set_stalk_length(it, 0.f);
+            w.item_set_color(it, rw::vec3{1.f, 1.f, 1.f});
+            w.item_set_glow(it, type == world::item_type::slime_mold ? 1.f : 0.f);
+            w.item_set_burn(it, 0);
             w.try_create_item_body(it, o);
             // Weapon.PlaceInRoom
             physics::hard_set_position(state, physics::chunk(state, o, 0), room_view::middle_of_tile(pos));
@@ -616,6 +700,29 @@ namespace items {
 
     dcon::item_id create_rock(sys::game_state& state, dcon::room_id room, vec2 pos) {
         return create_weapon(state, room, pos, world::item_type::rock);
+    }
+
+    dcon::item_id create(sys::game_state& state, dcon::room_id room, vec2 pos, world::item_type type) {
+        auto const it = create_weapon(state, room, pos, type);
+        // placed exactly, not snapped to the middle of the tile
+        physics::hard_set_position(state, chunk(state, it), pos);
+        return it;
+    }
+
+    rw::vec3 pearl_color(std::string_view name) {
+        // our own colours per pearl type: an even spread of hues from the
+        // name, the plain "misc" pearls a pale grey
+        if (name.empty() || name == "misc")
+            return rw::vec3{0.8f, 0.8f, 0.82f};
+        uint32_t h = 2166136261u;
+        for (char const c : name)
+            h = (h ^ uint8_t(c)) * 16777619u;
+        float const hue = float(h % 360u) / 360.f;
+        auto const f = [&](float n) {
+            float const k = std::fmod(n + hue * 6.f, 6.f);
+            return 1.f - mathf::max(0.f, mathf::min(mathf::min(k, 4.f - k), 1.f)) * 0.55f;
+        };
+        return rw::vec3{f(5.f), f(3.f), f(1.f)};
     }
 
     void destroy(sys::game_state& state, dcon::item_id item) {
@@ -645,6 +752,52 @@ namespace items {
                 create_weapon(state, room, room_view::middle_of_tile(w.placed_item_get_tile(pi)), w.placed_item_get_type(pi));
         });
 
+        // the placed food, weapons and pearls of the room settings
+        w.room_for_each_thing_location(room, [&](dcon::thing_location_id l) {
+            auto const t = w.thing_location_get_thing(l);
+            vec2 const pos = w.placed_thing_get_pos(t);
+            using world::thing_kind;
+            using world::item_type;
+            switch (w.placed_thing_get_kind(t)) {
+            case thing_kind::dangle_fruit:
+            case thing_kind::rotten_fruit: {
+                auto const it = create(state, room, pos, w.placed_thing_get_kind(t) == thing_kind::dangle_fruit ? item_type::dangle_fruit : item_type::rotten_fruit);
+                // DangleFruit hangs from the ceiling above it
+                for (float up = 20.f; up < 400.f; up += 10.f) {
+                    if (view.get_tile(pos + vec2{0.f, up}).solid()) {
+                        vec2 const anchor{pos.x, room_view::middle_of_tile(pos + vec2{0.f, up}).y - 10.f};
+                        w.item_set_stalk(it, anchor);
+                        w.item_set_stalk_length(it, mathf::max(8.f, anchor.y - pos.y));
+                        break;
+                    }
+                }
+                break;
+            }
+            case thing_kind::mushroom:
+            case thing_kind::slime_mold: {
+                auto const it = create(state, room, pos, w.placed_thing_get_kind(t) == thing_kind::mushroom ? item_type::mushroom : item_type::slime_mold);
+                w.item_set_stalk(it, pos);
+                w.item_set_stalk_length(it, 0.f);
+                break;
+            }
+            case thing_kind::lilly_puck:
+                create(state, room, pos, item_type::lilly_puck);
+                break;
+            case thing_kind::flare_bomb:
+                create(state, room, pos, item_type::flare_bomb);
+                break;
+            case thing_kind::data_pearl:
+            case thing_kind::unique_pearl: {
+                auto const it = create(state, room, pos, item_type::data_pearl);
+                w.item_set_color(it, pearl_color(state.to_string_view(w.placed_thing_get_name(t))));
+                w.item_set_glow(it, w.placed_thing_get_kind(t) == thing_kind::unique_pearl ? 1.f : 0.f);
+                break;
+            }
+            default:
+                break;
+            }
+        });
+
         if (w.room_get_is_shelter(room) || w.room_get_is_gate(room))
             return;
         float const density = w.room_get_random_item_density(room);
@@ -662,9 +815,12 @@ namespace items {
                 }
             if (!ok)
                 continue;
-            // (explosive/electric spear rolls aren't ported)
-            if (state.random.value() < spear_chance)
-                create_spear(state, room, room_view::middle_of_tile(t));
+            // a few of the random spears are explosive or electric (Downpour's rolls simplified)
+            if (state.random.value() < spear_chance) {
+                float const roll = state.random.value();
+                create_weapon(state, room, room_view::middle_of_tile(t),
+                    roll < 0.06f ? world::item_type::explosive_spear : roll < 0.1f ? world::item_type::electric_spear : world::item_type::spear);
+            }
             else
                 create_rock(state, room, room_view::middle_of_tile(t));
         }
@@ -676,6 +832,18 @@ namespace items {
             if (room_of(state, body(state, it)) == room.id)
                 update_item(state, it, room);
         });
+        // bombs and explosive spears that went off this tick
+        auto pending = std::move(blasts());
+        blasts().clear();
+        for (auto const& b : pending) {
+            if (!w.item_is_valid(b.item))
+                continue;
+            if (w.item_get_type(b.item) == world::item_type::flare_bomb)
+                explosions::flash(state, room, b.at, 400.f);
+            else
+                explosions::explode(state, room, b.at, explosions::desc{110.f, 7.f, 1.6f, 80.f, 45.f}, body(state, b.item));
+            destroy(state, b.item);
+        }
     }
 
     dcon::item_id held(sys::game_state const& state, dcon::player_id p, uint32_t hand) {

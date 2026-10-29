@@ -52,6 +52,17 @@ namespace world {
     enum class item_type : uint8_t {
         rock,
         spear,
+        explosive_spear, // ExplosiveSpear: goes off when it hits
+        electric_spear,  // ElectricSpear: shocks what it hits while charged
+        bomb,            // ScavengerBomb: explodes on impact
+        flare_bomb,      // FlareBomb: a blinding flash on impact
+        lilly_puck,      // LillyPuck: a disc weapon that cuts
+        mushroom,
+        slime_mold,      // the glowing orange mold
+        dangle_fruit,
+        rotten_fruit,    // Watcher's RottenDangleFruit
+        data_pearl,
+        count
     };
 
     // Weapon.Mode
@@ -221,6 +232,24 @@ namespace world {
         spawn_items, // SpawnItems
         cool_down,   // CoolDown
         closed,      // Closed: used up
+    };
+
+    // the placed objects that become items or plants (DangleFruit, Mushroom,
+    // SlimeMold, SeedCob, LillyPuck, DataPearl, FlareBomb, MudPit, TerrainHandle...)
+    enum class thing_kind : uint8_t {
+        dangle_fruit,
+        rotten_fruit,
+        mushroom,
+        slime_mold,
+        seed_cob,
+        dead_seed_cob,
+        rotten_seed_cob,
+        lilly_puck,
+        data_pearl,
+        unique_pearl,
+        flare_bomb,
+        mud_pit,        // handle: the pit's size, extra: its depth
+        terrain_handle, // handle: left tangent, handle2: right tangent, extra: back height
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]

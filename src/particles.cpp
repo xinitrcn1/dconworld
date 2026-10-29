@@ -3,6 +3,7 @@
 
 #include "particles.hpp"
 #include "water.hpp"
+#include "terrain.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 
@@ -149,7 +150,8 @@ namespace particles {
         auto& w = state.world;
         auto& r = random();
         // RoomRain: streaks from the top of the room
-        float const rain = mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
+        // (a storm over sand is a sandstorm, terrain.cpp blows that)
+        float const rain = terrain::sand_if_built(state, room.id) ? 0.f : mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
         if (rain > 0.f) {
             float const want = rain * room.pixel_width() / 260.f;
             int n = int(want);

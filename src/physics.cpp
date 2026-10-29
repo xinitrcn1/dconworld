@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "physics.hpp"
+#include "terrain.hpp"
 
 namespace physics {
     using rw::ivec2;
@@ -419,6 +420,8 @@ namespace physics {
             if (state.world.body_chunk_get_collide_with_slopes(c))
                 check_against_slopes_vertically(ch, room);
             check_horizontal_collision(ch, room, impact);
+            // the Watcher's sand (terrain.hpp)
+            ::terrain::collide_chunk(state, room, c);
         } else {
             ch.contact = ivec2{0, 0};
         }

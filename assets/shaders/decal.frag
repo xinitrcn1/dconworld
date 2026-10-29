@@ -1,6 +1,6 @@
 // A decal painted onto the level: only over the level pixels whose depth is
 // within the decal's range, fogged with the room's palette like the level
-// itself. Drawn once per room camera image it overlaps, split like the level
+// itself; out of the sun it sinks into the surface, fainter. Drawn once per room camera image it overlaps, split like the level
 // into the pass behind the sprites (depths 5+) and the one in front.
 
 in vec2 v_room;
@@ -38,8 +38,15 @@ void main() {
         discard;
     vec3 fog = texelFetch(u_palette, ivec3(1, 0, u_index), 0).rgb;
     float fog_amount = texelFetch(u_palette, ivec3(9, 0, u_index), 0).r;
-    // deeper paint sinks into the haze, and a little into the shade
-    vec3 col = c.rgb * mix(1.0, 0.75, d);
+    // the level's own colour under the paint (its depth and facing in the palette)
+    bool sunlit = level.r > 90;
+    int facing = ((level.r - 1) / 30) % 3;
+    vec3 shade = texelFetch(u_palette, ivec3(depth, abs(facing - 7), u_index), 0).rgb;
+    // in the shade the paint is mostly multiplied into the surface and much
+    // fainter; in the sun it shows its own colour
+    vec3 col = sunlit ? c.rgb : mix(c.rgb * shade * 1.6, shade, 0.35);
+    float a = c.a * v_opacity * (sunlit ? 1.0 : 0.25 + 0.25 * v_opacity);
+    col *= mix(1.0, 0.8, d);
     col = mix(col, fog, (1.0 - fog_amount) * d);
-    o_color = vec4(col, c.a * v_opacity);
+    o_color = vec4(col, a);
 }

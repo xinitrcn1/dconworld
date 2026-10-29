@@ -73,6 +73,8 @@ add_executable(rwcpp
     src/warps.cpp
     src/water.cpp
     src/particles.cpp
+    src/explosions.cpp
+    src/terrain.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

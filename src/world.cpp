@@ -171,6 +171,14 @@ namespace world {
             // CustomDecalData.vertices: per corner opacity and smudge
             rw::vec2 uv[4] = {{0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}};
         };
+        struct parsed_thing {
+            thing_kind kind = thing_kind::dangle_fruit;
+            rw::vec2 pos{0.f, 0.f};
+            rw::vec2 handle{0.f, 0.f};
+            rw::vec2 handle2{0.f, 0.f};
+            float extra = 0.f;
+            std::string name;
+        };
         struct parsed_shortcut {
             rw::ivec2 start;
             rw::ivec2 dest;
@@ -213,6 +221,7 @@ namespace world {
             std::vector<parsed_warp> warps;
             std::vector<parsed_warp_target> warp_targets;
             std::vector<parsed_decal> decals;
+            std::vector<parsed_thing> things;
 
             room_view view() const noexcept {
                 room_view v;
@@ -686,6 +695,17 @@ namespace world {
                 dc.warp_placed_set_seed(wid, o.seed);
                 dc.try_create_warp_placed_location(wid, rid);
             }
+            for (auto const& o : r.things) {
+                auto const tid = dc.create_placed_thing();
+                dc.placed_thing_set_kind(tid, o.kind);
+                dc.placed_thing_set_pos(tid, o.pos);
+                dc.placed_thing_set_handle(tid, o.handle);
+                dc.placed_thing_set_handle2(tid, o.handle2);
+                dc.placed_thing_set_extra(tid, o.extra);
+                if (!o.name.empty())
+                    dc.placed_thing_set_name(tid, s.add_text(o.name));
+                dc.try_create_thing_location(tid, rid);
+            }
             for (auto const& o : r.decals) {
                 auto const did = dc.create_decal_placed();
                 dc.decal_placed_set_pos(did, o.pos);
@@ -1073,6 +1093,37 @@ namespace world {
                         w.one_way_entrance = true;
                     r.warps.push_back(std::move(w));
                     continue;
+                }
+                {
+                    // food, weapons, pearls, plants, mud and terrain handles
+                    static constexpr std::pair<std::string_view, thing_kind> kinds[] = {
+                        {"DangleFruit", thing_kind::dangle_fruit}, {"RottenDangleFruit", thing_kind::rotten_fruit},
+                        {"Mushroom", thing_kind::mushroom}, {"SlimeMold", thing_kind::slime_mold},
+                        {"SeedCob", thing_kind::seed_cob}, {"DeadSeedCob", thing_kind::dead_seed_cob},
+                        {"RottenSeedCob", thing_kind::rotten_seed_cob}, {"LillyPuck", thing_kind::lilly_puck},
+                        {"DataPearl", thing_kind::data_pearl}, {"UniqueDataPearl", thing_kind::unique_pearl},
+                        {"FlareBomb", thing_kind::flare_bomb}, {"MudPit", thing_kind::mud_pit},
+                        {"TerrainHandle", thing_kind::terrain_handle},
+                    };
+                    auto const it = std::find_if(std::begin(kinds), std::end(kinds), [&](auto const& k) { return k.first == parts[0]; });
+                    if (it != std::end(kinds)) {
+                        parsed_thing t;
+                        t.kind = it->second;
+                        t.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                        auto const d = parts.size() > 3 ? split(parts[3], "~") : std::vector<std::string_view>{};
+                        auto const f = [&](size_t i) { return i < d.size() && !d[i].empty() ? num(d[i]) : 0.f; };
+                        t.handle = rw::vec2{f(0), f(1)};
+                        if (t.kind == thing_kind::terrain_handle) {
+                            t.handle2 = rw::vec2{f(2), f(3)};
+                            t.extra = f(4);
+                        } else if (t.kind == thing_kind::mud_pit) {
+                            t.extra = f(2);
+                        } else if ((t.kind == thing_kind::data_pearl || t.kind == thing_kind::unique_pearl) && d.size() > 4) {
+                            t.name = text::to_lowercase_native(d[4]);
+                        }
+                        r.things.push_back(std::move(t));
+                        continue;
+                    }
                 }
                 if (parts[0] == "CustomDecal") {
                     // QuadObjectData handles, then CustomDecalData.FromString

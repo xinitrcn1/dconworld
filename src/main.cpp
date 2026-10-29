@@ -20,6 +20,7 @@
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "render.hpp"
+#include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
 #include "reports.hpp"
@@ -592,6 +593,17 @@ int main(int argc, char* argv[]) {
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
                     auto const c = centipede::create(gs, a.room, at, (e.key.mod & SDL_KMOD_SHIFT) ? 0.9f : -1.f);
                     reports::add_log("centipede, size " + std::to_string(gs.world.centipede_get_size(c)));
+                    break;
+                }
+                case SDLK_I: {
+                    // spawns the next kind of item at the cursor
+                    static uint8_t next = uint8_t(world::item_type::explosive_spear);
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    items::create(gs, a.room, at, world::item_type(next));
+                    if (++next >= uint8_t(world::item_type::count))
+                        next = uint8_t(world::item_type::rock);
                     break;
                 }
                 case SDLK_P: paused = !paused; break;

@@ -1180,6 +1180,14 @@ namespace rot {
             w.rot_system_set_gw_mode(s, (is("gw") || is("cl")) && !artificer);
             w.rot_system_set_effect_color(s, region ? w.region_get_corruption_effect_color(region) : rw::vec3{0.f, 0.f, 1.f});
             w.rot_system_set_eye_color(s, region ? w.region_get_corruption_eye_color(region) : rw::vec3{0.f, 0.f, 1.f});
+            // the Watcher's sentient rot (DaddyCorruption.SentientRotMode): the
+            // Outer Rim's and the rot regions' is purple
+            bool watcher = false;
+            w.for_each_player([&](dcon::player_id p) { watcher = watcher || w.player_get_stats(p).name == player::slugcat_name::watcher; });
+            if (is("wora") || is("wrsa") || is("wsur") || (watcher && rname.size() > 1 && (rname[0] == 'w' || rname[0] == 'W'))) {
+                w.rot_system_set_effect_color(s, rw::vec3{0.5f, 0.12f, 0.72f});
+                w.rot_system_set_eye_color(s, rw::vec3{0.75f, 0.35f, 1.f});
+            }
         }
 
         // bulbs, a few per tile, more where the rot is thick

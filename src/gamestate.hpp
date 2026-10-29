@@ -145,6 +145,23 @@ namespace sys {
             uint32_t last_used = 0;
         };
         std::vector<water_surface> waters;
+        // a room's sand (terrain.hpp): its ground height every few pixels,
+        // built from the TerrainHandles and reshaped while playing (not saved)
+        struct sand_field {
+            dcon::room_id room;
+            float x0 = 0.f;
+            float spacing = 4.f;
+            std::vector<float> h;    // current surface
+            std::vector<float> back; // height of the dune's far side above it (the 3D band)
+            float left = 0.f;        // the handles' span: no sand outside it
+            float right = 0.f;
+            float mean = 0.f;        // the sandstorm's resting level
+            float amplitude = 0.f;   // and its dunes
+            float phase = 0.f;
+            uint32_t last_used = 0;
+        };
+        std::vector<sand_field> sands;
+
 
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;

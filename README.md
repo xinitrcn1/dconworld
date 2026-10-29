@@ -46,7 +46,8 @@ step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
 Rivulet, Spearmaster, Saint, Sofanthiel, Watcher (0 again toggles the
 Watcher's Void Weaver decorations), E holds the Watcher's ability
 (camouflage, levitation; gamepad north button), `[`/`]` lower/raise the
-Watcher's ripple level (any other slugcat's karma), F6 toggles a rain storm, M plays a song of the
+Watcher's ripple level (any other slugcat's karma), F6 toggles a rain storm
+(a sandstorm over sand), I spawns the next kind of item at the cursor, M plays a song of the
 region (again for another one; the game itself has long silent stretches),
 Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
 pick up with a free hand; Hunter stows a held spear on its back (or takes it
@@ -88,6 +89,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
 | `src/particles.*` | cosmetic particles: rain, ceiling drips, splash droplets, hit sparks and flashes, landing dust, bubbles |
+| `src/terrain.*` | the Watcher's sand (a deformable height map from the TerrainHandles, sandstorms) and mud pits |
+| `src/explosions.*` | bombs, explosive spears, the Artificer: blast, damage, flash; FlareBomb's blinding flash |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
@@ -234,6 +237,31 @@ along it leaves a wake. It is cosmetic: creatures still float on the flat
 water level. Rain and drops stop at the surface, rippling it. The
 Artificer can't drown: a third of its breath gone, it explodes under water
 (throwing everything close away, hurting centipedes).
+
+### Items, plants, sand and mud
+
+Besides rocks and spears there are explosive spears (go off where they hit
+or stick), electric spears (three charges of shock for what they hit),
+scavenger bombs (explode on impact), flare bombs (a blinding flash that
+stuns centipedes), lily pucks (cutting discs), and food and pearls that are
+tossed rather than thrown: mushrooms and glowing slime mold growing where
+placed, dangle fruit and rotten fruit hanging from the ceiling on a stalk
+until picked, data pearls coloured by type (unique ones glow). The placed
+ones come from the room settings; a few random spears are explosive or
+electric. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand and
+sway. All of them, like the centipedes, are drawn with simple shapes of our
+own; centipedes are a chain of overlapping shell plates with jointed legs,
+feelers and pincers, in an earthy brown take on their colour. Eating isn't
+ported.
+
+The Watcher's sand is a 1D height map built from the room's TerrainHandles
+(a spline through them) the first time the room is used, kept for the
+session only. Bodies stand on it; their weight slowly presses marks into
+it and pushes the sand aside, and slopes too steep for sand slump. A
+sandstorm (F6 in a room with sand) blows sand through the air and slowly
+works the dunes back into smooth sine dunes. Mud pits drag and slowly
+swallow whatever walks in. Rot in the Outer Rim and the rot regions is the
+Watcher's purple.
 
 ### Audio
 

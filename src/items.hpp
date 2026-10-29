@@ -7,6 +7,7 @@
 // can pull them back out, like vanilla without Remix.
 
 #include <cstdint>
+#include <string_view>
 
 #include "gamestate.hpp"
 #include "math.hpp"
@@ -21,6 +22,10 @@ namespace items {
     void spear_ends(sys::game_state const& state, dcon::item_id spear, float alpha, rw::vec2& tail, rw::vec2& tip);
     inline constexpr float spear_length = 44.f;
     void destroy(sys::game_state& state, dcon::item_id item);
+    // any item type, placed exactly at `pos`
+    dcon::item_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, world::item_type type);
+    // our own colour for a DataPearl type
+    rw::vec3 pearl_color(std::string_view name);
     // Room.Loaded on the first realisation: placed rocks from the room file
     // and RandomItemDensity rocks (no-op after the first call for a room)
     void spawn_room_items(sys::game_state& state, dcon::room_id room);

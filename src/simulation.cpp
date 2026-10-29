@@ -10,6 +10,7 @@
 #include "warps.hpp"
 #include "particles.hpp"
 #include "water.hpp"
+#include "terrain.hpp"
 #include "shortcuts.hpp"
 #include "world.hpp"
 
@@ -22,6 +23,7 @@ namespace simulation {
 
     void activate_room(sys::game_state& state, dcon::room_id room) {
         items::spawn_room_items(state, room);
+        terrain::sand(state, room);
         rot::spawn_room(state, room);
         warps::spawn_room(state, room);
     }
@@ -123,6 +125,7 @@ namespace simulation {
             rot::update_room(state, view);
             warps::update_room(state, view);
             water::update_room(state, view);
+            terrain::update_room(state, view);
             particles::ambient(state, view);
             gates::update_room(state, room);
         }
