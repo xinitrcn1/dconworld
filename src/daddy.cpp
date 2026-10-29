@@ -40,14 +40,17 @@ namespace daddy {
             return p[uint32_t(v)];
         }
 
-        ctx::ctx(sys::game_state& s, dcon::daddy_id id, room_view const& r, std::vector<tentacle_work>& t, std::vector<ivec2>& sc)
-            : state{s}, d{id}, room{r}, rng{s.world.daddy_get_random(id)}, z{s.world.daddy_get_core(id)}, a{s.world.daddy_get_ai(id)}, tents{t}, scratch{sc} {
+        ctx::ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::vector<tentacle_work>& t, std::vector<ivec2>& sc)
+            : state{s}, d{id}, room{r}, rng{s.world.creature_get_random(id)}, z{s.world.daddy_data_get_core(creature::daddy_data(s.world, id))}, a{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id))},
+              seen_player{s.world.creature_get_seen_player(id)}, sees_player{s.world.creature_get_sees_player(id)},
+              ticks_since_seen{s.world.creature_get_ticks_since_seen(id)}, last_seen_pos{s.world.creature_get_last_seen_pos(id)},
+              destination{s.world.creature_get_destination(id)}, tents{t}, scratch{sc} {
             n = std::min(chunk_count(s, id), max_chunks);
             for (uint32_t i = 0; i < n; ++i)
                 chunks[i] = chunk(s, id, i);
-            v = s.world.daddy_get_variant(id);
-            size_class = s.world.daddy_get_size_class(id) != 0;
-            hd = s.world.daddy_get_hd(id) != 0;
+            v = s.world.creature_get_payload(id).daddy.variant;
+            size_class = s.world.creature_get_payload(id).daddy.size_class != 0;
+            hd = s.world.creature_get_payload(id).daddy.hd != 0;
             mother = v == variant::mother;
             prox = &pathing::ai_terrain_proximity_map(s, r.id);
         }
@@ -65,15 +68,16 @@ namespace daddy {
                 m += mass(i);
             return m;
         }
-        dcon::player_id ctx::tracked() const { return player_of(state, a.player); }
+        dcon::player_id ctx::tracked() const { return player_of(state, seen_player); }
 
         void load(ctx& x) {
             auto& w = x.state.world;
-            auto const& parts = w.daddy_get_parts(x.d);
-            x.tents.resize(parts.tentacle_count);
-            for (uint32_t i = 0; i < parts.tentacle_count; ++i) {
+            uint32_t const nt = tentacle_count(x.state, x.d);
+            x.tents.resize(nt);
+            for (uint32_t i = 0; i < nt; ++i) {
                 auto& tw = x.tents[i];
-                tw.id = dcon::daddy_tentacle_id{dcon::daddy_tentacle_id::value_base_t(parts.tentacles[i])};
+                tw.part = tentacle_part(x.state, x.d, i);
+                tw.id = tentacle_data(w, tw.part);
                 tw.t = w.daddy_tentacle_get_t(tw.id);
                 auto const segs = w.daddy_tentacle_get_segments(tw.id);
                 tw.segments.assign(segs.begin(), segs.end());
@@ -125,19 +129,19 @@ namespace daddy {
 
         // Tracker.SeeCreature: what the tentacles feel is what it knows of
         void see_player(ctx& x, dcon::player_id p) {
-            x.a.player = player_ref(p);
+            x.seen_player = player_ref(p);
             x.a.seen_this_tick = 1;
-            x.a.visual_contact = 1;
-            x.a.ticks_since_seen = 0;
-            x.a.last_seen_pos = x.state.world.body_chunk_get_pos(player::body_chunk(x.state, p, 0));
+            x.sees_player = 1;
+            x.ticks_since_seen = 0;
+            x.last_seen_pos = x.state.world.body_chunk_get_pos(player::body_chunk(x.state, p, 0));
         }
 
         // BestGuessForPosition: where the slugcat is while it is felt, else
         // where it was last felt (the ghosts wandering off aren't ported)
         ivec2 best_guess(ctx& x) {
-            if (auto const p = x.tracked(); p && x.a.visual_contact && player_here(x.state, p, x.room.id))
+            if (auto const p = x.tracked(); p && x.sees_player && player_here(x.state, p, x.room.id))
                 return room_view::get_tile_position(x.state.world.body_chunk_get_pos(player::body_chunk(x.state, p, 0)));
-            return room_view::get_tile_position(x.a.last_seen_pos);
+            return room_view::get_tile_position(x.last_seen_pos);
         }
         vec2 hunted_pos(ctx& x) { return room_view::middle_of_tile(best_guess(x)); }
     }
@@ -151,7 +155,7 @@ namespace daddy {
         // CreatureTemplate.damageRestistances[Explosion, 0]
         constexpr float explosion_resistance = 0.03f;
 
-        dcon::room_id room_of(sys::game_state const& state, dcon::daddy_id d) {
+        dcon::room_id room_of(sys::game_state const& state, dcon::creature_id d) {
             return state.world.physical_object_get_room_from_object_location(body(state, d));
         }
 
@@ -179,7 +183,7 @@ namespace daddy {
         // made at most every 10 ticks while the old one still connects
         pathing::field_id destination_field(ctx& x) {
             auto& a = x.a;
-            ivec2 const dest = clamp_to_room(x.room, a.destination);
+            ivec2 const dest = clamp_to_room(x.room, x.destination);
             if (a.has_path_goal) {
                 auto const f = pathing::field_to(x.state, x.room.id, a.path_goal, pathing::daddy);
                 if (pathing::distance(x.state, f, dest) != pathing::unreachable && (x.here() != a.path_goal || dest == a.path_goal)) {
@@ -223,7 +227,7 @@ namespace daddy {
         // PathFinder.GetEffectualDestination: the destination, or where it
         // is when it can't get there
         ivec2 effectual_destination(ctx& x) {
-            return destination_reachable(x) ? x.a.destination : x.here();
+            return destination_reachable(x) ? x.destination : x.here();
         }
 
         // StandardPather.FollowPath from tile `from`: the next tile towards
@@ -276,7 +280,7 @@ namespace daddy {
                 auto& s = nt.sources[i];
                 float const m = s.player == 0 ? rw::distance(s.pos, noise.pos) + 200.f + float(s.age) / 5.f
                                               : noise_match_player(x, noise.pos) + float(s.age) / 5.f;
-                float const lim = s.player != 0 ? custom::lerp_map(float(x.a.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f) : 300.f;
+                float const lim = s.player != 0 ? custom::lerp_map(float(x.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f) : 300.f;
                 if (m < num2 && m < lim) {
                     num2 = m;
                     src = &s;
@@ -289,12 +293,12 @@ namespace daddy {
                 }
             } else {
                 uint8_t rep = 0;
-                if (x.a.player != 0) {
+                if (x.seen_player != 0) {
                     float const m = noise_match_player(x, noise.pos);
-                    float const lim = custom::lerp_map(float(x.a.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f);
-                    int32_t const unseen = x.a.visual_contact ? 0 : 1;
+                    float const lim = custom::lerp_map(float(x.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f);
+                    int32_t const unseen = x.sees_player ? 0 : 1;
                     if (m < lim && m <= custom::lerp_map(float(unseen), 0.f, 10.f, 1000.f, 300.f))
-                        rep = x.a.player;
+                        rep = x.seen_player;
                 }
                 if (rep == 0) {
                     nt.mysterious_noises += 1.f;
@@ -318,10 +322,10 @@ namespace daddy {
             // TheorizedSource.Refresh
             src->pos = noise.pos;
             src->age = 0;
-            if (src->player != 0 && src->player == x.a.player) {
+            if (src->player != 0 && src->player == x.seen_player) {
                 // HeardThisCreature: it knows where the slugcat is again
-                x.a.ticks_since_seen = std::min(x.a.ticks_since_seen, 20);
-                x.a.last_seen_pos = noise.pos;
+                x.ticks_since_seen = std::min(x.ticks_since_seen, 20);
+                x.last_seen_pos = noise.pos;
             }
             uint16_t const id = src->id;
             update_examine_sound(x);
@@ -332,7 +336,7 @@ namespace daddy {
                 x.a.react_target = room_view::get_tile_position(noise.pos);
                 x.a.react_noise_time = 60;
                 x.a.new_idle_pos_counter = 300;
-                x.a.destination = x.a.react_target;
+                x.destination = x.a.react_target;
                 return;
             }
             // Creature.Deafen
@@ -353,7 +357,7 @@ namespace daddy {
                     continue;
                 }
                 ++s.age;
-                if (s.player != 0 && s.player != x.a.player)
+                if (s.player != 0 && s.player != x.seen_player)
                     s.player = 0;
                 if (s.age > nt.forget_time)
                     s.slated_for_deletion = 1;
@@ -375,13 +379,13 @@ namespace daddy {
         }
 
         // the representation's ghost generation: a ghost spreads every 10 ticks
-        float generation(ctx const& x) { return float(x.a.ticks_since_seen) / 10.f; }
+        float generation(ctx const& x) { return float(x.ticks_since_seen) / 10.f; }
 
         // Tracker.CreatureRepresentation.EstimatedChanceOfFinding
         float chance_of_finding(ctx const& x) {
-            if (x.a.visual_contact)
+            if (x.sees_player)
                 return 1.f;
-            float const num = (generation(x) * 10.f + float(x.a.ticks_since_seen)) / 4.f;
+            float const num = (generation(x) * 10.f + float(x.ticks_since_seen)) / 4.f;
             if (num < 45.f)
                 return mathf::clamp(1.f / -(1.f + std::exp(-(num / 12.f - 5.f))) + 1.007f, 0.f, 1.f);
             return 1.f / (num - 7.f) * 30.f;
@@ -408,17 +412,17 @@ namespace daddy {
                 for (auto const& n : x.state.noises(x.room.id))
                     if (n.source != body(x.state, x.d))
                         heard_noise(x, n, hearing);
-            a.current = behavior::idle;
+            x.set_current(behavior::idle);
             --a.react_noise_time;
             // UtilityComparer: prey at 1, noise at 0.1 (rain isn't ported)
             float const prey = prey_utility(x);
             float const noise = listens ? noise_utility(x) * 0.1f : 0.f;
             if (mathf::max(prey, noise) > 0.01f)
-                a.current = prey >= noise ? behavior::hunt : behavior::examine_sound;
-            if (x.hd && a.current == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
-                a.current = behavior::examine_sound;
-            ivec2& dest = a.destination;
-            if (a.current == behavior::idle) {
+                x.set_current(prey >= noise ? behavior::hunt : behavior::examine_sound);
+            if (x.hd && x.current() == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
+                x.set_current(behavior::examine_sound);
+            ivec2& dest = x.destination;
+            if (x.current() == behavior::idle) {
                 --a.new_idle_pos_counter;
                 if (a.new_idle_pos_counter < 1 || !reachable_and_getbackable(x, dest)) {
                     int32_t const tx = x.rng.range(0, x.room.width);
@@ -439,12 +443,12 @@ namespace daddy {
                     if (reachable_and_getbackable(x, c) && float_dist(c, x.here()) >= 7.f)
                         dest = c;
                 }
-            } else if (a.current == behavior::examine_sound) {
+            } else if (x.current() == behavior::examine_sound) {
                 if (a.react_noise_time > 0)
                     dest = a.react_target;
                 else if (auto const* s = source(a, a.noise.sound_to_examine))
                     dest = room_view::get_tile_position(s->pos);
-            } else if (a.current == behavior::hunt) {
+            } else if (x.current() == behavior::hunt) {
                 ivec2 const g = best_guess(x);
                 bool flag = false;
                 for (int32_t k = 0; k < 5 && !flag; ++k)
@@ -454,7 +458,7 @@ namespace daddy {
                     }
                 for (uint32_t k = 0; k < x.tents.size() && !flag; ++k) {
                     auto const& tw = x.tents[k];
-                    if (tw.t.hunt_player != a.player || tw.grab_path.empty() || !pathing::accessible(x.room, tw.grab_path[0], pathing::daddy))
+                    if (tw.t.hunt_player != x.seen_player || tw.grab_path.empty() || !pathing::accessible(x.room, tw.grab_path[0], pathing::daddy))
                         continue;
                     for (size_t m = 0; m + 1 < tw.grab_path.size() && !flag; ++m) {
                         bool flag2 = false;
@@ -470,15 +474,15 @@ namespace daddy {
                     dest = g;
             }
             // a random representation, forgotten when its ghosts are too old
-            if (a.player != 0) {
+            if (x.seen_player != 0) {
                 x.rng.range(0, 1);
-                if (generation(x) > 100.f || !player_of(x.state, a.player) || x.state.world.player_get_eaten(player_of(x.state, a.player)))
-                    a.player = 0;
+                if (generation(x) > 100.f || !player_of(x.state, x.seen_player) || x.state.world.player_get_eaten(player_of(x.state, x.seen_player)))
+                    x.seen_player = 0;
             }
             // ArtificialIntelligence.Update: the modules
             if (!a.seen_this_tick) {
-                a.visual_contact = 0;
-                ++a.ticks_since_seen;
+                x.sees_player = 0;
+                ++x.ticks_since_seen;
             }
             a.seen_this_tick = 0;
             if (listens)
@@ -491,7 +495,7 @@ namespace daddy {
 
         // Creature.Die
         void die(ctx& x) {
-            x.state.world.daddy_set_dead(x.d, 1);
+            x.state.world.creature_set_dead(x.d, 1);
         }
 
         // DaddyLongLegs.Stun
@@ -504,7 +508,7 @@ namespace daddy {
             }
             if (!x.hd)
                 st = x.size_class ? 0 : st / 3;
-            int32_t& s = x.state.world.daddy_get_stun(x.d);
+            int32_t& s = x.state.world.creature_get_stun(x.d);
             s = std::max(s, st);
         }
 
@@ -513,7 +517,7 @@ namespace daddy {
         std::optional<ivec2> check_tentacles_for_accessible_terrain(ctx& x) {
             vec2 p = x.pos(0);
             float num = float_max;
-            vec2 const goal = room_view::middle_of_tile(x.a.destination);
+            vec2 const goal = room_view::middle_of_tile(x.destination);
             for (auto const& tw : x.tents)
                 for (auto const& c : tw.c) {
                     ivec2 const t = room_view::get_tile_position(c.pos);
@@ -544,7 +548,7 @@ namespace daddy {
             ivec2 const eff = effectual_destination(x);
             ivec2 const at = x.here();
             // (no stuckPos: the placed object daddies are kept to isn't ported)
-            if (z.not_following_path_counter < 200 && eff != x.a.destination)
+            if (z.not_following_path_counter < 200 && eff != x.destination)
                 ++z.not_following_path_counter;
             else if (z.not_following_path_counter > 0)
                 --z.not_following_path_counter;
@@ -686,28 +690,28 @@ namespace daddy {
                 if (tw.t.hunt_player == ref)
                     tw.t.hunt_player = 0;
             }
-            if (x.a.player == ref)
-                x.a.player = 0;
+            if (x.seen_player == ref)
+                x.seen_player = 0;
             items::release_all(x.state, p);
-            centipede::release_player(x.state, p);
-            dropbug::release_player(x.state, p);
-            cicada::release_player(x.state, p);
-            lizard::release_player(x.state, p);
+            // the other kinds let go of it (the daddies did above)
+            rooms::for_each_creature(x.state, x.room.id, [&](dcon::creature_id o) {
+                if (x.state.world.creature_get_type(o) != creature::type::daddy)
+                    creature::release_player(x.state, o, p);
+            });
             rot::release_player(x.state, p);
-            rooms::for_each_daddy(x.state, x.room.id, [&](dcon::daddy_id o) {
+            rooms::for_each_creature(x.state, x.room.id, ::creature::type::daddy, [&](dcon::creature_id o) {
                 if (o == x.d)
                     return;
-                auto& core = x.state.world.daddy_get_core(o);
+                auto& core = x.state.world.daddy_data_get_core(creature::daddy_data(x.state.world, o));
                 for (uint32_t i = 0; i < core.eat_count;)
                     if (core.eats[i].player == ref)
                         core.eats[i] = core.eats[--core.eat_count];
                     else
                         ++i;
-                if (x.state.world.daddy_get_ai(o).player == ref)
-                    x.state.world.daddy_get_ai(o).player = 0;
-                auto const& parts = x.state.world.daddy_get_parts(o);
-                for (uint32_t i = 0; i < parts.tentacle_count; ++i) {
-                    auto& t = x.state.world.daddy_tentacle_get_t(dcon::daddy_tentacle_id{dcon::daddy_tentacle_id::value_base_t(parts.tentacles[i])});
+                if (x.state.world.creature_get_seen_player(o) == ref)
+                    x.state.world.creature_get_seen_player(o) = 0;
+                for (uint32_t i = 0; i < tentacle_count(x.state, o); ++i) {
+                    auto& t = x.state.world.daddy_tentacle_get_t(tentacle_of(x.state, o, i));
                     if (t.grab_player == ref)
                         t.grab_player = 0;
                 }
@@ -761,7 +765,7 @@ namespace daddy {
 
         struct impact_ctx {
             sys::game_state* state;
-            dcon::daddy_id d;
+            dcon::creature_id d;
         };
 
         // DaddyLongLegs.TerrainImpact
@@ -780,8 +784,7 @@ namespace daddy {
             auto& w = x.state.world;
             auto& z = x.z;
             // Creature.Update + PhysicalObject.Update
-            if (w.daddy_get_stun(x.d) > 0)
-                --w.daddy_get_stun(x.d);
+            creature::stun_countdown(x.state, x.d);
             if (z.deaf > 0)
                 --z.deaf;
             impact_ctx ic{&x.state, x.d};
@@ -804,10 +807,9 @@ namespace daddy {
             });
             z.squeeze = 0;
             int32_t num = 0;
-            auto& health = w.daddy_get_tentacle_health(x.d);
             for (auto& tw : x.tents) {
                 // (Downpour) tentacles heal
-                float& h = health.h[tw.t.number];
+                float& h = w.creature_part_get_health(tw.part);
                 if (h < 1.f) {
                     if (x.mother || x.hd)
                         h += 0.0012f;
@@ -825,7 +827,7 @@ namespace daddy {
                 --z.digesting_counter;
                 if (z.digesting_counter > 30)
                     z.eyes_closed = std::max(10, z.eyes_closed);
-                int32_t& s = w.daddy_get_stun(x.d);
+                int32_t& s = w.creature_get_stun(x.d);
                 s = std::max(10, s);
             }
             if (z.eyes_closed > 0)
@@ -836,34 +838,17 @@ namespace daddy {
                 // (Room.BackgroundNoise is 0 here)
             } else {
                 if (x.hd && !x.dead())
-                    x.a.player = 0;
+                    x.seen_player = 0;
                 z.eyes_closed = std::max(z.eyes_closed, 15);
             }
         }
 
-        // Room collision response between two chunks, weighted by mass
-        bool push_apart(sys::game_state& state, dcon::body_chunk_id a, dcon::body_chunk_id b) {
-            auto& w = state.world;
-            vec2& pa = w.body_chunk_get_pos(a);
-            vec2& pb = w.body_chunk_get_pos(b);
-            float const r = w.body_chunk_get_rad(a) + w.body_chunk_get_rad(b);
-            if (!custom::dist_less(pa, pb, r))
-                return false;
-            float const dist = rw::distance(pa, pb);
-            vec2 const dir = custom::dir_vec(pa, pb);
-            float const ratio = w.body_chunk_get_mass(b) / (w.body_chunk_get_mass(a) + w.body_chunk_get_mass(b));
-            pa -= dir * ((r - dist) * ratio);
-            w.body_chunk_get_vel(a) -= dir * ((r - dist) * ratio);
-            pb += dir * ((r - dist) * (1.f - ratio));
-            w.body_chunk_get_vel(b) += dir * ((r - dist) * (1.f - ratio));
-            return true;
-        }
 
         bool being_eaten(sys::game_state const& state, dcon::player_id p) {
             bool found = false;
             uint8_t const ref = player_ref(p);
-            rooms::for_each_daddy(state, rooms::room_of(state, p), [&](dcon::daddy_id d) {
-                auto const& core = state.world.daddy_get_core(d);
+            rooms::for_each_creature(state, rooms::room_of(state, p), ::creature::type::daddy, [&](dcon::creature_id d) {
+                auto const& core = state.world.daddy_data_get_core(creature::daddy_data(state.world, d));
                 for (uint32_t i = 0; i < core.eat_count; ++i)
                     found = found || core.eats[i].player == ref;
             });
@@ -871,19 +856,18 @@ namespace daddy {
         }
 
         // DaddyLongLegs.Collide with a slugcat: myChunk `i`, their chunk `j`
-        void collide_player(sys::game_state& state, dcon::daddy_id d, uint32_t i, dcon::player_id p, uint32_t j) {
+        void collide_with_player(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::player_id p, uint32_t j) {
             auto& w = state.world;
-            auto& z = w.daddy_get_core(d);
+            auto& z = w.daddy_data_get_core(creature::daddy_data(w, d));
             uint8_t const ref = player_ref(p);
             // the tracker knows it and it eats it (CheckDaddyConsumption: a
             // slugcat is light enough for any of them)
-            if (w.daddy_get_ai(d).player != ref)
+            if (w.creature_get_seen_player(d) != ref)
                 return;
-            if (!w.daddy_get_size_class(d) && z.digesting_counter > 0)
+            if (!w.creature_get_payload(d).daddy.size_class && z.digesting_counter > 0)
                 return;
             bool flag = false;
-            auto const& parts = w.daddy_get_parts(d);
-            for (uint32_t k = 0; k < parts.tentacle_count && !flag; ++k)
+            for (uint32_t k = 0; k < tentacle_count(state, d) && !flag; ++k)
                 flag = w.daddy_tentacle_get_t(tentacle_of(state, d, k)).grab_player == ref;
             for (uint32_t k = 0; k < z.eat_count && flag; ++k)
                 if (z.eats[k].player == ref)
@@ -893,7 +877,7 @@ namespace daddy {
             vec2 const middle = middle_of_body(state, d);
             vec2 const cp = w.body_chunk_get_pos(player::body_chunk(state, p, j));
             z.eats[z.eat_count++] = eat_object{ref, uint8_t(j), rw::distance(middle, cp), 0.f};
-            state.play_sound(w.daddy_get_size_class(d) ? sound::sound_id::daddy_digestion_init : sound::sound_id::bro_digestion_init,
+            state.play_sound(w.creature_get_payload(d).daddy.size_class ? sound::sound_id::daddy_digestion_init : sound::sound_id::bro_digestion_init,
                 room_of(state, d), w.body_chunk_get_pos(chunk(state, d, i)));
         }
 
@@ -943,37 +927,12 @@ namespace daddy {
         return false;
     }
 
-    dcon::physical_object_id body(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        return state.world.daddy_get_body_from_daddy_body(d);
-    }
-
-    uint32_t chunk_count(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        auto const range = state.world.physical_object_range_of_chunk_ownership(body(state, d));
-        return uint32_t(range.second - range.first);
-    }
-
-    dcon::body_chunk_id chunk(sys::game_state const& state, dcon::daddy_id d, uint32_t i) noexcept {
-        return physics::chunk(state, body(state, d), i);
-    }
-
-    dcon::daddy_tentacle_id tentacle_of(sys::game_state const& state, dcon::daddy_id d, uint32_t i) noexcept {
-        return dcon::daddy_tentacle_id{dcon::daddy_tentacle_id::value_base_t(state.world.daddy_get_parts(d).tentacles[i])};
-    }
-
-    dcon::daddy_tube_id tube_of(sys::game_state const& state, dcon::daddy_id d, uint32_t i) noexcept {
-        return dcon::daddy_tube_id{dcon::daddy_tube_id::value_base_t(state.world.daddy_get_parts(d).tubes[i])};
-    }
-
-    uint32_t tube_count(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        auto const& p = state.world.daddy_get_parts(d);
+    uint32_t tube_count(sys::game_state const& state, dcon::creature_id d) noexcept {
+        auto const& p = state.world.creature_get_payload(d).daddy;
         return uint32_t(p.tentacle_count) + p.dead_leg_count + p.dangler_count;
     }
 
-    bool consious(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        return !state.world.daddy_get_dead(d) && state.world.daddy_get_stun(d) <= 0;
-    }
-
-    vec2 middle_of_body(sys::game_state const& state, dcon::daddy_id d) noexcept {
+    vec2 middle_of_body(sys::game_state const& state, dcon::creature_id d) noexcept {
         auto const& w = state.world;
         uint32_t const n = chunk_count(state, d);
         vec2 a{0.f, 0.f};
@@ -986,31 +945,29 @@ namespace daddy {
         return a / m;
     }
 
-    bool holds(sys::game_state const& state, dcon::daddy_id d, dcon::player_id p) noexcept {
-        auto const& parts = state.world.daddy_get_parts(d);
-        for (uint32_t i = 0; i < parts.tentacle_count; ++i)
+    bool holds(sys::game_state const& state, dcon::creature_id d, dcon::player_id p) noexcept {
+        for (uint32_t i = 0; i < tentacle_count(state, d); ++i)
             if (state.world.daddy_tentacle_get_t(tentacle_of(state, d, i)).grab_player == player_ref(p))
                 return true;
         return false;
     }
 
-    bool eating(sys::game_state const& state, dcon::daddy_id d, dcon::player_id p) noexcept {
-        auto const& z = state.world.daddy_get_core(d);
+    bool eating(sys::game_state const& state, dcon::creature_id d, dcon::player_id p) noexcept {
+        auto const& z = state.world.daddy_data_get_core(creature::daddy_data(state.world, d));
         for (uint32_t i = 0; i < z.eat_count; ++i)
             if (z.eats[i].player == player_ref(p))
                 return true;
         return false;
     }
 
-    uint32_t legs_gripping(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        auto const& parts = state.world.daddy_get_parts(d);
+    uint32_t legs_gripping(sys::game_state const& state, dcon::creature_id d) noexcept {
         uint32_t n = 0;
-        for (uint32_t i = 0; i < parts.tentacle_count; ++i)
+        for (uint32_t i = 0; i < tentacle_count(state, d); ++i)
             n += state.world.daddy_tentacle_get_t(tentacle_of(state, d, i)).at_grab_dest ? 1 : 0;
         return n;
     }
 
-    dcon::daddy_id create(sys::game_state& state, dcon::room_id room, vec2 at, variant v) {
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, variant v) {
         auto& w = state.world;
         auto const view = world::get_room_view(state, room);
         // never inside terrain
@@ -1022,7 +979,7 @@ namespace daddy {
                         if (view.get_tile(at).solid() && !view.get_tile(t0 + ivec2{dx, dy}).solid())
                             at = room_view::middle_of_tile(t0 + ivec2{dx, dy});
         }
-        auto const d = w.create_daddy();
+        auto const d = creature::make(state, creature::type::daddy);
         rw::rng rng{state.random.next() | 1u};
         // DaddyLongLegs constructor. SizeClass: the Daddy and the Mother (and
         // a Brother before Artificer's time, which isn't modelled); colorClass
@@ -1046,25 +1003,24 @@ namespace daddy {
             effect = vec3{0.7f, 0.7f, 0.4f};
             eye = vec3{0.5f, 0.3f, 0.f};
         }
-        w.daddy_set_variant(d, v);
-        w.daddy_set_size_class(d, size_class);
-        w.daddy_set_color_class(d, color_class);
-        w.daddy_set_hd(d, hd);
-        w.daddy_set_effect_color(d, effect);
-        w.daddy_set_eye_color(d, eye);
-        w.daddy_set_stun(d, 0);
-        w.daddy_set_dead(d, 0);
-        w.daddy_set_health(d, 1.f);
-        w.daddy_set_tentacle_health(d, tentacle_health{});
-        w.daddy_set_core(d, body_state{});
+        w.creature_get_payload(d).daddy.variant = v;
+        w.creature_get_payload(d).daddy.size_class = size_class;
+        w.creature_get_payload(d).daddy.color_class = color_class;
+        w.creature_get_payload(d).daddy.hd = hd;
+        w.creature_get_payload(d).daddy.effect_color = effect;
+        w.creature_get_payload(d).daddy.eye_color = eye;
+        w.creature_set_stun(d, 0);
+        w.creature_set_dead(d, 0);
+        w.creature_set_health(d, 1.f);
+        w.daddy_data_set_core(creature::daddy_data(w, d), body_state{});
         ai_state ai;
         ai.noise.forget_time = hd ? 640 : 320;
-        ai.destination = room_view::get_tile_position(at);
-        w.daddy_set_ai(d, ai);
+        w.daddy_data_set_ai(creature::daddy_data(w, d), ai);
+        w.creature_set_destination(d, room_view::get_tile_position(at));
 
         // Random.InitState(abstractCreature.ID.RandomSeed): the layout rolls
         rw::unity_random r{int32_t(rng.next() & 0x7FFFFFFFu)};
-        w.daddy_set_graphics_seed(d, r.range(0, std::numeric_limits<int32_t>::max()));
+        w.creature_get_payload(d).daddy.graphics_seed = r.range(0, std::numeric_limits<int32_t>::max());
         float num = size_class ? 12.f : 8.f;
         int32_t num2 = 8, num3 = 7;
         if (v == variant::mother) {
@@ -1114,7 +1070,7 @@ namespace daddy {
         for (int32_t a = 0; a < n; ++a)
             for (int32_t b = a + 1; b < n; ++b)
                 physics::add_connection(state, o, cs[size_t(a)], cs[size_t(b)], rw::distance(list[size_t(a)], list[size_t(b)]), physics::connection_type::normal, 1.f, -1.f);
-        w.try_create_daddy_body(d, o);
+        w.try_create_creature_body(d, o);
         int32_t num8 = 13, num9 = 10;
         float num10 = 400.f;
         if (v == variant::mother) {
@@ -1140,15 +1096,15 @@ namespace daddy {
                 lengths[size_t(num14)] -= num15;
             }
         }
-        part_list parts;
-        parts.tentacle_count = uint8_t(nt);
+        w.creature_get_payload(d).daddy.tentacle_count = uint8_t(nt);
         for (int32_t k = 0; k < nt; ++k) {
+            // the tentacle part (its number, stun and health) and its data
+            auto const part = creature::add_part(state, d, creature::part_kind::daddy_tentacle, uint8_t(k));
             auto const t = w.create_daddy_tentacle();
-            w.daddy_tentacle_set_owner(t, uint16_t(d.index()));
+            w.creature_part_get_payload(part).daddy_tentacle = creature::daddy_tentacle_payload{uint16_t(t.index())};
             tentacle tt;
             tt.ideal_length = lengths[size_t(k)];
             tt.connected_chunk = uint8_t(k % n);
-            tt.number = k;
             tt.tentacle_dir = custom::deg_to_vec(mathf::lerp(0.f, 360.f, float(k) / float(nt)));
             w.daddy_tentacle_set_t(t, tt);
             // (Remix would give it at least 3 chunks)
@@ -1160,15 +1116,13 @@ namespace daddy {
                 c.rad = 3.f;
                 chunks.push_back(c);
             }
-            parts.tentacles[k] = uint16_t(t.index());
         }
-        w.daddy_set_parts(d, parts);
-        w.daddy_set_random(d, rng);
+        w.creature_set_random(d, rng);
 
         // Creature.PlaceInRoom: the chunks a random pixel off the tile's middle
         vec2 const mid = room_view::middle_of_tile(at);
         for (auto const c : cs) {
-            physics::hard_set_position(state, c, mid + custom::rnv(w.daddy_get_random(d)));
+            physics::hard_set_position(state, c, mid + custom::rnv(w.creature_get_random(d)));
             w.body_chunk_set_vel(c, vec2{0.f, 0.f});
         }
         // NewRoom (the tentacles, pastPositions) and PlaceInRoom
@@ -1188,75 +1142,36 @@ namespace daddy {
         return d;
     }
 
-    void destroy(sys::game_state& state, dcon::daddy_id d) {
-        auto& w = state.world;
-        auto const parts = w.daddy_get_parts(d);
-        for (uint32_t i = 0; i < parts.tentacle_count; ++i)
-            w.delete_daddy_tentacle(tentacle_of(state, d, i));
-        for (uint32_t i = 0; i < tube_count(state, d); ++i)
-            w.delete_daddy_tube(tube_of(state, d, i));
-        auto const o = body(state, d);
-        w.delete_daddy(d);
-        if (o)
-            physics::delete_object(state, o);
+    void destroy(sys::game_state& state, dcon::creature_id d) {
+        creature::erase(state, d);
     }
 
-    void update_room(sys::game_state& state, room_view const& room) {
-        bool const viewed = state.viewed(room.id);
-        rooms::for_each_daddy(state, room.id, [&](dcon::daddy_id d) {
-            {
-                auto& tents = work_buffer();
-                ctx x(state, d, room, tents, scratch_buffer());
-                load(x);
-                update(x);
-                store(x);
-            }
-            // the GraphicsModule only exists where a camera looks
-            if (viewed)
-                daddy_graphics::update(state, d, room);
-        });
+    void update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
+        auto& tents = work_buffer();
+        ctx x(state, d, room, tents, scratch_buffer());
+        load(x);
+        update(x);
+        store(x);
     }
 
-    void collide(sys::game_state& state, room_view const& room) {
-        rooms::for_each_daddy(state, room.id, [&](dcon::daddy_id d) {
-            uint32_t const n = chunk_count(state, d);
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                // a slugcat being eaten is out of the collision layer
-                if (!player_here(state, p, room.id) || being_eaten(state, p))
-                    return;
-                for (uint32_t i = 0; i < n; ++i)
-                    for (uint32_t j = 0; j < 2; ++j)
-                        if (push_apart(state, chunk(state, d, i), player::body_chunk(state, p, j)))
-                            collide_player(state, d, i, p, j);
-            });
-        });
+    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::player_id p, dcon::room_id room) {
+        // a slugcat being eaten is out of the collision layer
+        return player_here(state, p, room) && !being_eaten(state, p);
     }
 
-    bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::daddy_id& hit, hit_part& part) {
+    void collide_player(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::player_id p, uint32_t j) {
+        collide_with_player(state, d, i, p, j);
+    }
+
+    bool trace_tentacles(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, dcon::creature_id& hit, hit_part& part) {
         auto const& w = state.world;
         float best = 2.f;
         vec2 const dv = to - from;
         float const len2 = rw::sqr_magnitude(dv);
-        rooms::for_each_daddy(state, room, [&](dcon::daddy_id d) {
-            uint32_t const n = chunk_count(state, d);
-            for (uint32_t i = 0; i < n; ++i) {
-                vec2 const p = w.body_chunk_get_pos(chunk(state, d, i));
-                float const r = rad + w.body_chunk_get_rad(chunk(state, d, i));
-                float const t = len2 > 0.f ? mathf::clamp01(rw::dot(p - from, dv) / len2) : 0.f;
-                if (custom::dist_less(from + dv * t, p, r) && t < best) {
-                    best = t;
-                    hit = d;
-                    part = hit_part{int32_t(i)};
-                }
-            }
-        });
-        if (best <= 1.f)
-            return true;
         // the tentacles, as appendages: the projectile's line crossing one of
         // their segments (the connected chunk, then the tentacle chunks)
-        rooms::for_each_daddy(state, room, [&](dcon::daddy_id d) {
-            auto const& parts = w.daddy_get_parts(d);
-            for (uint32_t k = 0; k < parts.tentacle_count; ++k) {
+        rooms::for_each_creature(state, room, ::creature::type::daddy, [&](dcon::creature_id d) {
+            for (uint32_t k = 0; k < tentacle_count(state, d); ++k) {
                 auto const t = tentacle_of(state, d, k);
                 auto const cs = w.daddy_tentacle_get_chunks(t);
                 vec2 prev = w.body_chunk_get_pos(chunk(state, d, w.daddy_tentacle_get_t(t).connected_chunk));
@@ -1278,7 +1193,7 @@ namespace daddy {
         return best <= 1.f;
     }
 
-    void violence(sys::game_state& state, dcon::daddy_id d, hit_part const& part, vec2 momentum, float damage, float stun_bonus, bool explosion) {
+    void violence(sys::game_state& state, dcon::creature_id d, hit_part const& part, vec2 momentum, float damage, float stun_bonus, bool explosion) {
         auto& w = state.world;
         auto const view = world::get_room_view(state, room_of(state, d));
         auto& tents = work_buffer();
@@ -1289,8 +1204,9 @@ namespace daddy {
             damage /= x.size_class ? 2.2f : 1.7f;
             stun_bonus /= x.size_class ? 2.f : 0.9f;
             auto& tw = tents[size_t(part.tentacle)];
-            w.daddy_get_tentacle_health(d).h[tw.t.number] -= damage;
-            tw.t.stun = std::max(tw.t.stun, int32_t(damage * 48.f + stun_bonus));
+            w.creature_part_get_health(tw.part) -= damage;
+            int32_t& st = w.creature_part_get_stun(tw.part);
+            st = std::max(st, int32_t(damage * 48.f + stun_bonus));
             damage = 0.f;
             stun_bonus = 0.f;
             // DaddyLongLegs.ApplyForceOnAppendage
@@ -1320,7 +1236,7 @@ namespace daddy {
         auto const& tp = params(x.v);
         float num = damage / tp.damage_resistance;
         float num2 = (damage * 30.f + stun_bonus) / tp.stun_resistance;
-        float& health = w.daddy_get_health(d);
+        float& health = w.creature_get_health(d);
         num2 *= 1.5f + mathf::inverse_lerp(0.5f, 0.f, health) * x.rng.value();
         if (explosion)
             num /= explosion_resistance;
@@ -1331,27 +1247,25 @@ namespace daddy {
         store(x);
     }
 
-    void release_player(sys::game_state& state, dcon::player_id p) {
+    void release_player(sys::game_state& state, dcon::creature_id d, dcon::player_id p) {
         auto& w = state.world;
         uint8_t const ref = player_ref(p);
-        // whatever holds or eats the slugcat is in its room
-        rooms::for_each_daddy(state, rooms::room_of(state, p), [&](dcon::daddy_id d) {
-            auto& core = w.daddy_get_core(d);
+        {
+            auto& core = w.daddy_data_get_core(creature::daddy_data(w, d));
             for (uint32_t i = 0; i < core.eat_count;)
                 if (core.eats[i].player == ref)
                     core.eats[i] = core.eats[--core.eat_count];
                 else
                     ++i;
-            if (w.daddy_get_ai(d).player == ref)
-                w.daddy_get_ai(d).player = 0;
-            auto const& parts = w.daddy_get_parts(d);
-            for (uint32_t i = 0; i < parts.tentacle_count; ++i) {
+            if (w.creature_get_seen_player(d) == ref)
+                w.creature_get_seen_player(d) = 0;
+            for (uint32_t i = 0; i < tentacle_count(state, d); ++i) {
                 auto& t = w.daddy_tentacle_get_t(tentacle_of(state, d, i));
                 if (t.grab_player == ref)
                     t.grab_player = 0;
                 if (t.hunt_player == ref)
                     t.hunt_player = 0;
             }
-        });
+        }
     }
 }

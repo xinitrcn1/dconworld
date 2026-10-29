@@ -16,46 +16,50 @@
 
 #include <cstdint>
 
+#include "creature.hpp"
 #include "gamestate.hpp"
 #include "math.hpp"
 #include "world.hpp"
 
 namespace cicada {
-    // Cicada constructor: `gender` true is a CicadaA (white), false a CicadaB (dark)
-    dcon::cicada_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, bool gender);
-    void destroy(sys::game_state& state, dcon::cicada_id c);
-    // Cicada.Update (+ CicadaGraphics.Update) for every cicada in the room
-    void update_room(sys::game_state& state, world::room_view const& room);
-    // Room object collisions between cicadas and slugcats (pushing apart,
-    // Cicada.Collide's bump attacks and tentacle clinging) and between cicadas
-    void collide(sys::game_state& state, world::room_view const& room);
-    // Weapon.Update's projectile trace against cicadas: the cicada the
-    // segment hits (radius `rad`), and which chunk
-    bool trace(sys::game_state const& state, dcon::room_id room, rw::vec2 from, rw::vec2 to, float rad, dcon::cicada_id& hit, uint32_t& chunk);
-    // Creature.Violence (+ Cicada.Stun)
-    void violence(sys::game_state& state, dcon::cicada_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus);
-
-    dcon::physical_object_id body(sys::game_state const& state, dcon::cicada_id c) noexcept;
     // bodyChunks[i]: 0 the head (mainBodyChunk), 1 the body
-    dcon::body_chunk_id chunk(sys::game_state const& state, dcon::cicada_id c, uint32_t i) noexcept;
-    bool consious(sys::game_state const& state, dcon::cicada_id c) noexcept;
+    using creature::body;
+    using creature::chunk;
+    using creature::consious;
+
+    // Cicada constructor: `gender` true is a CicadaA (white), false a CicadaB (dark)
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, bool gender);
+    void destroy(sys::game_state& state, dcon::creature_id c);
+    // Cicada.Update
+    void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
+    // Room object collisions: whether it collides with the slugcat (not
+    // the one holding it), Cicada.Collide's bump attacks and tentacle
+    // clinging (its chunk `i` touched the slugcat's `j`), bumping into
+    // another cicada while charging
+    bool collides(sys::game_state const& state, dcon::creature_id c, dcon::player_id p, dcon::room_id room);
+    void collide_player(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::player_id p, uint32_t j);
+    void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id other, uint32_t j);
+    // Creature.Violence (+ Cicada.Stun)
+    void violence(sys::game_state& state, dcon::creature_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus);
     // Cicada.Charging
-    bool charging(sys::game_state const& state, dcon::cicada_id c) noexcept;
+    bool charging(sys::game_state const& state, dcon::creature_id c) noexcept;
 
     // The player side: a slugcat carrying a cicada in both hands (Player
     // grasps[0], a HeavyCarry TwoHands object)
     // the cicada `p` holds, if any
-    dcon::cicada_id held_by(sys::game_state const& state, dcon::player_id p) noexcept;
+    dcon::creature_id held_by(sys::game_state const& state, dcon::player_id p) noexcept;
     // Cicada.LiftPlayerPower
-    float lift_player_power(sys::game_state const& state, dcon::cicada_id c) noexcept;
-    void set_currently_lifting_player(sys::game_state& state, dcon::cicada_id c, bool lifting) noexcept;
+    float lift_player_power(sys::game_state const& state, dcon::creature_id c) noexcept;
+    void set_currently_lifting_player(sys::game_state& state, dcon::creature_id c, bool lifting) noexcept;
     // Player.PickupCandidate over the cicadas (Player.CanIPickThisUp,
     // Grabability TwoHands): the best one and its score, lower is better
-    dcon::cicada_id pickup_candidate(sys::game_state const& state, dcon::player_id p, world::room_view const& room, float& score);
+    dcon::creature_id pickup_candidate(sys::game_state const& state, dcon::player_id p, world::room_view const& room, float& score);
     // Player.SlugcatGrab + Creature.Grab: held by `p`
-    void grab(sys::game_state& state, dcon::player_id p, dcon::cicada_id c);
+    void grab(sys::game_state& state, dcon::player_id p, dcon::creature_id c);
     // Creature.ReleaseGrasp from the player's side
-    void release(sys::game_state& state, dcon::cicada_id c);
+    void release(sys::game_state& state, dcon::creature_id c);
+    // lets go of `p`: held by it, clinging to it
+    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p);
     // releases the cicada `p` holds and any cicada clinging to `p`
     void release_player(sys::game_state& state, dcon::player_id p);
     // Player.GraphicsModuleUpdated's HeavyCarry pull: the held cicada and

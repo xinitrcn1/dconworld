@@ -21,16 +21,17 @@
 //   Every room is simulated all the time, so the creature bounds are for the
 //   whole world, not the realised rooms; the bench's one of each per room
 //   needs ~2100 of each:
-//   centipedes -> 4096 (17 chunks, 136 push connections each at most)
-//   dropbugs -> 4096 (3 chunks, 3 connections each)
-//   cicadas -> 4096 (2 chunks, 1 connection each)
-//   lizards -> 4096 (3 chunks, 3 connections each); their spit in flight
-//     -> 4096
-//   daddy long legs -> 4096 (up to 15 chunks with a connection between
-//     every pair: 105), 12 tentacles each -> 65536, 12 leg graphics and
-//     14 dead legs and danglers each -> 65536 tubes (enough for ~2500);
-//     their segments, grab paths, tentacle chunks and graphic segments
-//     pooled
+//   creatures -> 16384 (the five kinds' ~10500 for the Watcher bench), and
+//     each kind's data object -> 4096:
+//   centipedes: 17 chunks, 136 push connections each at most
+//   dropbugs: 3 chunks, 3 connections each
+//   cicadas: 2 chunks, 1 connection each
+//   lizards: 3 chunks, 3 connections each; their spit in flight -> 4096
+//   daddy long legs: up to 15 chunks with a connection between every
+//     pair (105), 12 tentacles each -> 65536, 12 leg graphics and 14 dead
+//     legs and danglers each -> 65536 tubes (enough for ~2500), so
+//     creature parts -> 131072; their segments, grab paths, tentacle
+//     chunks and graphic segments pooled
 //   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
@@ -58,6 +59,7 @@ include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
+include{"creature_types.hpp"}
 include{"item_types.hpp"}
 
 make_index{text_key}{uint32_t}
@@ -876,113 +878,97 @@ relationship{
 }
 
 //
-// Creatures: Centipede (Centipede.cs + CentipedeAI), the body is a
-// physical_object with one chunk per segment
+// Creatures: every ported kind is a `creature` (creature_types.hpp). What
+// most kinds have is a property of its own; what only one kind has is its
+// `payload` (a union of a struct per kind, at most 64 bytes) and its kind's
+// data object below, whose index the payload keeps. The body is a
+// physical_object (creature_body) with the kind's chunks.
+//
+// Shared because most kinds (at least three of the five) have it:
+//   random, stun, dead, health: every kind (Creature, HealthState)
+//   behavior, destination: every AI (the kind's Behavior enum, the
+//     pathfinder's destination)
+//   current_utility: centipede, dropwig, squidcada, lizard (UtilityComparer)
+//   seen_player, ticks_since_seen, last_seen_pos: every kind's tracker of the
+//     slugcat; sees_player (visual contact): all but the centipede
+//   grasp_player/grasp_chunk: the creatures holding a slugcat in their
+//     grasps (centipede both ends, dropwig, lizard)
+//   forbidden_idle_pos: centipede, squidcada (forbiddenIdleSitSpot), lizard
+//     (forbiddenIdleSpot)
+//   graphics_random: every kind's graphics module's UnityEngine.Random
 //
 object{
-	name{centipede}
+	name{creature}
 	storage_type{erasable}
-	size{4096}
+	size{16384}
 	tag{save}
-	property{ name{size} type{float} }
+	property{ name{type} type{::creature::type} }
 	property{ name{random} type{rw::rng} }
-	property{ name{hue} type{float} }
 	// Creature / HealthState
 	property{ name{stun} type{int32_t} }
 	property{ name{dead} type{uint8_t} }
 	property{ name{health} type{float} }
-	// movement: bodyDirection true means chunk 0 leads
-	property{ name{body_direction} type{uint8_t} }
-	property{ name{moving} type{uint8_t} }
-	property{ name{move_to_pos} type{rw::vec2} }
-	property{ name{change_dir_counter} type{int32_t} }
-	property{ name{direction_change_block} type{int32_t} }
-	property{ name{no_follow_con_counter} type{int32_t} }
-	// grasps[0] at chunk 0, grasps[1] at the last chunk (players only for now)
-	property{ name{grasp_player} type{world::byte_pair} }
-	property{ name{grasp_chunk} type{world::byte_pair} }
-	property{ name{shock_charge} type{float} }
-	property{ name{double_grab_charge} type{float} }
-	property{ name{shock_give_up_counter} type{int32_t} }
-	// CentipedeAI
-	property{ name{behavior} type{world::centipede_behavior} }
-	property{ name{run} type{float} }
-	property{ name{excitement} type{float} }
+	// the AI's Behavior (the kind's own enum)
+	property{ name{behavior} type{uint8_t} }
 	property{ name{current_utility} type{float} }
+	// the pathfinder's destination
 	property{ name{destination} type{rw::ivec2} }
-	property{ name{temp_idle_pos} type{rw::ivec2} }
 	property{ name{forbidden_idle_pos} type{rw::ivec2} }
-	property{ name{idle_counter} type{int32_t} }
-	property{ name{annoying_collisions} type{int32_t} }
-	// tracker: the player it last saw (index + 1, 0 none)
+	// tracker: the player it last saw (index + 1, 0 none), whether it sees
+	// it now, for how long it hasn't, and where it saw it last
 	property{ name{seen_player} type{uint8_t} }
+	property{ name{sees_player} type{uint8_t} }
 	property{ name{ticks_since_seen} type{int32_t} }
 	property{ name{last_seen_pos} type{rw::vec2} }
-	// CentipedeGraphics.lightFlash
+	// grasps[0] and [1] on a slugcat (players only for now): index + 1 and
+	// the chunk
+	property{ name{grasp_player} type{world::byte_pair} }
+	property{ name{grasp_chunk} type{world::byte_pair} }
+	// the graphics module's UnityEngine.Random (it rolls only where a
+	// camera looks)
+	property{ name{graphics_random} type{rw::rng} }
+	property{ name{payload} type{::creature::payload} }
+}
+relationship{
+	name{creature_body}
+	tag{save}
+	link{ object{creature} name{creature} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{creature}
+}
+
+// Centipede (Centipede.cs + CentipedeAI): one chunk per segment
+object{
+	name{centipede_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{hue} type{float} }
+	// CentipedeGraphics.lightFlash, walkCycle
 	property{ name{light_flash} type{float} }
 	property{ name{walk_cycle} type{float} }
 	// CentipedeGraphics: legs, feelers, body rotations
 	property{ name{graphics} type{::centipede::graphics_state} }
 }
-relationship{
-	name{centipede_body}
-	tag{save}
-	link{ object{centipede} name{centipede} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{centipede}
-}
 
-//
-// Creatures: Dropwig (DropBug.cs + DropBugAI), the body is a physical_object
-// with three chunks: head (mainBodyChunk), middle and tail
-//
+// Dropwig (DropBug.cs + DropBugAI): three chunks, head (mainBodyChunk),
+// middle and tail
 object{
-	name{dropbug}
+	name{dropbug_data}
 	storage_type{erasable}
 	size{4096}
 	tag{save}
-	property{ name{random} type{rw::rng} }
 	// AbstractCreature.personality.dominance
 	property{ name{dominance} type{float} }
-	// Creature / HealthState
-	property{ name{stun} type{int32_t} }
-	property{ name{dead} type{uint8_t} }
-	property{ name{health} type{float} }
-	// DropBug
-	property{ name{footing_counter} type{int32_t} }
-	property{ name{out_of_water_footing} type{int32_t} }
 	property{ name{special_move_counter} type{int32_t} }
 	property{ name{special_move_destination} type{rw::ivec2} }
 	property{ name{last_followed_connection} type{::dropbug::movement_connection} }
-	property{ name{run_cycle} type{float} }
-	property{ name{sitting} type{uint8_t} }
-	property{ name{swimming} type{uint8_t} }
-	property{ name{travel_dir} type{rw::vec2} }
-	property{ name{charging} type{float} }
-	// jumpAtChunk: a player's chunk (player index + 1, 0 none), else jumpAtPos
-	property{ name{jump_at_player} type{uint8_t} }
-	property{ name{jump_at_chunk} type{uint8_t} }
 	property{ name{jump_at_pos} type{rw::vec2} }
-	property{ name{attempt_bite} type{float} }
-	property{ name{jumping} type{uint8_t} }
-	property{ name{from_ceiling_jump} type{uint8_t} }
-	property{ name{drop_anticipation} type{float} }
-	property{ name{grab_on_next_attack} type{int32_t} }
-	property{ name{release_grabbed_counter} type{int32_t} }
 	property{ name{lured_to_drop_counter} type{int32_t} }
-	property{ name{after_drop_attack_delay} type{int32_t} }
 	property{ name{carry_object_mass} type{float} }
 	property{ name{walk_backwards_dist} type{float} }
 	property{ name{stuck_shake} type{float} }
-	property{ name{in_ceiling_mode} type{float} }
-	// voiceSound still playing: ticks left of the hiss
-	property{ name{voice} type{int32_t} }
-	// grasps[0] (players only for now): index + 1, and the chunk
-	property{ name{grasp_player} type{uint8_t} }
-	property{ name{grasp_chunk} type{uint8_t} }
 	// DropBugAI
-	property{ name{behavior} type{::dropbug::behavior} }
-	property{ name{current_utility} type{float} }
 	property{ name{noise_reaction_delay} type{int32_t} }
 	// targetCreature: player index + 1, 0 none
 	property{ name{target_player} type{uint8_t} }
@@ -990,82 +976,32 @@ object{
 	property{ name{idle_pos_counter} type{int32_t} }
 	property{ name{temp_idle_pos} type{rw::ivec2} }
 	property{ name{walk_with_bug} type{std::optional<rw::ivec2>} }
-	// the pathfinder's destination
-	property{ name{destination} type{rw::ivec2} }
-	// tracker: the player it last saw (index + 1, 0 none), whether it sees it now
-	property{ name{seen_player} type{uint8_t} }
-	property{ name{sees_player} type{uint8_t} }
-	property{ name{ticks_since_seen} type{int32_t} }
-	property{ name{last_seen_pos} type{rw::vec2} }
 	property{ name{utilities} type{::dropbug::utilities} }
 	property{ name{stuck} type{::dropbug::stuck_tracker} }
 	property{ name{ceiling} type{::dropbug::ceiling_module} }
 	// DropBugGraphics: legs, knees, mandibles, pinchers, antennae, tail
 	property{ name{graphics} type{::dropbug::graphics_state} }
 }
-relationship{
-	name{dropbug_body}
-	tag{save}
-	link{ object{dropbug} name{dropbug} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{dropbug}
-}
 
-//
-// Creatures: Squidcada (Cicada.cs + CicadaAI), CicadaA (white) and CicadaB
-// (dark); the body is a physical_object with two chunks: head
-// (mainBodyChunk) and body
-//
+// Squidcada (Cicada.cs + CicadaAI), CicadaA (white) and CicadaB (dark): two
+// chunks, head (mainBodyChunk) and body
 object{
-	name{cicada}
+	name{cicada_data}
 	storage_type{erasable}
 	size{4096}
 	tag{save}
-	property{ name{random} type{rw::rng} }
-	// Cicada.gender: CicadaA
-	property{ name{gender} type{uint8_t} }
 	property{ name{ivars} type{::cicada::individual_variations} }
 	// AbstractCreature.personality.bravery
 	property{ name{bravery} type{float} }
-	// Creature / HealthState
-	property{ name{stun} type{int32_t} }
-	property{ name{dead} type{uint8_t} }
-	property{ name{health} type{float} }
-	// Cicada
-	property{ name{sin_counter} type{float} }
-	property{ name{flying} type{uint8_t} }
-	property{ name{wait_to_fly_counter} type{int32_t} }
-	property{ name{flying_power} type{float} }
-	property{ name{flip_h} type{int8_t} }
-	property{ name{charge_counter} type{int32_t} }
-	property{ name{charge_dir} type{rw::vec2} }
-	// stickyCling: a player's chunk (player index + 1, 0 none)
-	property{ name{sticky_player} type{uint8_t} }
-	property{ name{sticky_chunk} type{uint8_t} }
-	property{ name{no_sticky_counter} type{int32_t} }
-	property{ name{cant_pick_up_counter} type{int32_t} }
-	property{ name{cant_pick_up_player} type{uint8_t} }
 	property{ name{sit_direction} type{rw::ivec2} }
-	property{ name{stamina} type{float} }
-	property{ name{struggle_against_player} type{float} }
-	property{ name{currently_lifting_player} type{uint8_t} }
-	property{ name{player_jump_boost} type{float} }
-	// grabbedBy: the player holding it (index + 1, 0 none) in its grasps[0]
-	// (both hands: TwoHands), and the chunk it holds
-	property{ name{held_by} type{uint8_t} }
-	property{ name{held_chunk} type{uint8_t} }
 	// SocialMemory: the temporary like of the player (one slot, every
 	// player counts as the same one)
 	property{ name{temp_like} type{float} }
 	// CicadaAI
-	property{ name{behavior} type{::cicada::behavior} }
-	property{ name{current_utility} type{float} }
-	property{ name{destination} type{rw::ivec2} }
 	property{ name{idle_sit_spot} type{rw::ivec2} }
-	property{ name{forbidden_idle_sit_spot} type{rw::ivec2} }
 	property{ name{idle_sit_counter} type{int32_t} }
 	property{ name{no_circle_group_counter} type{int32_t} }
-	// circleGroup: the leader's index + 1 (itself when it leads), 0 none
+	// circleGroup: the leader's creature index + 1 (itself when it leads), 0 none
 	property{ name{circle_leader} type{uint16_t} }
 	// order of joining, for the place in the circle
 	property{ name{circle_slot} type{uint32_t} }
@@ -1076,49 +1012,21 @@ object{
 	// panicFleeCrit, focusCreature: player index + 1, 0 none
 	property{ name{panic_flee_player} type{uint8_t} }
 	property{ name{focus_player} type{uint8_t} }
-	// tracker: the player it last saw (index + 1, 0 none), whether it sees
-	// it now, and the representation's age
-	property{ name{seen_player} type{uint8_t} }
-	property{ name{sees_player} type{uint8_t} }
-	property{ name{ticks_since_seen} type{int32_t} }
+	// the tracker's representation's age
 	property{ name{seen_age} type{int32_t} }
-	property{ name{last_seen_pos} type{rw::vec2} }
 	property{ name{stuck} type{::cicada::stuck_tracker} }
 	// CicadaGraphics: wings, tentacles, the body's turn and the eyes
 	property{ name{graphics} type{::cicada::graphics_state} }
 }
-relationship{
-	name{cicada_body}
-	tag{save}
-	link{ object{cicada} name{cicada} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{cicada}
-}
 
-//
-// Creatures: Lizards (Lizard.cs + LizardAI + LizardGraphics), every breed;
-// the body is a physical_object with three chunks: head (mainBodyChunk),
-// middle and hips
-//
+// Lizards (Lizard.cs + LizardAI + LizardGraphics), every breed: three
+// chunks, head (mainBodyChunk), middle and hips
 object{
-	name{lizard}
+	name{lizard_data}
 	storage_type{erasable}
 	size{4096}
 	tag{save}
-	property{ name{breed} type{::lizard::breed} }
-	property{ name{random} type{rw::rng} }
-	// Lizard.effectColor
-	property{ name{effect_color} type{rw::vec3} }
-	// AbstractCreature.personality
-	property{ name{dominance} type{float} }
-	property{ name{energy} type{float} }
-	// Creature / LizardState
-	property{ name{stun} type{int32_t} }
-	property{ name{dead} type{uint8_t} }
-	property{ name{health} type{float} }
-	property{ name{throat_health} type{float} }
-	property{ name{limb_health} type{::lizard::limb_health} }
-	// Lizard.cs's movement, jaws, grasp and voice
+	// Lizard.cs's movement, jaws and voice
 	property{ name{core} type{::lizard::body_state} }
 	// LizardAI and its modules
 	property{ name{ai} type{::lizard::ai_state} }
@@ -1128,94 +1036,79 @@ object{
 	// drives the body's speed, so it is simulation state)
 	property{ name{graphics} type{::lizard::graphics_state} }
 }
-relationship{
-	name{lizard_body}
-	tag{save}
-	link{ object{lizard} name{lizard} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{lizard}
-}
 
-//
-// Creatures: Daddy long legs (DaddyLongLegs.cs + DaddyAI + DaddyTentacle +
-// DaddyGraphics) in its four templates; the body is a physical_object of 4
-// to 15 chunks held together by a connection between every pair
-//
+// Daddy long legs (DaddyLongLegs.cs + DaddyAI + DaddyTentacle +
+// DaddyGraphics) in its four templates: 4 to 15 chunks held together by a
+// connection between every pair; its tentacles and tube graphics are
+// creature_parts
 object{
-	name{daddy}
+	name{daddy_data}
 	storage_type{erasable}
 	size{4096}
 	tag{save}
-	property{ name{variant} type{::daddy::variant} }
-	property{ name{random} type{rw::rng} }
-	// DaddyLongLegs.graphicsSeed (the DaddyGraphics layout's seed)
-	property{ name{graphics_seed} type{int32_t} }
-	// SizeClass, colorClass, HDmode
-	property{ name{size_class} type{uint8_t} }
-	property{ name{color_class} type{uint8_t} }
-	property{ name{hd} type{uint8_t} }
-	property{ name{effect_color} type{rw::vec3} }
-	property{ name{eye_color} type{rw::vec3} }
-	// Creature / DaddyState
-	property{ name{stun} type{int32_t} }
-	property{ name{dead} type{uint8_t} }
-	property{ name{health} type{float} }
-	property{ name{tentacle_health} type{::daddy::tentacle_health} }
 	// DaddyLongLegs: movement, eyes, digestion, the eat list
 	property{ name{core} type{::daddy::body_state} }
 	// DaddyAI and its modules
 	property{ name{ai} type{::daddy::ai_state} }
 	// DaddyGraphics: eyes, the Hunter's dummy, the reactions
 	property{ name{graphics} type{::daddy::graphics_state} }
-	// its daddy_tentacle and daddy_tube objects
-	property{ name{parts} type{::daddy::part_list} }
+}
+
+//
+// Creature parts: the repeated parts of a creature with a state of their
+// own (a daddy's tentacles and tube graphics), in the order its kind made
+// them. What parts have in common is a property; the rest is the
+// `payload` (creature_types.hpp) and the kind's data object
+//
+object{
+	name{creature_part}
+	storage_type{erasable}
+	size{131072}
+	tag{save}
+	property{ name{kind} type{::creature::part_kind} }
+	// its number among its owner's parts of its kind (Tentacle.tentacleNumber,
+	// the tube graphic's number)
+	property{ name{index} type{uint8_t} }
+	// a stunned part (DaddyTentacle.stun) and its health (DaddyState.tentacleHealth)
+	property{ name{stun} type{int32_t} }
+	property{ name{health} type{float} }
+	property{ name{payload} type{::creature::part_payload} }
 }
 relationship{
-	name{daddy_body}
+	name{part_ownership}
 	tag{save}
-	link{ object{daddy} name{daddy} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{daddy}
+	link{ object{creature_part} name{part} type{unique} }
+	link{ object{creature} name{owner} type{many} index_storage{array} }
+	primary_key{part}
 }
 
 // DaddyTentacle: Tentacle's tile segments, grab path and chunks (each with
-// its Rope); `owner` is the daddy's index
+// its Rope)
 object{
 	name{daddy_tentacle}
 	storage_type{erasable}
 	size{65536}
 	tag{save}
-	property{ name{owner} type{uint16_t} }
 	property{ name{t} type{::daddy::tentacle} }
 	property{ name{segments} type{vector_pool{65536}{rw::ivec2}} }
 	property{ name{grab_path} type{vector_pool{131072}{rw::ivec2}} }
 	property{ name{chunks} type{vector_pool{16384}{::daddy::tentacle_chunk}} }
 }
 
-// DaddyTubeGraphic: a leg graphic (`index` its tentacle), a dead leg or a
-// dangler, with its RopeGraphic segments, bumps and GenericBodyParts
+// DaddyTubeGraphic: a leg graphic, a dead leg or a dangler, with its
+// RopeGraphic segments, bumps and GenericBodyParts
 object{
 	name{daddy_tube}
 	storage_type{erasable}
 	size{65536}
 	tag{save}
-	property{ name{owner} type{uint16_t} }
-	property{ name{kind} type{::daddy::tube_kind} }
-	property{ name{index} type{uint8_t} }
 	property{ name{segments} type{vector_pool{131072}{::daddy::rope_segment}} }
 	property{ name{bumps} type{vector_pool{65536}{::daddy::bump}} }
 	property{ name{parts} type{vector_pool{32768}{player::body_part}} }
-	// DaddyDeadLeg: its chunk (bodyParts[].connection), secondaryChunk, deadness
-	property{ name{chunk} type{uint8_t} }
-	property{ name{secondary_chunk} type{uint8_t} }
-	property{ name{deadness} type{float} }
-	// DaddyDangleTube.Acon/Bcon
-	property{ name{a_con} type{::daddy::dangle_connection} }
-	property{ name{b_con} type{::daddy::dangle_connection} }
 }
 
 // LizardSpit: Red's and Caramel's gobs, in flight or stuck to something;
-// `room` is the room's index, `owner` the spitting lizard's index + 1
+// `room` is the room's index, `owner` the spitting lizard's creature index + 1
 object{
 	name{lizard_spit}
 	storage_type{erasable}

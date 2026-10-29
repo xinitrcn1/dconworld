@@ -80,7 +80,6 @@ namespace cicada {
         uint8_t current_loop = 0;
         // CreatureLooker.lookCreature: a player index + 1, 0 none
         uint8_t look_player = 0;
-        // UnityEngine.Random as the graphics module uses it
-        rw::rng random;
+        // (its UnityEngine.Random is the creature's graphics_random)
     };
 }

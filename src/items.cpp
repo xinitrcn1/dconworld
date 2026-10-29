@@ -2,12 +2,9 @@
 
 #include "items.hpp"
 #include "outposts.hpp"
-#include "centipede.hpp"
 #include "cicada.hpp"
-#include "dropbug.hpp"
+#include "creature.hpp"
 #include "explosions.hpp"
-#include "lizard.hpp"
-#include "daddy.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -339,7 +336,7 @@ namespace items {
 
         // Player.ThrowObject for a carried cicada: Player.TossObject, the
         // creature lobbed in the throw direction, then let go
-        void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::cicada_id cc) {
+        void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::creature_id cc) {
             auto& w = state.world;
             auto const& in = w.player_get_input(p)[0];
             auto const o = cicada::body(state, cc);
@@ -859,15 +856,10 @@ namespace items {
                     floor_bounce = 0;
                 } else {
                     // Weapon.INotifyOfFlyingWeapons
-                    dropbug::flying_weapon(state, room.id, pos, vel, w.item_get_thrown_pos(it));
+                    creature::flying_weapon(state, room.id, pos, vel, w.item_get_thrown_pos(it));
                     // SharedPhysics.TraceProjectileAgainstBodyChunks (creatures)
-                    dcon::centipede_id hit;
-                    dcon::dropbug_id hit_bug;
-                    dcon::cicada_id hit_cicada;
-                    dcon::lizard_id hit_lizard;
-                    dcon::daddy_id hit_daddy;
-                    daddy::hit_part hit_part;
-                    uint32_t hit_chunk = 0;
+                    dcon::creature_id hit;
+                    creature::hit_part hit_part;
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
                     auto const hit_creature = [&](auto&& violence) {
@@ -904,19 +896,12 @@ namespace items {
                         w.item_set_forbidden_to_player(it, 40);
                         w.item_set_thrown_by(it, dcon::player_id{});
                     };
-                    if (centipede::trace(state, room.id, pos, pos + vel, rad, hit, hit_chunk))
-                        hit_creature([&](vec2 m, float dmg, float st) { centipede::violence(state, hit, hit_chunk, m, dmg, st); });
-                    else if (dropbug::trace(state, room.id, pos, pos + vel, rad, hit_bug, hit_chunk))
-                        hit_creature([&](vec2 m, float dmg, float st) { dropbug::violence(state, hit_bug, hit_chunk, m, dmg, st); });
-                    else if (cicada::trace(state, room.id, pos, pos + vel, rad, hit_cicada, hit_chunk))
-                        hit_creature([&](vec2 m, float dmg, float st) { cicada::violence(state, hit_cicada, hit_chunk, m, dmg, st); });
-                    else if (lizard::trace(state, room.id, pos, pos + vel, rad, hit_lizard, hit_chunk)) {
-                        // a Rock turns a lizard around (Lizard.Violence)
+                    if (creature::trace(state, room.id, pos, pos + vel, rad, hit, hit_part)) {
+                        // a body chunk or an appendage; a Rock turns a lizard
+                        // around (Lizard.Violence)
                         bool const rock = w.item_get_type(it) == world::item_type::rock;
-                        hit_creature([&](vec2 m, float dmg, float st) { lizard::violence(state, hit_lizard, hit_chunk, m, dmg, st, rock); });
-                    } else if (daddy::trace(state, room.id, pos, pos + vel, rad, hit_daddy, hit_part)) {
-                        // a body chunk or a tentacle (an appendage)
-                        hit_creature([&](vec2 m, float dmg, float st) { daddy::violence(state, hit_daddy, hit_part, m, dmg, st); });
+                        auto const type = is_spear(state, it) ? creature::damage_type::stab : creature::damage_type::blunt;
+                        hit_creature([&](vec2 m, float dmg, float st) { creature::violence(state, hit, hit_part, m, dmg, st, type, rock); });
                     }
                 }
                 break;
@@ -1567,12 +1552,12 @@ namespace items {
         float item_score = 0.f, cicada_score = 0.f;
         auto candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f, item_score) : dcon::item_id{};
         // the creatures PickupCandidate looks at too: cicadas
-        auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::cicada_id{};
+        auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::creature_id{};
         if (candidate && cicada_candidate) {
             if (cicada_score < item_score)
                 candidate = dcon::item_id{};
             else
-                cicada_candidate = dcon::cicada_id{};
+                cicada_candidate = dcon::creature_id{};
         }
         // a carried cicada takes both hands (grasps[0], HeavyCarry)
         auto const carried = cicada::held_by(state, p);

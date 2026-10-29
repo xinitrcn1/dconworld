@@ -24,13 +24,13 @@ namespace cicada_graphics {
         // Limb(rad 0, surface friction 0.7, air friction 0.9, hunt speed 6, quickness 0.5)
         constexpr body_parts::limb_params tentacle{0.f, 0.7f, 0.9f, 6.f, 0.5f};
 
-        vec2 chunk_pos(sys::game_state const& state, dcon::cicada_id c, uint32_t i) {
+        vec2 chunk_pos(sys::game_state const& state, dcon::creature_id c, uint32_t i) {
             return state.world.body_chunk_get_pos(cicada::chunk(state, c, i));
         }
-        vec2 chunk_last_pos(sys::game_state const& state, dcon::cicada_id c, uint32_t i) {
+        vec2 chunk_last_pos(sys::game_state const& state, dcon::creature_id c, uint32_t i) {
             return state.world.body_chunk_get_last_pos(cicada::chunk(state, c, i));
         }
-        vec2 chunk_vel(sys::game_state const& state, dcon::cicada_id c, uint32_t i) {
+        vec2 chunk_vel(sys::game_state const& state, dcon::creature_id c, uint32_t i) {
             return state.world.body_chunk_get_vel(cicada::chunk(state, c, i));
         }
 
@@ -47,8 +47,8 @@ namespace cicada_graphics {
         }
 
         // CicadaGraphics.ResetWing: snapped out to the side of the body
-        void reset_wing(sys::game_state& state, dcon::cicada_id c, int side, int wing) {
-            auto& g = state.world.cicada_get_graphics(c);
+        void reset_wing(sys::game_state& state, dcon::creature_id c, int side, int wing) {
+            auto& g = state.world.cicada_data_get_graphics(creature::cicada_data(state.world, c));
             vec2 const p0 = chunk_pos(state, c, 0);
             vec2 const v = custom::dir_vec(chunk_pos(state, c, 1), p0);
             vec2 const a = custom::perpendicular_vector(v);
@@ -62,10 +62,10 @@ namespace cicada_graphics {
         }
     }
 
-    void colors(sys::game_state const& state, dcon::cicada_id c, palette const& pal, vec3& body, vec3& shield, vec3& eyes) {
+    void colors(sys::game_state const& state, dcon::creature_id c, palette const& pal, vec3& body, vec3& shield, vec3& eyes) {
         auto const& w = state.world;
-        float const hue = w.cicada_get_ivars(c).hue;
-        bool const gender = w.cicada_get_gender(c) != 0;
+        float const hue = w.cicada_data_get_ivars(creature::cicada_data(w, c)).hue;
+        bool const gender = w.creature_get_payload(c).cicada.gender != 0;
         // HSLColor.Lerp towards white (CicadaA) or black (CicadaB), then the palette
         if (gender) {
             body = mix(custom::hsl2rgb(hue, 0.2f, 0.9f), pal.fog, 0.1f);
@@ -78,14 +78,14 @@ namespace cicada_graphics {
         }
     }
 
-    void reset(sys::game_state& state, dcon::cicada_id c) {
+    void reset(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto& g = w.cicada_get_graphics(c);
+        auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
         g = cicada::graphics_state{};
         // vanilla seeds these from the creature's ID
-        g.random = rw::rng{w.cicada_get_random(c).state ^ 0x5bd1e995u};
-        auto& rng = g.random;
-        auto const& iv = w.cicada_get_ivars(c);
+        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x5bd1e995u};
+        auto& rng = w.creature_get_graphics_random(c);
+        auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
         g.wing_offset = rng.value();
         vec2 const p0 = chunk_pos(state, c, 0);
         for (int i = 0; i < 2; ++i)
@@ -110,26 +110,27 @@ namespace cicada_graphics {
         g.z_rotation = g.last_z_rotation = custom::dir_vec(chunk_pos(state, c, 1), p0);
     }
 
-    void reset_positions(sys::game_state& state, dcon::cicada_id c) {
+    void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto const keep = w.cicada_get_graphics(c);
+        auto const keep_random = w.creature_get_graphics_random(c);
+        auto const keep = w.cicada_data_get_graphics(creature::cicada_data(w, c));
         reset(state, c);
-        auto& g = w.cicada_get_graphics(c);
-        g.random = keep.random;
+        auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
+        w.creature_set_graphics_random(c, keep_random);
         g.wing_offset = keep.wing_offset;
         g.lazy_wing = keep.lazy_wing;
     }
 
-    void update(sys::game_state& state, dcon::cicada_id c, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& g = w.cicada_get_graphics(c);
-        auto& rng = g.random;
-        auto const& iv = w.cicada_get_ivars(c);
+        auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
+        auto& rng = w.creature_get_graphics_random(c);
+        auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
         vec2 const p0 = chunk_pos(state, c, 0), p1 = chunk_pos(state, c, 1);
         vec2 const v0 = chunk_vel(state, c, 0);
         bool const awake = cicada::consious(state, c);
-        bool const flying = w.cicada_get_flying(c) != 0;
-        int32_t const charge_counter = w.cicada_get_charge_counter(c);
+        bool const flying = w.creature_get_payload(c).cicada.flying != 0;
+        int32_t const charge_counter = w.creature_get_payload(c).cicada.charge_counter;
 
         // the wing sounds: loops aren't played here, only how they stop
         float spread = 0.f;
@@ -148,9 +149,9 @@ namespace cicada_graphics {
         }
 
         // CreatureLooker: the slugcat it is busy with, else the one it sees
-        uint8_t look = w.cicada_get_focus_player(c);
-        if (look == 0 && w.cicada_get_sees_player(c))
-            look = w.cicada_get_seen_player(c);
+        uint8_t look = w.cicada_data_get_focus_player(creature::cicada_data(w, c));
+        if (look == 0 && w.creature_get_sees_player(c))
+            look = w.creature_get_seen_player(c);
         g.look_player = look;
 
         g.charging_visuals = charge_counter > 0 ? mathf::min(g.charging_visuals + 0.1f, 1.f) : mathf::max(g.charging_visuals - 0.05f, 0.f);
@@ -179,12 +180,12 @@ namespace cicada_graphics {
                     g.z_rotation += custom::deg_to_vec(p1.x < p0.x ? 112.5f : -112.5f) * 0.3f;
                 }
             } else {
-                ivec2 const sit = w.cicada_get_sit_direction(c);
+                ivec2 const sit = w.cicada_data_get_sit_direction(creature::cicada_data(w, c));
                 if (sit.x != 0)
                     g.z_rotation += vec2{0.4f * float(-sit.x) * (p1.y > p0.y ? 1.f : -1.f), 0.f};
                 else
                     g.z_rotation += vec2{0.4f * float(sit.y) * (p1.x > p0.x ? 1.f : -1.f), 0.f};
-                if (w.cicada_get_wait_to_fly_counter(c) > 0)
+                if (w.creature_get_payload(c).cicada.wait_to_fly_counter > 0)
                     g.wing_deployment_get_to = 0.9f;
                 else if (g.wing_deployment_get_to == 1.f)
                     g.wing_deployment_get_to = 0.9f;
@@ -201,10 +202,10 @@ namespace cicada_graphics {
         vec2 const perp = custom::perpendicular_vector(dir);
         auto const looked = player_of(state, g.look_player);
         if (awake && looked && g.blink_counter > 0) {
-            if (w.cicada_get_sees_player(c) && w.cicada_get_seen_player(c) == g.look_player)
+            if (w.creature_get_sees_player(c) && w.creature_get_seen_player(c) == g.look_player)
                 g.look_dir = custom::dir_vec(p0, w.body_chunk_get_pos(player::body_chunk(state, looked, 0)));
             else
-                g.look_dir = custom::dir_vec(p0, room_view::middle_of_tile(w.cicada_get_last_seen_pos(c)));
+                g.look_dir = custom::dir_vec(p0, room_view::middle_of_tile(w.creature_get_last_seen_pos(c)));
             vec2 const v2 = body_parts::rotate_around_origo(g.look_dir, custom::aim(vec2{0.f, 0.f}, vec2{-dir.x, dir.y}));
             g.look_rotation = custom::aim(-v2, v2);
         } else {
@@ -215,7 +216,7 @@ namespace cicada_graphics {
         // the wings: deployed (fluttering, drawn from the wing timer) or
         // folded back, trailing the body
         float const d = awake ? 1.f : 0.5f;
-        float const power = w.cicada_get_flying_power(c);
+        float const power = w.creature_get_payload(c).cicada.flying_power;
         float const wing_length = iv.wing_length;
         for (int k = 0; k < 2; ++k)
             for (int l = 0; l < 2; ++l) {
@@ -229,7 +230,7 @@ namespace cicada_graphics {
                         dep = 1.f;
                     } else if (dep < g.wing_deployment_get_to) {
                         dep = mathf::min(dep + speed, g.wing_deployment_get_to);
-                        if (w.cicada_get_wait_to_fly_counter(c) > 0 && g.lazy_wing != n)
+                        if (w.creature_get_payload(c).cicada.wait_to_fly_counter > 0 && g.lazy_wing != n)
                             dep = mathf::min(dep + speed * 2.4f, g.wing_deployment_get_to);
                     } else if (dep > g.wing_deployment_get_to) {
                         if (dep == 1.f)
@@ -266,11 +267,11 @@ namespace cicada_graphics {
             }
 
         // the tentacles
-        auto const holder = player_of(state, w.cicada_get_held_by(c));
-        auto const sticky = player_of(state, w.cicada_get_sticky_player(c));
+        auto const holder = player_of(state, w.creature_get_payload(c).cicada.held_by);
+        auto const sticky = player_of(state, w.creature_get_payload(c).cicada.sticky_player);
         std::optional<dcon::body_chunk_id> cling;
         if (sticky)
-            cling = player::body_chunk(state, sticky, w.cicada_get_sticky_chunk(c));
+            cling = player::body_chunk(state, sticky, w.creature_get_payload(c).cicada.sticky_chunk);
         for (int m = 0; m < 2; ++m)
             for (int n = 0; n < 2; ++n) {
                 auto& t = g.tentacles[m][n];
@@ -319,11 +320,11 @@ namespace cicada_graphics {
             g.wing_time_add = 0.f;
     }
 
-    void build(sys::game_state const& state, dcon::cicada_id c, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id c, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
         auto const& w = state.world;
-        auto const& g = w.cicada_get_graphics(c);
-        auto const& iv = w.cicada_get_ivars(c);
-        bool const gender = w.cicada_get_gender(c) != 0;
+        auto const& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
+        auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
+        bool const gender = w.creature_get_payload(c).cicada.gender != 0;
 
         // ApplyPalette
         vec3 body, shield, eye;

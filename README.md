@@ -73,6 +73,39 @@ player...) is modelled with relationships. Flags written while the rooms
 update in parallel are bytes, not bitfields (a bitfield shares its byte with
 seven other objects).
 
+Every creature, whatever its kind, is one `creature` object with a `type`
+tag (`src/creature_types.hpp`). What at least half of the five kinds have is
+a property of its own, stored SoA like everything else: the generator,
+stun, death and health (every kind), the AI's behaviour and destination
+(every kind), the current utility (four), the tracked slugcat, whether it is
+seen, for how long it hasn't been and where it was last (every kind; the
+centipede has no visual contact flag), the grasps on a slugcat (centipede,
+dropwig, lizard), the forbidden idle spot (centipede, squidcada, lizard) and
+the graphics module's generator (every kind); the body is a `physical_object`
+(`creature_body`). What only one kind has is its `payload`, a union of one
+struct per kind of at most 64 bytes (one cache line, `static_assert`ed:
+centipede 64, dropwig 60, squidcada 56, lizard 52, daddy 40 bytes): its
+hottest state and the index of its kind's data object (`centipede_data`,
+`dropbug_data`, `cicada_data`, `lizard_data`, `daddy_data`), which holds the
+rest SoA: AI modules, Lizard.cs' movement, the tongue, the graphics
+modules with the lizard cosmetics. An index in the payload rather than a
+relationship: one load, no link arrays, and the data object is made and
+deleted with its creature anyway.
+
+Repeated parts of a creature with a state of their own are `creature_part`s
+(owned through `part_ownership`, in the order they were made): a daddy long
+legs' tentacles and tube graphics. What parts share is SoA (kind, number,
+stun, health: `DaddyTentacle.stun`, `DaddyState.tentacleHealth`), the rest a
+`part_payload` (28 bytes: a tube's connections, chunks and deadness) pointing at the
+kind's data object with the vector pools (a tentacle's tiles, grab path and
+chunks; a tube's segments, bumps and parts). Body chunks stay `body_chunk`s,
+shared with the slugcats and the items and moved by the one
+`physics::update_object`. The graphics modules' limbs and generic body parts
+(`player::hand_state`, `player::body_part`, updated by `body_parts.hpp` for
+every kind) stay in the kinds' graphics state: they are cosmetic, only
+update where a camera looks, and vanilla interleaves them with each kind's
+own code, so no shared pass could take them.
+
 ## Simulation
 
 There is no AbstractRoom/AbstractCreature layer: every room of every loaded
@@ -94,8 +127,9 @@ tick, viewed or not, with full physics and AI for every creature in it.
   get their graphics modules reset (`reset_positions`: the parts back on the
   body, the look kept), and `rooms::build_index` buckets every player,
   creature, item and spit by room.
-- **Parallel**: one TBB task per room runs its players, creatures (update and
-  collisions), outposts, items, rot, water, sand and mud, ambient particles
+- **Parallel**: one TBB task per room runs its players, creatures (kind by
+  kind: every creature's Update and graphics module, then its collisions
+  with the slugcats and its kin, `creature::update_room`), outposts, items, rot, water, sand and mud, ambient particles
   and gate, in that order. A room's update reads and writes only its own
   objects: every loop over creatures is `rooms::for_each_*` over the room's
   bucket, and what holds a slugcat is looked for in the slugcat's room. Each
@@ -150,6 +184,27 @@ fields (~60 a tick, mostly squidcadas and daddies changing destination); the
 rest is the other creatures, the rot and the water. Rooms scale to about 6x
 on 6 cores; the serial phases take ~0.25 ms a tick.
 
+### Adding a creature kind
+
+1. `src/creature_types.hpp`: an entry in `creature::type` (its place is its
+   update order in a room) and a payload struct of at most 64 bytes in the
+   `payload` union (`static_assert`ed), with a `data` index if it has a data
+   object.
+2. `src/dcon_generated.txt`: optionally a `<kind>_data` object for what
+   doesn't fit the payload, its accessor in `creature.hpp`, its making and
+   deleting in `creature::make`/`erase`; `creature_part` kinds for repeated
+   parts with a state of their own.
+3. The kind's code (`create` through `creature::make`, `destroy` through
+   `creature::erase`, `update`, `violence`, `release_player`, the collision
+   hooks) uses the shared properties and `creature::stun_countdown`,
+   `consious`, `body`, `chunk`, `player_of` where vanilla's Creature does.
+4. A case in the switches of `src/creature.cpp` (create, destroy, describe,
+   update, collides/collide_player/collide_kin, came_into_view, violence,
+   release_player) and in render.cpp's `build_creatures`.
+
+Weapon hits, explosions, flare bombs, warps, pipes, the rot's prey, the
+slugcat letting go, the fuzz and the bench then take it as they come.
+
 ## Layout
 
 | file | what |
@@ -174,7 +229,8 @@ on 6 cores; the serial phases take ~0.25 ms a tick.
 | `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of the whole world: every room in parallel (TBB), the deferred transactions, vessels and warps; startup population of every room |
-| `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures, items and spit by room, for the parallel room updates |
+| `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures (by room and kind), items and spit by room, for the parallel room updates |
+| `src/creature.*`, `src/creature_types.hpp` | the `creature` object's type tag and payloads, `creature_part`'s; what every kind shares (body, chunks, Creature.Update's stun countdown, consciousness, collisions with the slugcats and kin, the projectile trace, explosions and flashes, letting go) and the dispatch to the kinds |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
 | `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
 | `src/dropbug.*` | `DropBug`/`DropBugAI`: the dropwig sitting in the ceiling, dropping on prey, pouncing, biting and carrying, its `CeilingSitModule` |

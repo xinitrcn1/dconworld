@@ -71,6 +71,7 @@ add_executable(rwcpp
     src/simulation.cpp
     src/pathing.cpp
     src/body_parts.cpp
+    src/creature.cpp
     src/centipede.cpp
     src/centipede_graphics.cpp
     src/dropbug.cpp

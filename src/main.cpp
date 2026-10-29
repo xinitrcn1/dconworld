@@ -323,11 +323,8 @@ int main(int argc, char* argv[]) {
     uint32_t screenshot_ticks = 80;
     std::string script;
     std::optional<vec2> start_pos;
-    std::vector<rw::vec3> spawn_centipedes; // x, y, size
-    std::vector<vec2> spawn_dropbugs;
-    std::vector<rw::vec3> spawn_cicadas; // x, y, 1 for a CicadaA
-    std::vector<std::pair<vec2, lizard::breed>> spawn_lizards;
-    std::vector<std::pair<vec2, daddy::variant>> spawn_daddies;
+    // the creatures to spawn, made kind by kind (creature::type order)
+    std::vector<std::pair<vec2, creature::spawn_desc>> spawn_creatures;
     struct item_spawn {
         vec2 at;
         world::item_type type;
@@ -376,16 +373,16 @@ int main(int argc, char* argv[]) {
         } else if (a == "--centipede") {
             float x = 0.f, y = 0.f, sz = -1.f;
             if (std::sscanf(next().c_str(), "%f,%f,%f", &x, &y, &sz) >= 2)
-                spawn_centipedes.push_back(rw::vec3{x, y, sz});
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::centipede, sz}});
         } else if (a == "--dropbug") {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
-                spawn_dropbugs.push_back(vec2{x, y});
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::dropbug}});
         } else if (a == "--cicada") {
             float x = 0.f, y = 0.f;
             char kind = 'a';
             if (std::sscanf(next().c_str(), "%f,%f,%c", &x, &y, &kind) >= 2)
-                spawn_cicadas.push_back(rw::vec3{x, y, kind == 'b' ? 0.f : 1.f});
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::cicada, kind == 'b' ? 0.f : 1.f}});
         } else if (a == "--lizard") {
             float x = 0.f, y = 0.f;
             char name[32] = "green";
@@ -393,7 +390,7 @@ int main(int argc, char* argv[]) {
             if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
                 if (!lizard::parse_breed(name, b))
                     std::fprintf(stderr, "unknown lizard breed %s, a green one instead\n", name);
-                spawn_lizards.push_back({vec2{x, y}, b});
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::lizard, -1.f, false, uint8_t(b)}});
             }
         } else if (a == "--daddy") {
             float x = 0.f, y = 0.f;
@@ -402,7 +399,7 @@ int main(int argc, char* argv[]) {
             if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
                 if (!daddy::parse_variant(name, v))
                     std::fprintf(stderr, "unknown daddy long legs %s, a daddy instead\n", name);
-                spawn_daddies.push_back({vec2{x, y}, v});
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::daddy, -1.f, false, uint8_t(v)}});
             }
         } else if (a == "--item") {
             float x = 0.f, y = 0.f;
@@ -500,16 +497,9 @@ int main(int argc, char* argv[]) {
     a.enter_room(start);
     if (weaver)
         player_graphics::set_weaver(gs, a.players[0], true);
-    for (auto const& c : spawn_centipedes)
-        centipede::create(gs, start, vec2{c.x, c.y}, c.z);
-    for (auto const& d : spawn_dropbugs)
-        dropbug::create(gs, start, d);
-    for (auto const& c : spawn_cicadas)
-        cicada::create(gs, start, vec2{c.x, c.y}, c.z != 0.f);
-    for (auto const& [at, b] : spawn_lizards)
-        lizard::create(gs, start, at, b);
-    for (auto const& [at, v] : spawn_daddies)
-        daddy::create(gs, start, at, v);
+    std::stable_sort(spawn_creatures.begin(), spawn_creatures.end(), [](auto const& x, auto const& y) { return x.second.kind < y.second.kind; });
+    for (auto const& [at, d] : spawn_creatures)
+        creature::create(gs, start, at, d);
     for (auto const& i : spawn_items) {
         auto const it = items::create(gs, start, i.at, i.type);
         if (!i.pearl.empty())
@@ -567,45 +557,8 @@ int main(int argc, char* argv[]) {
                 step(in);
             }
         }
-        gs.world.for_each_centipede([&](dcon::centipede_id c) {
-            vec2 const hp = gs.world.body_chunk_get_pos(centipede::chunk(gs, c, centipede::head_index(gs, c)));
-            reports::add_log("centipede at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
-                + std::to_string(int(gs.world.centipede_get_behavior(c))) + (gs.world.centipede_get_dead(c) ? " dead" : ""));
-        });
-        gs.world.for_each_dropbug([&](dcon::dropbug_id d) {
-            vec2 const hp = gs.world.body_chunk_get_pos(dropbug::chunk(gs, d, 0));
-            reports::add_log("dropbug at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
-                + std::to_string(int(gs.world.dropbug_get_behavior(d))) + (dropbug::sitting_in_ceiling(gs, d) ? " in the ceiling" : "")
-                + (gs.world.dropbug_get_dead(d) ? " dead" : ""));
-        });
-        gs.world.for_each_cicada([&](dcon::cicada_id c) {
-            vec2 const hp = gs.world.body_chunk_get_pos(cicada::chunk(gs, c, 0));
-            reports::add_log(std::string{gs.world.cicada_get_gender(c) ? "white" : "dark"} + " squidcada at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y))
-                + " behavior " + std::to_string(int(gs.world.cicada_get_behavior(c))) + (gs.world.cicada_get_flying(c) ? " flying" : " sitting")
-                + " stamina " + std::to_string(gs.world.cicada_get_stamina(c)) + (gs.world.cicada_get_dead(c) ? " dead" : ""));
-        });
-        gs.world.for_each_lizard([&](dcon::lizard_id l) {
-            auto const& w = gs.world;
-            vec2 const hp = w.body_chunk_get_pos(lizard::chunk(gs, l, 0));
-            reports::add_log(std::string{lizard::to_string(w.lizard_get_breed(l))} + " lizard at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y))
-                + " behavior " + std::to_string(int(w.lizard_get_ai(l).current)) + " animation " + std::to_string(int(w.lizard_get_core(l).anim))
-                + " legs " + std::to_string(w.lizard_get_graphics(l).legs_grabbing) + (lizard::grasped(gs, l) ? " holding the slugcat" : "")
-                + (w.lizard_get_tongue(l).state != lizard::tongue_state::hidden ? " tongue out" : "")
-                + (w.lizard_get_dead(l) ? " dead" : ""));
-        });
-        gs.world.for_each_daddy([&](dcon::daddy_id d) {
-            auto const& w = gs.world;
-            vec2 const mp = daddy::middle_of_body(gs, d);
-            bool held = false, eating = false;
-            w.for_each_player([&](dcon::player_id p) {
-                held = held || daddy::holds(gs, d, p);
-                eating = eating || daddy::eating(gs, d, p);
-            });
-            reports::add_log(std::string{daddy::to_string(w.daddy_get_variant(d))} + " long legs at " + std::to_string(int(mp.x)) + "," + std::to_string(int(mp.y))
-                + " behavior " + std::to_string(int(w.daddy_get_ai(d).current)) + " chunks " + std::to_string(daddy::chunk_count(gs, d))
-                + " legs " + std::to_string(daddy::legs_gripping(gs, d)) + "/" + std::to_string(w.daddy_get_parts(d).tentacle_count)
-                + (held ? " holding the slugcat" : "") + (eating ? " eating the slugcat" : "") + (w.daddy_get_dead(d) ? " dead" : ""));
-        });
+        for (auto const t : creature::all_types)
+            creature::for_each_of(gs.world, t, [&](dcon::creature_id c) { reports::add_log(creature::describe(gs, c)); });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
             uint32_t bulbs = 0, eyes = 0, legs = 0, tendrils = 0, vines = 0, meals = 0;
@@ -711,6 +664,13 @@ int main(int argc, char* argv[]) {
                     }
                     return a.room;
                 };
+                // Ctrl + a creature's key: every creature of that kind goes
+                auto const remove_all = [&](creature::type t) {
+                    std::vector<dcon::creature_id> all;
+                    creature::for_each_of(w, t, [&](dcon::creature_id c) { all.push_back(c); });
+                    for (auto const c : all)
+                        creature::destroy(gs, c);
+                };
                 switch (e.key.key) {
                 case SDLK_ESCAPE: running = false; break;
                 case SDLK_R:
@@ -737,10 +697,7 @@ int main(int argc, char* argv[]) {
                     break;
                 case SDLK_K: {
                     if (e.key.mod & SDL_KMOD_CTRL) {
-                        std::vector<dcon::centipede_id> all;
-                        w.for_each_centipede([&](dcon::centipede_id c) { all.push_back(c); });
-                        for (auto const c : all)
-                            centipede::destroy(gs, c);
+                        remove_all(creature::type::centipede);
                         break;
                     }
                     float mx = 0.f, my = 0.f;
@@ -748,15 +705,12 @@ int main(int argc, char* argv[]) {
                     // same mapping as the teleport click
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
                     auto const c = centipede::create(gs, a.room, at, (e.key.mod & SDL_KMOD_SHIFT) ? 0.9f : -1.f);
-                    reports::add_log("centipede, size " + std::to_string(gs.world.centipede_get_size(c)));
+                    reports::add_log("centipede, size " + std::to_string(gs.world.creature_get_payload(c).centipede.size));
                     break;
                 }
                 case SDLK_V: {
                     if (e.key.mod & SDL_KMOD_CTRL) {
-                        std::vector<dcon::dropbug_id> all;
-                        w.for_each_dropbug([&](dcon::dropbug_id d) { all.push_back(d); });
-                        for (auto const d : all)
-                            dropbug::destroy(gs, d);
+                        remove_all(creature::type::dropbug);
                         break;
                     }
                     float mx = 0.f, my = 0.f;
@@ -768,10 +722,7 @@ int main(int argc, char* argv[]) {
                 }
                 case SDLK_Q: {
                     if (e.key.mod & SDL_KMOD_CTRL) {
-                        std::vector<dcon::cicada_id> all;
-                        w.for_each_cicada([&](dcon::cicada_id c) { all.push_back(c); });
-                        for (auto const c : all)
-                            cicada::destroy(gs, c);
+                        remove_all(creature::type::cicada);
                         break;
                     }
                     float mx = 0.f, my = 0.f;
@@ -784,10 +735,7 @@ int main(int argc, char* argv[]) {
                 }
                 case SDLK_Y: {
                     if (e.key.mod & SDL_KMOD_CTRL) {
-                        std::vector<dcon::lizard_id> all;
-                        w.for_each_lizard([&](dcon::lizard_id l) { all.push_back(l); });
-                        for (auto const l : all)
-                            lizard::destroy(gs, l);
+                        remove_all(creature::type::lizard);
                         break;
                     }
                     // the next breed each time (Shift: the last one again)
@@ -804,10 +752,7 @@ int main(int argc, char* argv[]) {
                 }
                 case SDLK_H: {
                     if (e.key.mod & SDL_KMOD_CTRL) {
-                        std::vector<dcon::daddy_id> all;
-                        w.for_each_daddy([&](dcon::daddy_id d) { all.push_back(d); });
-                        for (auto const d : all)
-                            daddy::destroy(gs, d);
+                        remove_all(creature::type::daddy);
                         break;
                     }
                     // Shift: on to the next variant

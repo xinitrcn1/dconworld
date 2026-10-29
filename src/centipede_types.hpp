@@ -25,7 +25,6 @@ namespace centipede {
         float walk_cycle = 0.f;
         float body_dir = 0.f;
         float last_body_dir = 0.f;
-        // the whiskers' twitching
-        rw::rng random;
+        // (the whiskers' twitching rolls the creature's graphics_random)
     };
 }

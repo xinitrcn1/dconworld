@@ -846,7 +846,7 @@ namespace daddy::detail {
                             if (rw::distance(tw.c[j].vel, w.body_chunk_get_vel(pc)) >= mathf::lerp(1.f, 8.f, t.sticky))
                                 break;
                             // (it eats slugcats: the relationship is Eats)
-                            bool flag3 = x.a.player == ref;
+                            bool flag3 = x.seen_player == ref;
                             for (uint32_t m = 0; m < tw.c.size() && flag3; ++m)
                                 if (tw.c[m].phase > -1.f || x.room.get_tile(tw.c[m].pos).solid())
                                     flag3 = false;
@@ -862,7 +862,7 @@ namespace daddy::detail {
                         }
                         if (t.needed_for_locomotion || (t.current != task::locomotion && t.current != task::examine_sound) || is_creature_caught_enough(x, ref))
                             break;
-                        if (x.a.player != ref)
+                        if (x.seen_player != ref)
                             break;
                         bool flag4 = false;
                         for (auto const& o : x.tents)
@@ -888,12 +888,12 @@ namespace daddy::detail {
 
         // DaddyTentacle.LookForCreaturesToHunt (PreyTracker: the one slugcat)
         void look_for_creatures_to_hunt(ctx& x, tentacle_work& tw) {
-            if (tw.t.needed_for_locomotion || x.a.player == 0)
+            if (tw.t.needed_for_locomotion || x.seen_player == 0)
                 return;
-            dcon::player_id const p = player_of(x.state, x.a.player);
+            dcon::player_id const p = player_of(x.state, x.seen_player);
             // GetTrackedPrey(Random.Range(0, TotalTrackedPrey))
             x.rng.range(0, 1);
-            uint8_t const ref = x.a.player;
+            uint8_t const ref = x.seen_player;
             for (auto const& o : x.tents)
                 if (o.t.hunt_player == ref)
                     return;
@@ -1122,11 +1122,11 @@ namespace daddy::detail {
         void hunt(ctx& x, tentacle_work& tw, std::vector<ivec2>& path) {
             auto& t = tw.t;
             dcon::player_id const p = player_of(x.state, t.hunt_player);
-            if (!p || x.a.player != t.hunt_player || !player_here(x.state, p, x.room.id)) {
+            if (!p || x.seen_player != t.hunt_player || !player_here(x.state, p, x.room.id)) {
                 switch_task(x, tw, task::locomotion);
                 return;
             }
-            if (x.a.visual_contact)
+            if (x.sees_player)
                 move_grab_dest(x, tw, x.state.world.body_chunk_get_pos(player::body_chunk(x.state, p, 0)), path);
             else
                 move_grab_dest(x, tw, room_view::middle_of_tile(best_guess(x)), path);
@@ -1386,10 +1386,12 @@ namespace daddy::detail {
     void tentacle_update(ctx& x, tentacle_work& tw) {
         auto& w = x.state.world;
         auto& t = tw.t;
+        // the part's stun and health
+        int32_t& stun = w.creature_part_get_stun(tw.part);
         base_update(x, tw);
         auto const gp = player_of(x.state, t.grab_player);
         if (t.grab_player != 0 && (!gp || !player_here(x.state, gp, x.room.id))) {
-            t.stun = 10;
+            stun = 10;
             t.grab_player = 0;
         }
         if (x.dead()) {
@@ -1397,14 +1399,14 @@ namespace daddy::detail {
             t.grab_player = 0;
             t.limp = 1;
         }
-        if (t.stun > 0) {
-            --t.stun;
+        if (stun > 0) {
+            --stun;
             t.grab_player = 0;
         }
-        float const health = w.daddy_get_tentacle_health(x.d).h[t.number];
+        float const health = w.creature_part_get_health(tw.part);
         if (mathf::pow(x.rng.value(), 0.35f) > health) {
             float const r = x.rng.value();
-            t.stun = std::max(t.stun, int32_t(mathf::lerp(-4.f, 14.f, mathf::pow(r, 0.5f + 20.f * mathf::max(0.f, health)))));
+            stun = std::max(stun, int32_t(mathf::lerp(-4.f, 14.f, mathf::pow(r, 0.5f + 20.f * mathf::max(0.f, health)))));
         }
         if (t.grab_player != 0) {
             auto const pc = player_chunk(x, t.grab_player, t.grab_chunk);
@@ -1421,12 +1423,12 @@ namespace daddy::detail {
             w.body_chunk_get_vel(pc) -= a * (num - num2) * (1.f - num3);
             // (Player.GraspWiggle is a Remix option: a held slugcat can't wiggle free)
         }
-        t.limp = (!x.consious() || t.stun > 0) ? 1 : 0;
+        t.limp = (!x.consious() || stun > 0) ? 1 : 0;
         for (auto& c : tw.c) {
             c.vel *= 0.9f;
             if (t.limp)
                 c.vel.y -= 0.5f;
-            if (t.stun > 0 && !x.dead())
+            if (stun > 0 && !x.dead())
                 c.vel += custom::rnv(x.rng) * 10.f;
         }
         if (t.limp) {
@@ -1456,7 +1458,7 @@ namespace daddy::detail {
         } else if (t.current != task::locomotion) {
             switch_task(x, tw, task::locomotion);
         }
-        if (t.current == task::hunt && (t.hunt_player == 0 || x.a.player != t.hunt_player))
+        if (t.current == task::hunt && (t.hunt_player == 0 || x.seen_player != t.hunt_player))
             switch_task(x, tw, task::locomotion);
         else if (t.current != task::hunt && t.hunt_player != 0)
             t.hunt_player = 0;

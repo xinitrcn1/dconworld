@@ -13,6 +13,7 @@
 #include "stb_image.h"
 
 #include "render.hpp"
+#include "rooms.hpp"
 #include "unity_assets.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
@@ -1517,14 +1518,12 @@ void main() {
             rw::vec3 const black = palette_black(r, s, room.id);
             float const darkness = palette_darkness(r, s, room.id);
             painter p{r.batch};
-            w.for_each_centipede([&](dcon::centipede_id c) {
-                if (w.physical_object_get_room_from_object_location(centipede::body(s, c)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::centipede, [&](dcon::creature_id c) {
                 cmds.clear();
                 centipede_graphics::build(s, c, alpha, black, darkness, cmds);
                 emit_game_cmds(r, cmds);
                 // the LightSource of a shock
-                float const flash = w.centipede_get_light_flash(c);
+                float const flash = w.centipede_data_get_light_flash(creature::centipede_data(w, c));
                 if (flash > 0.f) {
                     auto const k = centipede::chunk(s, c, centipede::head_index(s, c));
                     vec2 const head = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
@@ -1547,12 +1546,9 @@ void main() {
 
         // Dropwigs through DropBugGraphics and the game's atlases
         void build_dropbug_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
-            auto const& w = s.world;
             static std::vector<sprites::draw_cmd> cmds;
             auto const pal = dropbug_palette(r, s, room.id);
-            w.for_each_dropbug([&](dcon::dropbug_id d) {
-                if (w.physical_object_get_room_from_object_location(dropbug::body(s, d)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::dropbug, [&](dcon::creature_id d) {
                 cmds.clear();
                 dropbug_graphics::build(s, d, alpha, pal, cmds);
                 emit_game_cmds(r, cmds);
@@ -1568,10 +1564,8 @@ void main() {
             auto const& w = s.world;
             painter p{r.batch};
             auto const pal = dropbug_palette(r, s, room.id);
-            w.for_each_dropbug([&](dcon::dropbug_id d) {
-                if (w.physical_object_get_room_from_object_location(dropbug::body(s, d)) != room.id)
-                    return;
-                auto const& g = w.dropbug_get_graphics(d);
+            rooms::for_each_creature(s, room.id, creature::type::dropbug, [&](dcon::creature_id d) {
+                auto const& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
                 auto const at = [&](auto const& part) { return rw::lerp(part.last_pos, part.pos, alpha); };
                 vec2 const head = rw::lerp(g.draw_positions[0][1], g.draw_positions[0][0], alpha);
                 vec2 const mid = rw::lerp(g.draw_positions[1][1], g.draw_positions[1][0], alpha);
@@ -1635,12 +1629,9 @@ void main() {
 
         // Squidcadas through CicadaGraphics and the game's atlases
         void build_cicada_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
-            auto const& w = s.world;
             static std::vector<sprites::draw_cmd> cmds;
             auto const pal = cicada_palette(r, s, room.id);
-            w.for_each_cicada([&](dcon::cicada_id c) {
-                if (w.physical_object_get_room_from_object_location(cicada::body(s, c)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::cicada, [&](dcon::creature_id c) {
                 cmds.clear();
                 cicada_graphics::build(s, c, alpha, pal, cmds);
                 emit_game_cmds(r, cmds);
@@ -1656,11 +1647,9 @@ void main() {
             auto const& w = s.world;
             painter p{r.batch};
             auto const pal = cicada_palette(r, s, room.id);
-            w.for_each_cicada([&](dcon::cicada_id c) {
-                if (w.physical_object_get_room_from_object_location(cicada::body(s, c)) != room.id)
-                    return;
-                auto const& g = w.cicada_get_graphics(c);
-                auto const& iv = w.cicada_get_ivars(c);
+            rooms::for_each_creature(s, room.id, creature::type::cicada, [&](dcon::creature_id c) {
+                auto const& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
+                auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
                 rw::vec3 body, shield, eyes;
                 cicada_graphics::colors(s, c, pal, body, shield, eyes);
                 auto const at = [&](uint32_t i) {
@@ -1703,12 +1692,9 @@ void main() {
 
         // Daddy long legs through DaddyGraphics and the game's atlases
         void build_daddy_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
-            auto const& w = s.world;
             static std::vector<sprites::draw_cmd> cmds;
             auto const pal = daddy_palette(r, s, room.id);
-            w.for_each_daddy([&](dcon::daddy_id d) {
-                if (w.physical_object_get_room_from_object_location(daddy::body(s, d)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::daddy, [&](dcon::creature_id d) {
                 cmds.clear();
                 daddy_graphics::build(s, d, alpha, pal, cmds);
                 emit_game_cmds(r, cmds);
@@ -1725,15 +1711,13 @@ void main() {
             auto const& w = s.world;
             painter p{r.batch};
             auto const pal = daddy_palette(r, s, room.id);
-            w.for_each_daddy([&](dcon::daddy_id d) {
-                if (w.physical_object_get_room_from_object_location(daddy::body(s, d)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::daddy, [&](dcon::creature_id d) {
                 rw::vec3 const body = daddy_graphics::body_color(s, d, pal);
-                rw::vec3 const effect = w.daddy_get_effect_color(d);
-                float const width = w.daddy_get_size_class(d) ? 4.f : 3.4f;
+                rw::vec3 const effect = w.creature_get_payload(d).daddy.effect_color;
+                float const width = w.creature_get_payload(d).daddy.size_class ? 4.f : 3.4f;
                 for (uint32_t i = 0; i < daddy::tube_count(s, d); ++i) {
                     auto const t = daddy::tube_of(s, d, i);
-                    uint32_t const n = w.daddy_tube_get_segments(t).size();
+                    uint32_t const n = w.daddy_tube_get_segments(daddy::tube_data(w, t)).size();
                     vec2 prev = daddy_graphics::tube_pos(s, t, 0.f, alpha);
                     for (uint32_t k = 1; k <= 2 * n; ++k) {
                         float const f = float(k) / float(2 * n);
@@ -1741,15 +1725,15 @@ void main() {
                         p.line(prev, q, width, to_rgba(daddy_graphics::tube_color(s, d, t, mathf::inverse_lerp(0.3f, 1.f, f), pal)));
                         prev = q;
                     }
-                    for (auto const& b : w.daddy_tube_get_bumps(t)) {
+                    for (auto const& b : w.daddy_tube_get_bumps(daddy::tube_data(w, t))) {
                         vec2 const c = daddy_graphics::on_tube_pos(s, t, b.pos, alpha);
                         float const rad = mathf::lerp(2.f, 6.f, b.size);
                         p.circle(c, rad, to_rgba(daddy_graphics::tube_color(s, d, t, b.pos.y, pal)));
                         if (b.eye_size > 0.f)
-                            p.circle(c, rad * b.eye_size, to_rgba(w.daddy_get_color_class(d) ? effect : body));
+                            p.circle(c, rad * b.eye_size, to_rgba(w.creature_get_payload(d).daddy.color_class ? effect : body));
                     }
                 }
-                auto const& g = w.daddy_get_graphics(d);
+                auto const& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
                 uint32_t const n = std::min(daddy::chunk_count(s, d), daddy::max_chunks);
                 vec2 const middle = daddy::middle_of_body(s, d);
                 for (uint32_t j = 0; j < n; ++j) {
@@ -1757,18 +1741,18 @@ void main() {
                     vec2 const c = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
                     float const rad = w.body_chunk_get_rad(k);
                     p.circle(c, rad * 1.1f + 2.f, to_rgba(body));
-                    if (w.daddy_get_hd(d) && j < 2)
+                    if (w.creature_get_payload(d).daddy.hd && j < 2)
                         continue;
                     auto const& e = g.eyes[j];
                     float const open = 1.f - mathf::lerp(e.last_closed, e.closed, alpha);
-                    rw::vec3 const eye = w.daddy_get_eye_color(d) + (rw::vec3{1.f, 1.f, 1.f} - w.daddy_get_eye_color(d)) * mathf::clamp01(e.light * 0.5f + e.flash);
+                    rw::vec3 const eye = w.creature_get_payload(d).daddy.eye_color + (rw::vec3{1.f, 1.f, 1.f} - w.creature_get_payload(d).daddy.eye_color) * mathf::clamp01(e.light * 0.5f + e.flash);
                     vec2 const look = c + rw::lerp(e.last_dir, e.dir, alpha) * rad * 0.5f;
                     vec2 const dir = rw::custom::deg_to_vec(rw::custom::aim(c, middle) + e.rotats[0]);
                     vec2 const side = rw::custom::perpendicular_vector(dir);
                     p.line(look - dir * rad * 0.8f, look + dir * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
                     p.line(look - side * rad * 0.8f, look + side * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
                 }
-                if (w.daddy_get_hd(d)) {
+                if (w.creature_get_payload(d).daddy.hd) {
                     auto const& m = g.dummy;
                     rw::vec3 const hunter = daddy_graphics::body_color(s, d, pal);
                     vec2 const head = rw::lerp(m.head.last_pos, m.head.pos, alpha);
@@ -1832,7 +1816,7 @@ void main() {
         // RoomCamera.PixelColorAtCoordinate as the White lizard reads it at its
         // three chunks (LizardGraphics.DrawSprites): two alike win, else the
         // average. The frame so far (the level, the background) is read back
-        void white_pick_up(state const& r, sys::game_state const& s, dcon::lizard_id l, camera const& cam, lizard_graphics::palette& pal) {
+        void white_pick_up(state const& r, sys::game_state const& s, dcon::creature_id l, camera const& cam, lizard_graphics::palette& pal) {
             rw::vec3 c[3];
             for (uint32_t i = 0; i < 3; ++i) {
                 vec2 const p = (s.world.body_chunk_get_pos(lizard::chunk(s, l, i)) - cam.pos) * cam.zoom;
@@ -1857,11 +1841,9 @@ void main() {
             static std::vector<sprites::draw_cmd> cmds;
             auto const pal = lizard_palette(r, s, room.id);
             cmds.clear();
-            w.for_each_lizard([&](dcon::lizard_id l) {
-                if (w.physical_object_get_room_from_object_location(lizard::body(s, l)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::lizard, [&](dcon::creature_id l) {
                 auto lp = pal;
-                if (w.lizard_get_breed(l) == lizard::breed::white)
+                if (w.creature_get_payload(l).lizard.breed == lizard::breed::white)
                     white_pick_up(r, s, l, cam, lp);
                 lizard_graphics::build(s, l, alpha, lp, cmds);
             });
@@ -1881,11 +1863,9 @@ void main() {
             auto const& w = s.world;
             painter p{r.batch};
             auto const pal = lizard_palette(r, s, room.id);
-            w.for_each_lizard([&](dcon::lizard_id l) {
-                if (w.physical_object_get_room_from_object_location(lizard::body(s, l)) != room.id)
-                    return;
-                auto const& g = w.lizard_get_graphics(l);
-                auto const& par = lizard::params(w.lizard_get_breed(l));
+            rooms::for_each_creature(s, room.id, creature::type::lizard, [&](dcon::creature_id l) {
+                auto const& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
+                auto const& par = lizard::params(w.creature_get_payload(l).lizard.breed);
                 auto const dp = [&](int i) { return rw::lerp(g.draw_positions[i][1], g.draw_positions[i][0], alpha); };
                 uint32_t const body = to_rgba(lizard_graphics::body_color(s, l, 0.f, pal));
                 uint32_t const head = to_rgba(lizard_graphics::head_color(s, l, alpha, pal));
@@ -1906,8 +1886,8 @@ void main() {
                     p.circle(dp(i), rad, body);
                 p.line(dp(0), dp(1), rad * 1.6f, body);
                 p.line(dp(1), dp(2), rad * 1.6f, body);
-                if (lizard::params(w.lizard_get_breed(l)).tongue && w.lizard_get_tongue(l).state != lizard::tongue_state::hidden) {
-                    auto const& tg = w.lizard_get_tongue(l);
+                if (lizard::params(w.creature_get_payload(l).lizard.breed).tongue && w.lizard_data_get_tongue(creature::lizard_data(w, l)).state != lizard::tongue_state::hidden) {
+                    auto const& tg = w.lizard_data_get_tongue(creature::lizard_data(w, l));
                     p.line(dp(0), rw::lerp(tg.graph_pos[1], tg.graph_pos[0], alpha), 2.f, to_rgba(pal.black + rw::vec3{0.3f, 0.1f, 0.15f}));
                 }
                 vec2 const hp = rw::lerp(rw::lerp(g.head.last_pos, g.head.pos, alpha), dp(0), 0.2f);
@@ -2000,15 +1980,13 @@ void main() {
         void build_centipedes(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             auto const& w = s.world;
             painter p{r.batch};
-            w.for_each_centipede([&](dcon::centipede_id c) {
-                if (w.physical_object_get_room_from_object_location(centipede::body(s, c)) != room.id)
-                    return;
+            rooms::for_each_creature(s, room.id, creature::type::centipede, [&](dcon::creature_id c) {
                 uint32_t const n = centipede::chunk_count(s, c);
                 if (n == 0)
                     return;
-                float const size = w.centipede_get_size(c);
-                bool const dead = w.centipede_get_dead(c);
-                bool const stunned = w.centipede_get_stun(c) > 0;
+                float const size = w.creature_get_payload(c).centipede.size;
+                bool const dead = w.creature_get_dead(c);
+                bool const stunned = w.creature_get_stun(c) > 0;
                 auto const at = [&](uint32_t i) {
                     auto const k = centipede::chunk(s, c, i);
                     return rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
@@ -2016,7 +1994,7 @@ void main() {
                 auto const dir_at = [&](uint32_t i) {
                     return rw::normalized(at(std::min(i + 1, n - 1)) - at(i > 0 ? i - 1 : 0));
                 };
-                float const hue = w.centipede_get_hue(c);
+                float const hue = w.centipede_data_get_hue(creature::centipede_data(w, c));
                 float const sat = dead ? 0.25f : mathf::lerp(0.6f, 0.95f, size);
                 // earthy: the centipede's hue pulled well towards brown
                 rw::vec3 const brown{0.42f, 0.27f, 0.15f};
@@ -2025,7 +2003,7 @@ void main() {
                 rw::vec3 const plate = earthy(rw::custom::hsl2rgb(hue, sat, dead ? 0.28f : 0.42f), 0.5f);
                 rw::vec3 const ridge = earthy(rw::custom::hsl2rgb(hue, sat * 0.8f, dead ? 0.38f : 0.62f), 0.4f);
                 rw::vec3 const belly = earthy(rw::custom::hsl2rgb(hue + 0.05f, sat * 0.4f, 0.2f), 0.6f);
-                float const cycle = w.centipede_get_walk_cycle(c);
+                float const cycle = w.centipede_data_get_walk_cycle(creature::centipede_data(w, c));
                 float const scale = mathf::lerp(0.75f, 1.35f, size);
                 auto const oval = [&](vec2 ctr, vec2 d, vec2 sd, float a, float b, uint32_t col) {
                     constexpr int segs = 12;
@@ -2107,12 +2085,39 @@ void main() {
                     // the seam to the next plate
                     p.line(pos - dir * (rad * 1.1f) + side * (rad * 0.9f), pos - dir * (rad * 1.1f) - side * (rad * 0.9f), 0.8f, to_rgba(chitin));
                 }
-                float const flash = w.centipede_get_light_flash(c);
+                float const flash = w.centipede_data_get_light_flash(creature::centipede_data(w, c));
                 if (flash > 0.f) {
                     vec2 const head = at(centipede::head_index(s, c));
                     p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
                 }
             });
+        }
+
+        // the room's creatures kind by kind (creature::type order), each
+        // through its kind's DrawSprites with the game's atlases, or our own
+        // shapes without them
+        void build_creatures(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, bool atlas) {
+            for (auto const t : creature::all_types) {
+                switch (t) {
+                case creature::type::centipede:
+                    atlas ? build_centipede_sprites(r, s, room, alpha) : build_centipedes(r, s, room, alpha);
+                    break;
+                case creature::type::dropbug:
+                    atlas ? build_dropbug_sprites(r, s, room, alpha) : build_dropbugs(r, s, room, alpha);
+                    break;
+                case creature::type::cicada:
+                    atlas ? build_cicada_sprites(r, s, room, alpha) : build_cicadas(r, s, room, alpha);
+                    break;
+                case creature::type::lizard:
+                    atlas ? build_lizard_sprites(r, s, room, alpha, cam) : build_lizards(r, s, room, alpha);
+                    break;
+                case creature::type::daddy:
+                    atlas ? build_daddy_sprites(r, s, room, alpha) : build_daddies(r, s, room, alpha);
+                    break;
+                case creature::type::count:
+                    break;
+                }
+            }
         }
 
         // DaddyCorruption's sprites, with plain shapes. `front`: what vanilla
@@ -2987,20 +2992,9 @@ void main() {
             build_slugcat_circles(r, s, room, alpha);
         size_t const bodies_end = r.batch.size();
         // the rest of the Midground, then the Items container (seed cobs, items)
-        if (atlas) {
-            build_centipede_sprites(r, s, room, alpha);
-            build_dropbug_sprites(r, s, room, alpha);
-            build_cicada_sprites(r, s, room, alpha);
-            build_lizard_sprites(r, s, room, alpha, cam);
-            build_daddy_sprites(r, s, room, alpha);
+        build_creatures(r, s, room, alpha, cam, atlas);
+        if (atlas)
             build_seed_cobs(r, s, room, alpha);
-        } else {
-            build_centipedes(r, s, room, alpha);
-            build_dropbugs(r, s, room, alpha);
-            build_cicadas(r, s, room, alpha);
-            build_lizards(r, s, room, alpha);
-            build_daddies(r, s, room, alpha);
-        }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);

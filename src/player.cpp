@@ -4,11 +4,8 @@
 #include "player.hpp"
 #include "rooms.hpp"
 #include "physics.hpp"
-#include "centipede.hpp"
 #include "cicada.hpp"
-#include "dropbug.hpp"
-#include "lizard.hpp"
-#include "daddy.hpp"
+#include "creature.hpp"
 #include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
@@ -491,10 +488,7 @@ namespace player {
     void destroy(sys::game_state& state, dcon::player_id id) {
         items::release_all(state, id);
         rot::release_player(state, id);
-        centipede::release_player(state, id);
-        dropbug::release_player(state, id);
-        lizard::release_player(state, id);
-        daddy::release_player(state, id);
+        creature::release_player(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
         if (o)
@@ -503,10 +497,7 @@ namespace player {
 
     void reset(sys::game_state& state, dcon::player_id id, dcon::room_id room, vec2 pos) {
         items::release_all(state, id);
-        centipede::release_player(state, id);
-        dropbug::release_player(state, id);
-        lizard::release_player(state, id);
-        daddy::release_player(state, id);
+        creature::release_player(state, id);
         // (they all look in the room the slugcat is leaving)
         rot::release_player(state, id);
         pref p{state, id};
@@ -2716,63 +2707,7 @@ namespace player {
                     w.body_chunk_get_vel(c) += custom::dir_vec(at, cp) * force * k / mathf::max(0.3f, w.body_chunk_get_mass(c));
                 });
             });
-            rooms::for_each_centipede(state, x.room.id, [&](dcon::centipede_id c) {
-                uint32_t const n = centipede::chunk_count(state, c);
-                for (uint32_t i = 0; i < n; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, i));
-                    float const d = rw::distance(cp, at);
-                    if (d < rad) {
-                        float const k = 1.f - d / rad;
-                        centipede::violence(state, c, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
-                        break;
-                    }
-                }
-            });
-            rooms::for_each_dropbug(state, x.room.id, [&](dcon::dropbug_id b) {
-                for (uint32_t i = 0; i < 3; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, i));
-                    float const d = rw::distance(cp, at);
-                    if (d < rad) {
-                        float const k = 1.f - d / rad;
-                        dropbug::violence(state, b, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
-                        break;
-                    }
-                }
-            });
-            rooms::for_each_cicada(state, x.room.id, [&](dcon::cicada_id cc) {
-                for (uint32_t i = 0; i < 2; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, cc, i));
-                    float const d = rw::distance(cp, at);
-                    if (d < rad) {
-                        float const k = 1.f - d / rad;
-                        cicada::violence(state, cc, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
-                        break;
-                    }
-                }
-            });
-            rooms::for_each_lizard(state, x.room.id, [&](dcon::lizard_id l) {
-                for (uint32_t i = 0; i < 3; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(lizard::chunk(state, l, i));
-                    float const d = rw::distance(cp, at);
-                    if (d < rad) {
-                        float const k = 1.f - d / rad;
-                        lizard::violence(state, l, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k, false, true);
-                        break;
-                    }
-                }
-            });
-            rooms::for_each_daddy(state, x.room.id, [&](dcon::daddy_id dl) {
-                uint32_t const n = daddy::chunk_count(state, dl);
-                for (uint32_t i = 0; i < n; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(daddy::chunk(state, dl, i));
-                    float const d = rw::distance(cp, at);
-                    if (d < rad) {
-                        float const k = 1.f - d / rad;
-                        daddy::violence(state, dl, daddy::hit_part{int32_t(i)}, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k, true);
-                        break;
-                    }
-                }
-            });
+            creature::blast(state, x.room.id, at, rad, force, 1.1f, 60.f);
             x.sound(sound::sound_id::fire_spear_explode);
             state.add_noise(x.room.id, at, 8000.f);
             particles::spawn(state, x.room.id, particles::kind::flash, at, vec2{0.f, 0.f}, 40.f, 0.35f, rw::vec3{1.f, 1.f, 1.f}, 1.f);

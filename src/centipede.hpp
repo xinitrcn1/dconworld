@@ -12,30 +12,30 @@
 
 #include <cstdint>
 
+#include "creature.hpp"
 #include "gamestate.hpp"
 #include "math.hpp"
 #include "world.hpp"
 
 namespace centipede {
-    // `size` < 0 rolls one like Centipede.GenerateSize
-    dcon::centipede_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, float size = -1.f);
-    void destroy(sys::game_state& state, dcon::centipede_id c);
-    // Centipede.Update for every centipede in the room
-    void update_room(sys::game_state& state, world::room_view const& room);
-    // Room object collisions between centipedes and slugcats (pushing apart,
-    // Centipede.Collide grabbing)
-    void collide(sys::game_state& state, world::room_view const& room);
-    // Weapon.Update's projectile trace against centipedes: the centipede the
-    // segment hits (radius `rad`), and which chunk
-    bool trace(sys::game_state const& state, dcon::room_id room, rw::vec2 from, rw::vec2 to, float rad, dcon::centipede_id& hit, uint32_t& chunk);
-    // Creature.Violence (+ Centipede.Violence)
-    void violence(sys::game_state& state, dcon::centipede_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus);
+    using creature::body;
+    using creature::chunk;
+    using creature::chunk_count;
+    using creature::total_mass;
 
-    dcon::physical_object_id body(sys::game_state const& state, dcon::centipede_id c) noexcept;
-    uint32_t chunk_count(sys::game_state const& state, dcon::centipede_id c) noexcept;
-    dcon::body_chunk_id chunk(sys::game_state const& state, dcon::centipede_id c, uint32_t i) noexcept;
-    uint32_t head_index(sys::game_state const& state, dcon::centipede_id c) noexcept;
-    float total_mass(sys::game_state const& state, dcon::centipede_id c) noexcept;
-    // releases whatever the centipede holds, and any centipede holding `p`
-    void release_player(sys::game_state& state, dcon::player_id p);
+    // `size` < 0 rolls one like Centipede.GenerateSize
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, float size = -1.f);
+    void destroy(sys::game_state& state, dcon::creature_id c);
+    // Centipede.Update
+    void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
+    // Centipede.Collide: its chunk `i` touched the slugcat's chunk `j`
+    // (pushed apart already)
+    void collide_player(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::player_id p, uint32_t j);
+    // Creature.Violence (+ Centipede.Violence)
+    void violence(sys::game_state& state, dcon::creature_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus);
+
+    // Centipede.HeadIndex
+    uint32_t head_index(sys::game_state const& state, dcon::creature_id c) noexcept;
+    // lets go of `p` if it holds it
+    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p);
 }

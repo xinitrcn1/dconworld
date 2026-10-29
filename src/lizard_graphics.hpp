@@ -32,25 +32,25 @@ namespace lizard_graphics {
     };
 
     // the LizardGraphics constructor (and GraphicsModule.Reset)
-    void reset(sys::game_state& state, dcon::lizard_id l);
+    void reset(sys::game_state& state, dcon::creature_id l);
     // GraphicsModule.Reset: every part back on the body
-    void reset_positions(sys::game_state& state, dcon::lizard_id l);
+    void reset_positions(sys::game_state& state, dcon::creature_id l);
     // LizardGraphics.Update, once per tick after the lizard's update
-    void update(sys::game_state& state, dcon::lizard_id l, world::room_view const& room);
+    void update(sys::game_state& state, dcon::creature_id l, world::room_view const& room);
     // LizardGraphics.DrawSprites (+ ApplyPalette); `alpha` interpolates
     // between ticks
-    void build(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
+    void build(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
     // the head's colour (HeadColor) and the body's (BodyColor at the hips),
     // for the plain shapes drawn without the game's atlases
-    rw::vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal);
-    rw::vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal);
+    rw::vec3 head_color(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal);
+    rw::vec3 body_color(sys::game_state const& state, dcon::creature_id l, float f, palette const& pal);
 
     // LizardGraphics.Stun / WhiteFlicker / CreatureSpotted
-    void stun(sys::game_state& state, dcon::lizard_id l, int32_t st);
-    void white_flicker(sys::game_state& state, dcon::lizard_id l, int32_t fl);
-    void creature_spotted(sys::game_state& state, dcon::lizard_id l, bool first_spot, dcon::player_id p);
+    void stun(sys::game_state& state, dcon::creature_id l, int32_t st);
+    void white_flicker(sys::game_state& state, dcon::creature_id l, int32_t fl);
+    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, dcon::player_id p);
     // LizardGraphics.HeadRotation
-    float head_rotation(sys::game_state const& state, dcon::lizard_id l, float alpha);
+    float head_rotation(sys::game_state const& state, dcon::creature_id l, float alpha);
 
     // What the LizardCosmetics (lizard_cosmetics.cpp) use of LizardGraphics.
     // `pal` is the lizard's own palette here (ApplyPalette's, which the
@@ -84,16 +84,16 @@ namespace lizard_graphics {
             float tail_length = 0.f;
             float body_length = 0.f; // bodyChunkConnections[0].distance + [1].distance
         };
-        spine_frame make_spine_frame(sys::game_state const& state, dcon::lizard_id l, float alpha);
+        spine_frame make_spine_frame(sys::game_state const& state, dcon::creature_id l, float alpha);
         // LizardGraphics.SpinePosition: `s` along the body and tail (0..1)
         spine_data spine_position(spine_frame const& fr, float s);
         // LizardGraphics.BodyAndTailLength
         float body_and_tail_length(lizard::graphics_state const& g);
         // HeadColor, BodyColor, DynamicBodyColor, effectColor, whiteCamoColor
-        rw::vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal);
-        rw::vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal);
-        rw::vec3 dynamic_body_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
-        rw::vec3 effect_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
-        rw::vec3 white_camo_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
+        rw::vec3 head_color(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal);
+        rw::vec3 body_color(sys::game_state const& state, dcon::creature_id l, float f, palette const& pal);
+        rw::vec3 dynamic_body_color(sys::game_state const& state, dcon::creature_id l, palette const& pal);
+        rw::vec3 effect_color(sys::game_state const& state, dcon::creature_id l, palette const& pal);
+        rw::vec3 white_camo_color(sys::game_state const& state, dcon::creature_id l, palette const& pal);
     }
 }

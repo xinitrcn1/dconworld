@@ -7,10 +7,7 @@
 
 #include "rot.hpp"
 #include "rooms.hpp"
-#include "centipede.hpp"
-#include "dropbug.hpp"
-#include "lizard.hpp"
-#include "daddy.hpp"
+#include "creature.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -325,14 +322,14 @@ namespace rot {
         }
 
         dcon::player_id prey_player(rot_prey p) { return dcon::player_id{dcon::player_id::value_base_t(p.id)}; }
-        dcon::centipede_id prey_centipede(rot_prey p) { return dcon::centipede_id{dcon::centipede_id::value_base_t(p.id)}; }
+        dcon::creature_id prey_creature(rot_prey p) { return dcon::creature_id{dcon::creature_id::value_base_t(p.id)}; }
 
         dcon::physical_object_id prey_body(sys::game_state const& state, rot_prey p) {
             auto const& w = state.world;
             if (p.kind == prey_kind::player && w.player_is_valid(prey_player(p)) && rooms::reachable(state, prey_player(p)))
                 return player::body(state, prey_player(p));
-            if (p.kind == prey_kind::centipede && w.centipede_is_valid(prey_centipede(p)))
-                return centipede::body(state, prey_centipede(p));
+            if (p.kind == prey_kind::creature && w.creature_is_valid(prey_creature(p)))
+                return creature::body(state, prey_creature(p));
             return dcon::physical_object_id{};
         }
         dcon::body_chunk_id prey_chunk(sys::game_state const& state, rot_prey p) {
@@ -363,15 +360,17 @@ namespace rot {
                 for (uint8_t i = 0; i < 2 && !stop; ++i)
                     stop = f(rot_prey{prey_kind::player, i, base.id}, player::body_chunk(state, p, i));
             });
-            rooms::for_each_centipede(state, room, [&](dcon::centipede_id c) {
+            // (of the creatures only the centipedes for now: the rot came
+            // before the other kinds were ported)
+            rooms::for_each_creature(state, room, creature::type::centipede, [&](dcon::creature_id c) {
                 if (stop)
                     return;
-                rot_prey const base{prey_kind::centipede, 0, uint16_t(c.index())};
+                rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
                 if (!prey_in_room(state, base, room))
                     return;
-                uint32_t const n = centipede::chunk_count(state, c);
+                uint32_t const n = creature::chunk_count(state, c);
                 for (uint32_t i = 0; i < n && !stop; ++i)
-                    stop = f(rot_prey{prey_kind::centipede, uint8_t(i), base.id}, centipede::chunk(state, c, i));
+                    stop = f(rot_prey{prey_kind::creature, uint8_t(i), base.id}, creature::chunk(state, c, i));
             });
         }
 
@@ -1003,19 +1002,16 @@ namespace rot {
             if (p.kind == prey_kind::player) {
                 auto const pl = prey_player(p);
                 items::release_all(state, pl);
-                centipede::release_player(state, pl);
-                dropbug::release_player(state, pl);
-                lizard::release_player(state, pl);
-                daddy::release_player(state, pl);
+                creature::release_player(state, pl);
                 release_player(state, pl);
                 player::die(state, pl);
                 w.player_set_eaten(pl, 1);
             } else {
                 // Destroy: gone at the end of the tick
-                auto const c = prey_centipede(p);
+                auto const c = prey_creature(p);
                 state.defer(room_of(state, s), [c](sys::game_state& st) {
-                    if (st.world.centipede_is_valid(c))
-                        centipede::destroy(st, c);
+                    if (st.world.creature_is_valid(c))
+                        creature::destroy(st, c);
                 });
             }
             return true;

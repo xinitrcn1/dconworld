@@ -26,13 +26,13 @@ namespace dropbug_graphics {
     };
 
     // the DropBugGraphics constructor (and GraphicsModule.Reset)
-    void reset(sys::game_state& state, dcon::dropbug_id d);
+    void reset(sys::game_state& state, dcon::creature_id d);
     // GraphicsModule.Reset when a camera looks at the creature's room again:
     // the parts back to the body, the look (rolled at creation) kept
-    void reset_positions(sys::game_state& state, dcon::dropbug_id id);
+    void reset_positions(sys::game_state& state, dcon::creature_id id);
     // DropBugGraphics.Update, once per tick after the dropbug's update
-    void update(sys::game_state& state, dcon::dropbug_id d, world::room_view const& room);
+    void update(sys::game_state& state, dcon::creature_id d, world::room_view const& room);
     // DropBugGraphics.DrawSprites (+ ApplyPalette, RefreshColor); `alpha`
     // interpolates between ticks
-    void build(sys::game_state const& state, dcon::dropbug_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
 }

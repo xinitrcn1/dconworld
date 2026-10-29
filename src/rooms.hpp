@@ -16,20 +16,8 @@ namespace rooms {
     inline dcon::room_id room_of(sys::game_state const& state, dcon::player_id p) noexcept {
         return room_of(state, state.world.player_get_body_from_player_body(p));
     }
-    inline dcon::room_id room_of(sys::game_state const& state, dcon::centipede_id c) noexcept {
-        return room_of(state, state.world.centipede_get_body_from_centipede_body(c));
-    }
-    inline dcon::room_id room_of(sys::game_state const& state, dcon::dropbug_id d) noexcept {
-        return room_of(state, state.world.dropbug_get_body_from_dropbug_body(d));
-    }
-    inline dcon::room_id room_of(sys::game_state const& state, dcon::cicada_id c) noexcept {
-        return room_of(state, state.world.cicada_get_body_from_cicada_body(c));
-    }
-    inline dcon::room_id room_of(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return room_of(state, state.world.lizard_get_body_from_lizard_body(l));
-    }
-    inline dcon::room_id room_of(sys::game_state const& state, dcon::daddy_id d) noexcept {
-        return room_of(state, state.world.daddy_get_body_from_daddy_body(d));
+    inline dcon::room_id room_of(sys::game_state const& state, dcon::creature_id c) noexcept {
+        return room_of(state, state.world.creature_get_body_from_creature_body(c));
     }
     inline dcon::room_id room_of(sys::game_state const& state, dcon::item_id it) noexcept {
         return room_of(state, state.world.item_get_body_from_item_body(it));
@@ -68,25 +56,37 @@ namespace rooms {
     void for_each_player(sys::game_state const& state, dcon::room_id room, F&& f) {
         detail::walk(state, state.index.players, room, [&](auto&& g) { state.world.for_each_player(g); }, f);
     }
+    // the room's creatures of kind `t`
     template<typename F>
-    void for_each_centipede(sys::game_state const& state, dcon::room_id room, F&& f) {
-        detail::walk(state, state.index.centipedes, room, [&](auto&& g) { state.world.for_each_centipede(g); }, f);
+    void for_each_creature(sys::game_state const& state, dcon::room_id room, creature::type t, F&& f) {
+        size_t const n = creature::type_count;
+        if (state.index.valid) {
+            if (!room)
+                return;
+            size_t const b = size_t(room.index()) * n + size_t(t);
+            for (auto const id : state.index.creatures.range(b, b + 1))
+                f(id);
+            return;
+        }
+        state.world.for_each_creature([&](dcon::creature_id c) {
+            if (state.world.creature_get_type(c) == t && room_of(state, c) == room)
+                f(c);
+        });
     }
+    // every creature of the room, kind by kind (in creature::type order),
+    // like one loop per kind
     template<typename F>
-    void for_each_dropbug(sys::game_state const& state, dcon::room_id room, F&& f) {
-        detail::walk(state, state.index.dropbugs, room, [&](auto&& g) { state.world.for_each_dropbug(g); }, f);
-    }
-    template<typename F>
-    void for_each_cicada(sys::game_state const& state, dcon::room_id room, F&& f) {
-        detail::walk(state, state.index.cicadas, room, [&](auto&& g) { state.world.for_each_cicada(g); }, f);
-    }
-    template<typename F>
-    void for_each_lizard(sys::game_state const& state, dcon::room_id room, F&& f) {
-        detail::walk(state, state.index.lizards, room, [&](auto&& g) { state.world.for_each_lizard(g); }, f);
-    }
-    template<typename F>
-    void for_each_daddy(sys::game_state const& state, dcon::room_id room, F&& f) {
-        detail::walk(state, state.index.daddies, room, [&](auto&& g) { state.world.for_each_daddy(g); }, f);
+    void for_each_creature(sys::game_state const& state, dcon::room_id room, F&& f) {
+        if (state.index.valid) {
+            if (!room)
+                return;
+            size_t const b = size_t(room.index()) * creature::type_count;
+            for (auto const id : state.index.creatures.range(b, b + creature::type_count))
+                f(id);
+            return;
+        }
+        for (auto const t : creature::all_types)
+            for_each_creature(state, room, t, f);
     }
     template<typename F>
     void for_each_item(sys::game_state const& state, dcon::room_id room, F&& f) {

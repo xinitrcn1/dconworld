@@ -21,15 +21,15 @@ namespace centipede_graphics {
         // GenericBodyPart(rad 1, surface friction 0.5, air friction 0.9)
         constexpr float whisker_rad = 1.f, whisker_surface_friction = 0.5f, whisker_air_friction = 0.9f;
 
-        bool consious(dcon::data_container const& w, dcon::centipede_id c) {
-            return w.centipede_get_stun(c) <= 0 && !w.centipede_get_dead(c);
+        bool consious(dcon::data_container const& w, dcon::creature_id c) {
+            return w.creature_get_stun(c) <= 0 && !w.creature_get_dead(c);
         }
 
-        vec2 chunk_pos(sys::game_state const& state, dcon::centipede_id c, uint32_t i) {
+        vec2 chunk_pos(sys::game_state const& state, dcon::creature_id c, uint32_t i) {
             return state.world.body_chunk_get_pos(centipede::chunk(state, c, i));
         }
         // ChunkDrawPos
-        vec2 chunk_draw_pos(sys::game_state const& state, dcon::centipede_id c, uint32_t i, float t) {
+        vec2 chunk_draw_pos(sys::game_state const& state, dcon::creature_id c, uint32_t i, float t) {
             auto const k = centipede::chunk(state, c, i);
             return rw::lerp(state.world.body_chunk_get_last_pos(k), state.world.body_chunk_get_pos(k), t);
         }
@@ -56,7 +56,7 @@ namespace centipede_graphics {
         }
 
         // WhiskerDir
-        vec2 whisker_dir(sys::game_state const& state, dcon::centipede_id c, centipede::graphics_state const& g, uint32_t n, int end, int side, int part, float t) {
+        vec2 whisker_dir(sys::game_state const& state, dcon::creature_id c, centipede::graphics_state const& g, uint32_t n, int end, int side, int part, float t) {
             vec2 dir, rot;
             if (end == 0) {
                 dir = custom::dir_vec(chunk_draw_pos(state, c, 1, t), chunk_draw_pos(state, c, 0, t));
@@ -72,7 +72,7 @@ namespace centipede_graphics {
 
         // BestBodyRotatAtChunk: the side of the body facing away from the
         // surface it is on
-        vec2 best_body_rotat_at_chunk(sys::game_state const& state, dcon::centipede_id c, centipede::graphics_state const& g, uint32_t n, uint32_t chunk, room_view const& room) {
+        vec2 best_body_rotat_at_chunk(sys::game_state const& state, dcon::creature_id c, centipede::graphics_state const& g, uint32_t n, uint32_t chunk, room_view const& room) {
             vec2 v;
             if (chunk == 0)
                 v = custom::dir_vec(chunk_pos(state, c, 0), chunk_pos(state, c, 1));
@@ -93,19 +93,19 @@ namespace centipede_graphics {
         }
     }
 
-    void reset(sys::game_state& state, dcon::centipede_id c) {
+    void reset(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto& g = w.centipede_get_graphics(c);
+        auto& g = w.centipede_data_get_graphics(creature::centipede_data(w, c));
         uint32_t const n = std::min(centipede::chunk_count(state, c), centipede::max_segments);
         g = centipede::graphics_state{};
         // vanilla seeds these from the creature's ID
-        g.random = rw::rng{w.centipede_get_random(c).state ^ 0x5bd1e995u};
-        auto& rng = g.random;
+        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x5bd1e995u};
+        auto& rng = w.creature_get_graphics_random(c);
         g.default_rotat = mathf::lerp(-5.f, 5.f, rng.value());
         for (auto& r : g.body_rotations)
             r[0] = r[1] = custom::deg_to_vec(g.default_rotat);
         g.saturation = 0.9f;
-        float const size = w.centipede_get_size(c);
+        float const size = w.creature_get_payload(c).centipede.size;
         for (uint32_t i = 0; i < n; ++i) {
             float const t = float(i) / float(n - 1);
             g.leg_lengths[i] = mathf::lerp(10.f, 25.f, std::sin(t * mathf::pi)) * mathf::lerp(0.5f, 1.5f, size);
@@ -126,28 +126,29 @@ namespace centipede_graphics {
                 }
     }
 
-    void reset_positions(sys::game_state& state, dcon::centipede_id c) {
+    void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto const keep = w.centipede_get_graphics(c);
+        auto const keep_random = w.creature_get_graphics_random(c);
+        auto const keep = w.centipede_data_get_graphics(creature::centipede_data(w, c));
         reset(state, c);
-        auto& g = w.centipede_get_graphics(c);
-        g.random = keep.random;
+        auto& g = w.centipede_data_get_graphics(creature::centipede_data(w, c));
+        w.creature_set_graphics_random(c, keep_random);
         g.default_rotat = keep.default_rotat;
         for (auto& r : g.body_rotations)
             r[0] = r[1] = custom::deg_to_vec(g.default_rotat);
     }
 
-    void update(sys::game_state& state, dcon::centipede_id c, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& g = w.centipede_get_graphics(c);
+        auto& g = w.centipede_data_get_graphics(creature::centipede_data(w, c));
         uint32_t const n = std::min(centipede::chunk_count(state, c), centipede::max_segments);
         if (n < 2)
             return;
         bool const awake = consious(w, c);
-        bool const moving = w.centipede_get_moving(c) != 0;
-        bool const body_direction = w.centipede_get_body_direction(c) != 0;
-        float const size = w.centipede_get_size(c);
-        auto& rng = g.random;
+        bool const moving = w.creature_get_payload(c).centipede.moving != 0;
+        bool const body_direction = w.creature_get_payload(c).centipede.body_direction != 0;
+        float const size = w.creature_get_payload(c).centipede.size;
+        auto& rng = w.creature_get_graphics_random(c);
 
         if (moving && awake)
             g.walk_cycle += (body_direction ? -1.f : 1.f) / 10.f;
@@ -213,14 +214,14 @@ namespace centipede_graphics {
         }
     }
 
-    void build(sys::game_state const& state, dcon::centipede_id c, float alpha, vec3 black, float darkness, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id c, float alpha, vec3 black, float darkness, std::vector<sprites::draw_cmd>& out) {
         auto const& w = state.world;
-        auto const& g = w.centipede_get_graphics(c);
+        auto const& g = w.centipede_data_get_graphics(creature::centipede_data(w, c));
         uint32_t const n = std::min(centipede::chunk_count(state, c), centipede::max_segments);
         if (n < 2)
             return;
-        float const size = w.centipede_get_size(c);
-        float const hue = w.centipede_get_hue(c);
+        float const size = w.creature_get_payload(c).centipede.size;
+        float const hue = w.centipede_data_get_hue(creature::centipede_data(w, c));
         auto const rad_of = [&](uint32_t i) { return w.body_chunk_get_rad(centipede::chunk(state, c, i)); };
         auto const black_to = [&](vec3 col, float t) { return col + (black - col) * mathf::clamp01(t); };
         vec3 const secondary_shell = black_to(custom::hsl2rgb(hue, g.saturation, 0.3f), 0.3f + 0.7f * darkness);

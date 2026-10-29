@@ -22,10 +22,10 @@ namespace dropbug_graphics {
         // CentipedeLegA's sourcePixelSize.y, what the mandibles are scaled by
         constexpr float mandible_element_height = 28.f;
 
-        vec2 chunk_pos(sys::game_state const& state, dcon::dropbug_id d, uint32_t i) {
+        vec2 chunk_pos(sys::game_state const& state, dcon::creature_id d, uint32_t i) {
             return state.world.body_chunk_get_pos(dropbug::chunk(state, d, i));
         }
-        vec2 chunk_vel(sys::game_state const& state, dcon::dropbug_id d, uint32_t i) {
+        vec2 chunk_vel(sys::game_state const& state, dcon::creature_id d, uint32_t i) {
             return state.world.body_chunk_get_vel(dropbug::chunk(state, d, i));
         }
 
@@ -53,13 +53,13 @@ namespace dropbug_graphics {
         }
     }
 
-    void reset(sys::game_state& state, dcon::dropbug_id d) {
+    void reset(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
-        auto& g = w.dropbug_get_graphics(d);
+        auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         g = dropbug::graphics_state{};
         // vanilla seeds these from the creature's ID
-        g.random = rw::rng{w.dropbug_get_random(d).state ^ 0x5bd1e995u};
-        auto& rng = g.random;
+        w.creature_get_graphics_random(d) = rw::rng{w.creature_get_random(d).state ^ 0x5bd1e995u};
+        auto& rng = w.creature_get_graphics_random(d);
         g.leg_length = 45.f;
         g.body_thickness = mathf::lerp(0.6f, 1.4f, rng.value());
         g.legs_thickness = mathf::lerp(0.6f, 1.4f, rng.value());
@@ -70,8 +70,8 @@ namespace dropbug_graphics {
         // Reset
         for (uint32_t i = 0; i < 3; ++i)
             g.draw_positions[i][0] = g.draw_positions[i][1] = chunk_pos(state, d, i);
-        if (w.dropbug_get_behavior(d) == dropbug::behavior::sit_in_ceiling
-        && room_view::get_tile_position(chunk_pos(state, d, 0)) == w.dropbug_get_ceiling(d).ceiling_pos)
+        if (::dropbug::behavior(w.creature_get_behavior(d)) == dropbug::behavior::sit_in_ceiling
+        && room_view::get_tile_position(chunk_pos(state, d, 0)) == w.dropbug_data_get_ceiling(creature::dropbug_data(w, d)).ceiling_pos)
             g.ceiling_mode = g.last_ceiling_mode = g.deep_ceiling_mode = g.last_deep_ceiling_mode = 1.f;
         // the body parts, at the chunks they hang from
         g.tail_end.rad = 3.f;
@@ -100,12 +100,13 @@ namespace dropbug_graphics {
             }
     }
 
-    void reset_positions(sys::game_state& state, dcon::dropbug_id d) {
+    void reset_positions(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
-        auto const keep = w.dropbug_get_graphics(d);
+        auto const keep_random = w.creature_get_graphics_random(d);
+        auto const keep = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         reset(state, d);
-        auto& g = w.dropbug_get_graphics(d);
-        g.random = keep.random;
+        auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
+        w.creature_set_graphics_random(d, keep_random);
         g.body_thickness = keep.body_thickness;
         g.legs_thickness = keep.legs_thickness;
         g.antennae_length = keep.antennae_length;
@@ -114,22 +115,22 @@ namespace dropbug_graphics {
         g.hue = keep.hue;
     }
 
-    void update(sys::game_state& state, dcon::dropbug_id d, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
         auto& w = state.world;
-        auto& g = w.dropbug_get_graphics(d);
-        auto& rng = g.random;
+        auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
+        auto& rng = w.creature_get_graphics_random(d);
         vec2 const p0 = chunk_pos(state, d, 0), p1 = chunk_pos(state, d, 1), p2 = chunk_pos(state, d, 2);
         vec2 const v0 = chunk_vel(state, d, 0), v1 = chunk_vel(state, d, 1), v2 = chunk_vel(state, d, 2);
         bool const awake = dropbug::consious(state, d);
         bool const footing = dropbug::footing(state, d);
-        bool const swimming = w.dropbug_get_swimming(d) != 0;
-        float const in_ceiling = w.dropbug_get_in_ceiling_mode(d);
-        float const bite = w.dropbug_get_attempt_bite(d);
-        float const anticipation = w.dropbug_get_drop_anticipation(d);
-        float const run_cycle = w.dropbug_get_run_cycle(d);
+        bool const swimming = w.creature_get_payload(d).dropbug.swimming != 0;
+        float const in_ceiling = w.creature_get_payload(d).dropbug.in_ceiling_mode;
+        float const bite = w.creature_get_payload(d).dropbug.attempt_bite;
+        float const anticipation = w.creature_get_payload(d).dropbug.drop_anticipation;
+        float const run_cycle = w.creature_get_payload(d).dropbug.run_cycle;
 
         g.last_vibrate = g.vibrate;
-        g.vibrate = custom::lerp_and_tick(g.vibrate, (w.dropbug_get_charging(d) > 0.f || bite > 0.f) ? 1.f : 0.f, 0.2f, 0.05f);
+        g.vibrate = custom::lerp_and_tick(g.vibrate, (w.creature_get_payload(d).dropbug.charging > 0.f || bite > 0.f) ? 1.f : 0.f, 0.2f, 0.05f);
         g.last_ceiling_mode = g.ceiling_mode;
         g.ceiling_mode = custom::lerp_and_tick(g.ceiling_mode, in_ceiling, 0.06f, 0.025f);
         g.last_deep_ceiling_mode = g.deep_ceiling_mode;
@@ -157,7 +158,7 @@ namespace dropbug_graphics {
         g.last_flip = g.flip;
         if (in_ceiling > 0.f) {
             // the feet hold on around the ceiling spot
-            vec2 const a = room_view::middle_of_tile(w.dropbug_get_ceiling(d).ceiling_pos);
+            vec2 const a = room_view::middle_of_tile(w.dropbug_data_get_ceiling(creature::dropbug_data(w, d)).ceiling_pos);
             for (int s = 0; s < 2; ++s)
                 for (int l = 0; l < 2; ++l) {
                     g.legs[s][l].mode = limb_mode::hunt_absolute_position;
@@ -170,7 +171,7 @@ namespace dropbug_graphics {
             12.f, false, 0.2f, v1, 0.5f, 0.1f);
         g.tail_end.vel.y -= 0.4f;
         g.tail_end.vel += custom::dir_vec(p1, p2) * 0.8f;
-        if (!w.dropbug_get_dead(d)) {
+        if (!w.creature_get_dead(d)) {
             g.tail_end.vel += g.breath_dir * 0.7f * (1.f - g.deep_ceiling_mode);
             g.breath_dir = rw::clamp_magnitude(g.breath_dir + custom::rnv(rng) * rng.value() * 0.1f, 1.f);
         }
@@ -178,7 +179,7 @@ namespace dropbug_graphics {
         vec2 const fwd = custom::dir_vec(p1, p0);
         std::optional<vec2> held;
         if (auto const p = dropbug::grasped(state, d))
-            held = w.body_chunk_get_pos(player::body_chunk(state, p, w.dropbug_get_grasp_chunk(d)));
+            held = w.body_chunk_get_pos(player::body_chunk(state, p, w.creature_get_grasp_chunk(d)[0]));
         float const still = g.deep_ceiling_mode * mathf::pow(1.f - anticipation, 3.f);
         for (int m = 0; m < 2; ++m) {
             float const side = m == 0 ? -1.f : 1.f;
@@ -251,8 +252,8 @@ namespace dropbug_graphics {
                 auto& knee = g.knees[s][l];
                 float const t = float(l);
                 float const step = 0.5f + 0.5f * std::sin((run_cycle + float(n) * 0.25f) * mathf::pi);
-                g.legs_travel_dirs[s][l] = rw::lerp(g.legs_travel_dirs[s][l], w.dropbug_get_travel_dir(d), mathf::pow(rng.value(), 1.f - 0.9f * step));
-                if (w.dropbug_get_charging(d) > 0.f)
+                g.legs_travel_dirs[s][l] = rw::lerp(g.legs_travel_dirs[s][l], w.creature_get_payload(d).dropbug.travel_dir, mathf::pow(rng.value(), 1.f - 0.9f * step));
+                if (w.creature_get_payload(d).dropbug.charging > 0.f)
                     g.legs_travel_dirs[s][l] *= 0.f;
                 body_parts::limb_update(lg, leg, p0, v0, p1, room);
                 if (lg.mode == limb_mode::hunt_relative_position || g.legs_dangle_counter > 0)
@@ -319,16 +320,16 @@ namespace dropbug_graphics {
             g.draw_positions[2][0] += perp * 5.f * std::sin((run_cycle + 0.25f) * mathf::pi * 2.f);
         }
         // hissing
-        if (w.dropbug_get_voice(d) > 0) {
+        if (w.creature_get_payload(d).dropbug.voice > 0) {
             g.draw_positions[0][0] += custom::rnv(rng) * rng.value() * 4.f;
             for (auto& a : g.antennae)
                 a.pos += custom::rnv(rng) * rng.value() * 4.f;
         }
     }
 
-    void build(sys::game_state const& state, dcon::dropbug_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
         auto const& w = state.world;
-        auto const& g = w.dropbug_get_graphics(d);
+        auto const& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         // UnityEngine.Random in DrawSprites: the body's shiver
         rw::rng rng{(state.tick * 2654435761u) ^ (uint32_t(d.index()) * 40503u) ^ 0x9E3779B9u};
         float const flip = mathf::lerp(g.last_flip, g.flip, alpha);

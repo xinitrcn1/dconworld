@@ -73,7 +73,7 @@ namespace daddy_graphics {
             return r;
         }
 
-        dcon::body_chunk_id chunk(sys::game_state const& state, dcon::daddy_id d, uint32_t i) { return daddy::chunk(state, d, i); }
+        dcon::body_chunk_id chunk(sys::game_state const& state, dcon::creature_id d, uint32_t i) { return daddy::chunk(state, d, i); }
 
         // GenericBodyPart.Update; BodyPart.PushOutOfTerrain only looks at the
         // tile and its eight neighbours, none solid three steps from the terrain
@@ -87,7 +87,7 @@ namespace daddy_graphics {
                 body_parts::push_out_of_terrain(bp, room, surface_friction);
         }
 
-        float bump_size(sys::game_state const& state, dcon::daddy_id d) { return state.world.daddy_get_size_class(d) ? 1.f : 0.8f; }
+        float bump_size(sys::game_state const& state, dcon::creature_id d) { return state.world.creature_get_payload(d).daddy.size_class ? 1.f : 0.8f; }
 
         //
         // RopeGraphic (AlignAndConnect, Segment.Update) with
@@ -164,9 +164,10 @@ namespace daddy_graphics {
         }
 
         // DaddyLegGraphic.Update: the rope positions of the tentacle's chunks
-        void leg_update(sys::game_state& state, dcon::daddy_id d, dcon::daddy_tube_id t, room_view const& room, rw::rng& r) {
+        void leg_update(sys::game_state& state, dcon::creature_id d, dcon::creature_part_id t, room_view const& room, rw::rng& r) {
             auto& w = state.world;
-            auto const tent = daddy::tentacle_of(state, d, w.daddy_tube_get_index(t));
+            auto const tent_part = daddy::tentacle_part(state, d, w.creature_part_get_index(t));
+            auto const tent = daddy::tentacle_data(w, tent_part);
             auto const& tt = w.daddy_tentacle_get_t(tent);
             static thread_local std::vector<vec2> list;
             uint32_t count = 0;
@@ -178,7 +179,7 @@ namespace daddy_graphics {
                 ++count;
             };
             add(w.body_chunk_get_pos(chunk(state, d, tt.connected_chunk)));
-            float const shake = mathf::inverse_lerp(4.f, 14.f, float(tt.stun)) * 4.f;
+            float const shake = mathf::inverse_lerp(4.f, 14.f, float(w.creature_part_get_stun(tent_part))) * 4.f;
             for (auto const& c : w.daddy_tentacle_get_chunks(tent)) {
                 uint32_t const total = 2u + c.rope.bend_count;
                 for (uint32_t j = 1; j < total; ++j) {
@@ -192,12 +193,12 @@ namespace daddy_graphics {
                     }
                 }
             }
-            auto segs = w.daddy_tube_get_segments(t);
+            auto segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             align_and_connect(room, segs.begin(), segs.size(), list, count);
         }
 
         // DaddyDangleTube.Connection.Pos
-        vec2 connection_pos(sys::game_state const& state, dcon::daddy_id d, daddy::dangle_connection const& c, float alpha) {
+        vec2 connection_pos(sys::game_state const& state, dcon::creature_id d, daddy::dangle_connection const& c, float alpha) {
             if (c.chunk >= 0) {
                 auto const k = chunk(state, d, uint32_t(c.chunk));
                 return rw::lerp(state.world.body_chunk_get_last_pos(k), state.world.body_chunk_get_pos(k), alpha);
@@ -206,9 +207,9 @@ namespace daddy_graphics {
         }
 
         // DaddyDangleTube.Update
-        void dangler_update(sys::game_state& state, dcon::daddy_id d, dcon::daddy_tube_id t, room_view const& room) {
+        void dangler_update(sys::game_state& state, dcon::creature_id d, dcon::creature_part_id t, room_view const& room) {
             auto& w = state.world;
-            auto parts = w.daddy_tube_get_parts(t);
+            auto parts = w.daddy_tube_get_parts(daddy::tube_data(w, t));
             uint32_t const n = parts.size();
             float const g = room.gravity;
             for (uint32_t i = 0; i < n; ++i) {
@@ -223,8 +224,8 @@ namespace daddy_graphics {
                     parts.at(i).vel += custom::dir_vec(parts.at(i + 2).pos, parts.at(i).pos);
                 }
             }
-            vec2 const a = connection_pos(state, d, w.daddy_tube_get_a_con(t), 1.f);
-            vec2 const b = connection_pos(state, d, w.daddy_tube_get_b_con(t), 1.f);
+            vec2 const a = connection_pos(state, d, w.creature_part_get_payload(t).daddy_tube.a_con, 1.f);
+            vec2 const b = connection_pos(state, d, w.creature_part_get_payload(t).daddy_tube.b_con, 1.f);
             float const num = mathf::max(10.f, rw::distance(a, b) / float(n));
             parts.at(0).pos = a;
             for (uint32_t j = 1; j < n; ++j) {
@@ -250,7 +251,7 @@ namespace daddy_graphics {
             }
             parts.at(0).pos = a;
             parts.at(n - 1).pos = b;
-            auto segs = w.daddy_tube_get_segments(t);
+            auto segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             for (uint32_t l = 0; l < segs.size() && l < n; ++l) {
                 segs.at(l).last_pos = segs.at(l).pos;
                 segs.at(l).pos = parts.at(l).pos;
@@ -258,13 +259,13 @@ namespace daddy_graphics {
         }
 
         // DaddyDeadLeg.Update
-        void dead_leg_update(sys::game_state& state, dcon::daddy_id d, dcon::daddy_tube_id t, room_view const& room, vec2 push_from) {
+        void dead_leg_update(sys::game_state& state, dcon::creature_id d, dcon::creature_part_id t, room_view const& room, vec2 push_from) {
             auto& w = state.world;
-            auto parts = w.daddy_tube_get_parts(t);
+            auto parts = w.daddy_tube_get_parts(daddy::tube_data(w, t));
             uint32_t const n = parts.size();
-            vec2 const con = w.body_chunk_get_pos(chunk(state, d, w.daddy_tube_get_chunk(t)));
-            float const con_rad = w.body_chunk_get_rad(chunk(state, d, w.daddy_tube_get_chunk(t)));
-            vec2 const sec = w.body_chunk_get_pos(chunk(state, d, w.daddy_tube_get_secondary_chunk(t)));
+            vec2 const con = w.body_chunk_get_pos(chunk(state, d, w.creature_part_get_payload(t).daddy_tube.chunk));
+            float const con_rad = w.body_chunk_get_rad(chunk(state, d, w.creature_part_get_payload(t).daddy_tube.chunk));
+            vec2 const sec = w.body_chunk_get_pos(chunk(state, d, w.creature_part_get_payload(t).daddy_tube.secondary_chunk));
             for (uint32_t i = 0; i < n; ++i) {
                 auto& bp = parts.at(i);
                 bp.vel += rw::lerp(custom::dir_vec(push_from, rw::lerp(con, sec, 0.3f)) * 3.f, vec2{0.f, -0.5f * room.gravity}, mathf::inverse_lerp(0.f, 4.f, float(i)));
@@ -295,7 +296,7 @@ namespace daddy_graphics {
                 q.pos -= a * (num - 10.f) * 0.5f;
                 q.vel -= a * (num - 10.f) * 0.5f;
             }
-            auto segs = w.daddy_tube_get_segments(t);
+            auto segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             segs.at(0).last_pos = segs.at(0).pos;
             segs.at(0).pos = con;
             for (uint32_t k = 1; k < segs.size() && k - 1 < n; ++k) {
@@ -305,25 +306,25 @@ namespace daddy_graphics {
         }
 
         // DaddyGraphics.Eye.FindNewLookObject
-        void find_new_look_object(sys::game_state& state, dcon::daddy_id d, uint32_t index, rw::rng& r) {
+        void find_new_look_object(sys::game_state& state, dcon::creature_id d, uint32_t index, rw::rng& r) {
             auto& w = state.world;
-            auto& g = w.daddy_get_graphics(d);
-            auto const& ai = w.daddy_get_ai(d);
+            auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
+            auto const& ai = w.daddy_data_get_ai(creature::daddy_data(w, d));
             uint32_t const n = daddy::chunk_count(state, d);
             auto& e = g.eyes[index];
             bool flag = false;
-            if (ai.player != 0) {
+            if (w.creature_get_seen_player(d) != 0) {
                 flag = true;
                 r.range(0, 1);
                 for (uint32_t k = 0; k < n && flag; ++k)
-                    if (g.eyes[k].creature_player == ai.player)
+                    if (g.eyes[k].creature_player == w.creature_get_seen_player(d))
                         flag = false;
                 if (flag) {
-                    e.creature_player = ai.player;
+                    e.creature_player = w.creature_get_seen_player(d);
                     e.light = mathf::max(0.75f, e.light);
                 }
             }
-            if (w.daddy_get_size_class(d) && !flag && ai.noise.count > 0) {
+            if (w.creature_get_payload(d).daddy.size_class && !flag && ai.noise.count > 0) {
                 flag = true;
                 auto const& s = ai.noise.sources[r.range(0, ai.noise.count)];
                 for (uint32_t k = 0; k < n && flag; ++k)
@@ -337,13 +338,13 @@ namespace daddy_graphics {
         }
 
         // DaddyGraphics.Eye.Update
-        void eye_update(sys::game_state& state, dcon::daddy_id d, uint32_t index, rw::rng& r) {
+        void eye_update(sys::game_state& state, dcon::creature_id d, uint32_t index, rw::rng& r) {
             auto& w = state.world;
-            auto& g = w.daddy_get_graphics(d);
+            auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
             auto& e = g.eyes[index];
-            auto const& z = w.daddy_get_core(d);
-            auto const& ai = w.daddy_get_ai(d);
-            bool const dead = w.daddy_get_dead(d) != 0;
+            auto const& z = w.daddy_data_get_core(creature::daddy_data(w, d));
+            auto const& ai = w.daddy_data_get_ai(creature::daddy_data(w, d));
+            bool const dead = w.creature_get_dead(d) != 0;
             float const deaf = z.deaf == 0 ? 0.f : mathf::pow(mathf::inverse_lerp(0.f, 120.f, float(z.deaf)), 0.2f);
             e.last_dir = e.dir;
             e.last_closed = e.closed;
@@ -360,11 +361,11 @@ namespace daddy_graphics {
                     e.sound_source = 0;
             } else if (e.creature_player != 0) {
                 auto const p = daddy::detail::player_of(state, e.creature_player);
-                if (p && ai.player == e.creature_player) {
-                    if (ai.visual_contact)
+                if (p && w.creature_get_seen_player(d) == e.creature_player) {
+                    if (w.creature_get_sees_player(d))
                         look = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
                     else
-                        look = room_view::middle_of_tile(room_view::get_tile_position(ai.last_seen_pos));
+                        look = room_view::middle_of_tile(room_view::get_tile_position(w.creature_get_last_seen_pos(d)));
                 } else {
                     e.creature_player = 0;
                 }
@@ -423,9 +424,9 @@ namespace daddy_graphics {
         constexpr float dummy_tail_affect[4] = {1.f, 0.5f, 0.5f, 0.5f};
 
         // DaddyGraphics.HunterDummy.Update
-        void dummy_update(sys::game_state& state, dcon::daddy_id d, room_view const& room) {
+        void dummy_update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
             auto& w = state.world;
-            auto& m = w.daddy_get_graphics(d).dummy;
+            auto& m = w.daddy_data_get_graphics(creature::daddy_data(w, d)).dummy;
             vec2 const c0 = w.body_chunk_get_pos(chunk(state, d, 0));
             vec2 const c1 = w.body_chunk_get_pos(chunk(state, d, 1));
             vec2 const v0 = w.body_chunk_get_vel(chunk(state, d, 0));
@@ -465,15 +466,15 @@ namespace daddy_graphics {
         }
 
         // DaddyTubeGraphic.OnTubeEffectColorFac per kind
-        float tube_effect_fac(sys::game_state const& state, dcon::daddy_id d, dcon::daddy_tube_id t, float f) {
+        float tube_effect_fac(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float f) {
             auto const& w = state.world;
-            switch (w.daddy_tube_get_kind(t)) {
+            switch (w.creature_part_get_payload(t).daddy_tube.kind) {
             case tube_kind::leg:
                 return mathf::pow(f, 1.5f) * 0.4f;
             case tube_kind::dead_leg:
-                return mathf::pow(f, 1.5f) * 0.4f * (1.f - w.daddy_tube_get_deadness(t));
+                return mathf::pow(f, 1.5f) * 0.4f * (1.f - w.creature_part_get_payload(t).daddy_tube.deadness);
             case tube_kind::dangler: {
-                auto const ca = w.daddy_tube_get_a_con(t), cb = w.daddy_tube_get_b_con(t);
+                auto const ca = w.creature_part_get_payload(t).daddy_tube.a_con, cb = w.creature_part_get_payload(t).daddy_tube.b_con;
                 float const a = ca.chunk < 0 ? mathf::pow(ca.leg_pos, 1.5f) * 0.4f : 0.f;
                 float const b = cb.chunk < 0 ? mathf::pow(cb.leg_pos, 1.5f) * 0.4f : 0.f;
                 return mathf::lerp(a, b, f);
@@ -516,24 +517,20 @@ namespace daddy_graphics {
             return float(s >> 8) * (1.f / 16777215.f);
         }
 
-        dcon::daddy_tube_id make_tube(sys::game_state& state, dcon::daddy_id d, tube_kind k, uint8_t index, int32_t segments) {
+        dcon::creature_part_id make_tube(sys::game_state& state, dcon::creature_id d, tube_kind k, uint8_t index, int32_t segments) {
             auto& w = state.world;
-            auto const t = w.create_daddy_tube();
-            w.daddy_tube_set_owner(t, uint16_t(d.index()));
-            w.daddy_tube_set_kind(t, k);
-            w.daddy_tube_set_index(t, index);
-            w.daddy_tube_set_chunk(t, 0);
-            w.daddy_tube_set_secondary_chunk(t, 0);
-            w.daddy_tube_set_deadness(t, 0.f);
-            w.daddy_tube_set_a_con(t, daddy::dangle_connection{});
-            w.daddy_tube_set_b_con(t, daddy::dangle_connection{});
-            w.daddy_tube_get_segments(t).resize(uint32_t(std::max(2, segments)));
+            auto const t = creature::add_part(state, d, creature::part_kind::daddy_tube, index);
+            auto& pl = w.creature_part_get_payload(t).daddy_tube;
+            pl = creature::daddy_tube_payload{};
+            pl.kind = k;
+            pl.data = uint16_t(w.create_daddy_tube().index());
+            w.daddy_tube_get_segments(daddy::tube_data(w, t)).resize(uint32_t(std::max(2, segments)));
             return t;
         }
 
         // DaddyLegGraphic / DaddyDeadLeg bumps
-        void add_bumps(sys::game_state& state, dcon::daddy_tube_id t, int32_t num, float deadness, bool dead_leg, float size, rw::unity_random& r) {
-            auto bumps = state.world.daddy_tube_get_bumps(t);
+        void add_bumps(sys::game_state& state, dcon::creature_part_id t, int32_t num, float deadness, bool dead_leg, float size, rw::unity_random& r) {
+            auto bumps = state.world.daddy_tube_get_bumps(daddy::tube_data(state.world, t));
             int32_t const count = num / 2 + r.range(5, 8);
             for (int32_t i = 0; i < count; ++i) {
                 float num2 = mathf::pow(r.value(), dead_leg ? 0.5f : 0.3f);
@@ -553,17 +550,17 @@ namespace daddy_graphics {
 
     }
 
-    vec3 body_color(sys::game_state const& state, dcon::daddy_id d, palette const& pal) {
-        return state.world.daddy_get_hd(d) ? hunter_color() : pal.black;
+    vec3 body_color(sys::game_state const& state, dcon::creature_id d, palette const& pal) {
+        return state.world.creature_get_payload(d).daddy.hd ? hunter_color() : pal.black;
     }
 
-    vec3 tube_color(sys::game_state const& state, dcon::daddy_id d, dcon::daddy_tube_id t, float float_pos, palette const& pal) {
-        return mix(body_color(state, d, pal), state.world.daddy_get_effect_color(d), tube_effect_fac(state, d, t, float_pos));
+    vec3 tube_color(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float float_pos, palette const& pal) {
+        return mix(body_color(state, d, pal), state.world.creature_get_payload(d).daddy.effect_color, tube_effect_fac(state, d, t, float_pos));
     }
 
     // DaddyTubeGraphic.OneDimensionalTubePos
-    vec2 tube_pos(sys::game_state const& state, dcon::daddy_tube_id t, float float_pos, float alpha) {
-        auto const segs = state.world.daddy_tube_get_segments(t);
+    vec2 tube_pos(sys::game_state const& state, dcon::creature_part_id t, float float_pos, float alpha) {
+        auto const segs = state.world.daddy_tube_get_segments(daddy::tube_data(state.world, t));
         int32_t const n = int32_t(segs.size());
         int32_t const num = custom::int_clamp(int32_t(std::floor(float_pos * float(n - 1))), 0, n - 1);
         int32_t const num2 = custom::int_clamp(num + 1, 0, n - 1);
@@ -574,30 +571,27 @@ namespace daddy_graphics {
     }
 
     // DaddyTubeGraphic.OnTubePos
-    vec2 on_tube_pos(sys::game_state const& state, dcon::daddy_tube_id t, vec2 pos, float alpha) {
-        float const step = 1.f / float(state.world.daddy_tube_get_segments(t).size());
+    vec2 on_tube_pos(sys::game_state const& state, dcon::creature_part_id t, vec2 pos, float alpha) {
+        float const step = 1.f / float(state.world.daddy_tube_get_segments(daddy::tube_data(state.world, t)).size());
         vec2 const p = tube_pos(state, t, pos.y - step, alpha);
         vec2 const p2 = tube_pos(state, t, pos.y + step, alpha);
         return tube_pos(state, t, pos.y, alpha) + custom::perpendicular_vector(custom::dir_vec(p, p2)) * pos.x;
     }
 
-    void create(sys::game_state& state, dcon::daddy_id d) {
+    void create(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
-        rw::unity_random r{w.daddy_get_graphics_seed(d)};
-        bool const sc = w.daddy_get_size_class(d) != 0;
-        bool const hd = w.daddy_get_hd(d) != 0;
+        rw::unity_random r{w.creature_get_payload(d).daddy.graphics_seed};
+        bool const sc = w.creature_get_payload(d).daddy.size_class != 0;
+        bool const hd = w.creature_get_payload(d).daddy.hd != 0;
         int32_t const n = int32_t(daddy::chunk_count(state, d));
-        auto parts = w.daddy_get_parts(d);
-        int32_t const nt = parts.tentacle_count;
+        int32_t const nt = w.creature_get_payload(d).daddy.tentacle_count;
         float const bs = bump_size(state, d);
         vec2 const main = w.body_chunk_get_pos(chunk(state, d, 0));
-        uint32_t ti = 0;
         // DaddyLegGraphic per tentacle
         for (int32_t i = 0; i < nt; ++i) {
             int32_t const num = int32_t(w.daddy_tentacle_get_t(daddy::tentacle_of(state, d, uint32_t(i))).ideal_length / 10.f);
             auto const t = make_tube(state, d, tube_kind::leg, uint8_t(i), num);
             add_bumps(state, t, num, 0.f, false, bs, r);
-            parts.tubes[ti++] = uint16_t(t.index());
         }
         int32_t const num3 = sc ? r.range(5, 15) : r.range(3, 8);
         int32_t dead_count = 0;
@@ -618,10 +612,10 @@ namespace daddy_graphics {
             int32_t const con = list[size_t(r.range(0, int32_t(list.size())))];
             int32_t const sec = r.range(0, n);
             auto const t = make_tube(state, d, tube_kind::dead_leg, uint8_t(j), pn + 1);
-            w.daddy_tube_set_chunk(t, uint8_t(con));
-            w.daddy_tube_set_secondary_chunk(t, uint8_t(sec));
+            w.creature_part_get_payload(t).daddy_tube.chunk = (uint8_t(con));
+            w.creature_part_get_payload(t).daddy_tube.secondary_chunk = (uint8_t(sec));
             vec2 const cp = w.body_chunk_get_pos(chunk(state, d, uint32_t(con)));
-            auto bps = w.daddy_tube_get_parts(t);
+            auto bps = w.daddy_tube_get_parts(daddy::tube_data(w, t));
             for (int32_t i = 0; i < pn; ++i) {
                 player::body_part bp;
                 bp.pos = bp.last_pos = cp;
@@ -629,10 +623,9 @@ namespace daddy_graphics {
                 bps.push_back(bp);
             }
             float const deadness = r.value();
-            w.daddy_tube_set_deadness(t, deadness);
+            w.creature_part_get_payload(t).daddy_tube.deadness = (deadness);
             add_bumps(state, t, pn, deadness, true, bs, r);
             list.erase(std::find(list.begin(), list.end(), con));
-            parts.tubes[ti++] = uint16_t(t.index());
         }
         // DaddyDangleTube: slung between chunks and points along the legs.
         // Vanilla shares the Connection objects between neighbouring
@@ -648,14 +641,12 @@ namespace daddy_graphics {
             cons.push_back(c);
             return cons.size() - 1;
         };
-        auto const leg_segments = [&](int32_t leg) { return float(w.daddy_tube_get_segments(daddy::tube_of(state, d, uint32_t(leg))).size()); };
+        auto const leg_segments = [&](int32_t leg) { return float(w.daddy_tube_get_segments(daddy::tube_data(w, daddy::tube_of(state, d, uint32_t(leg)))).size()); };
         size_t a = gen(r.value() < 0.5f);
         size_t b = gen(cons[a].chunk >= 0);
         int32_t const dangler_count = std::min(num3 - dead_count, int32_t(daddy::max_tubes) - dead_count);
         bool flag = r.value() < 0.5f;
         std::vector<std::pair<size_t, size_t>> pairs;
-        // (the leg tubes must be readable for their segment counts)
-        w.daddy_set_parts(d, parts);
         for (int32_t l = 0; l < dangler_count; ++l) {
             if (r.value() < 0.2f) {
                 a = gen(r.value() < 0.5f);
@@ -673,14 +664,14 @@ namespace daddy_graphics {
                 cons[b].leg_pos = mathf::lerp(0.1f, mathf::min(0.7f, 20.f / leg_segments(cons[b].leg)), mathf::pow(r.value(), 1.2f));
             int32_t const pn = r.range(2, sc ? 25 : 12);
             auto const t = make_tube(state, d, tube_kind::dangler, uint8_t(l), pn);
-            auto bps = w.daddy_tube_get_parts(t);
+            auto bps = w.daddy_tube_get_parts(daddy::tube_data(w, t));
             for (int32_t i = 0; i < pn; ++i) {
                 player::body_part bp;
                 bp.pos = bp.last_pos = main;
                 bp.rad = 3.f;
                 bps.push_back(bp);
             }
-            auto bumps = w.daddy_tube_get_bumps(t);
+            auto bumps = w.daddy_tube_get_bumps(daddy::tube_data(w, t));
             int32_t const nb = r.range(5, 18);
             for (int32_t j = 0; j < nb; ++j) {
                 daddy::bump bu;
@@ -690,15 +681,13 @@ namespace daddy_graphics {
                 bumps.push_back(bu);
             }
             pairs.push_back({a, b});
-            parts.tubes[ti++] = uint16_t(t.index());
         }
-        parts.dead_leg_count = uint8_t(dead_count);
-        parts.dangler_count = uint8_t(dangler_count);
-        w.daddy_set_parts(d, parts);
+        w.creature_get_payload(d).daddy.dead_leg_count = uint8_t(dead_count);
+        w.creature_get_payload(d).daddy.dangler_count = uint8_t(dangler_count);
         for (int32_t l = 0; l < dangler_count; ++l) {
             auto const t = daddy::tube_of(state, d, uint32_t(nt + dead_count + l));
-            w.daddy_tube_set_a_con(t, cons[pairs[size_t(l)].first]);
-            w.daddy_tube_set_b_con(t, cons[pairs[size_t(l)].second]);
+            w.creature_part_get_payload(t).daddy_tube.a_con = (cons[pairs[size_t(l)].first]);
+            w.creature_part_get_payload(t).daddy_tube.b_con = (cons[pairs[size_t(l)].second]);
         }
         // DaddyGraphics.Eye per chunk
         daddy::graphics_state g;
@@ -707,31 +696,31 @@ namespace daddy_graphics {
             e.rad = w.body_chunk_get_rad(chunk(state, d, uint32_t(m)));
             e.rotats[0] = r.value() * 360.f;
             e.rotats[1] = r.value();
-            e.jag_seed = uint32_t(w.daddy_get_graphics_seed(d)) * 2654435761u + uint32_t(m) * 40503u;
+            e.jag_seed = uint32_t(w.creature_get_payload(d).daddy.graphics_seed) * 2654435761u + uint32_t(m) * 40503u;
         }
-        g.random = rw::rng{uint32_t(w.daddy_get_graphics_seed(d)) | 1u};
-        w.daddy_set_graphics(d, g);
+        w.daddy_data_set_graphics(creature::daddy_data(w, d), g);
+        w.creature_set_graphics_random(d, rw::rng{uint32_t(w.creature_get_payload(d).daddy.graphics_seed) | 1u});
         reset(state, d);
     }
 
-    void reset(sys::game_state& state, dcon::daddy_id d) {
+    void reset(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
         vec2 const main = w.body_chunk_get_pos(chunk(state, d, 0));
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i) {
             auto const t = daddy::tube_of(state, d, i);
-            for (auto& s : w.daddy_tube_get_segments(t)) {
+            for (auto& s : w.daddy_tube_get_segments(daddy::tube_data(w, t))) {
                 s.pos = s.last_pos = main;
                 s.vel = vec2{0.f, 0.f};
             }
             // GraphicsModule.Reset: the body parts to the first chunk
-            for (auto& bp : w.daddy_tube_get_parts(t)) {
+            for (auto& bp : w.daddy_tube_get_parts(daddy::tube_data(w, t))) {
                 bp.pos = bp.last_pos = main;
                 bp.vel = vec2{0.f, 0.f};
             }
         }
-        if (w.daddy_get_hd(d)) {
+        if (w.creature_get_payload(d).daddy.hd) {
             // HunterDummy.Reset
-            auto& m = w.daddy_get_graphics(d).dummy;
+            auto& m = w.daddy_data_get_graphics(creature::daddy_data(w, d)).dummy;
             vec2 const c1 = w.body_chunk_get_pos(chunk(state, d, 1));
             for (int i = 0; i < 2; ++i) {
                 vec2 const p = w.body_chunk_get_pos(chunk(state, d, uint32_t(i)));
@@ -751,10 +740,10 @@ namespace daddy_graphics {
         }
     }
 
-    void update(sys::game_state& state, dcon::daddy_id d, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
         auto& w = state.world;
-        auto& r = w.daddy_get_graphics(d).random;
-        uint32_t const nt = w.daddy_get_parts(d).tentacle_count;
+        auto& r = w.creature_get_graphics_random(d);
+        uint32_t const nt = w.creature_get_payload(d).daddy.tentacle_count;
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i) {
             auto const t = daddy::tube_of(state, d, i);
             if (i < nt)
@@ -764,27 +753,27 @@ namespace daddy_graphics {
         vec2 const middle = daddy::middle_of_body(state, d);
         for (uint32_t i = nt; i < daddy::tube_count(state, d); ++i) {
             auto const t = daddy::tube_of(state, d, i);
-            if (w.daddy_tube_get_kind(t) == tube_kind::dead_leg)
+            if (w.creature_part_get_payload(t).daddy_tube.kind == tube_kind::dead_leg)
                 dead_leg_update(state, d, t, room, middle);
         }
         for (uint32_t i = nt; i < daddy::tube_count(state, d); ++i) {
             auto const t = daddy::tube_of(state, d, i);
-            if (w.daddy_tube_get_kind(t) == tube_kind::dangler)
+            if (w.creature_part_get_payload(t).daddy_tube.kind == tube_kind::dangler)
                 dangler_update(state, d, t, room);
         }
         uint32_t const n = std::min(daddy::chunk_count(state, d), daddy::max_chunks);
         for (uint32_t l = 0; l < n; ++l)
             eye_update(state, d, l, r);
-        if (w.daddy_get_hd(d))
+        if (w.creature_get_payload(d).daddy.hd)
             dummy_update(state, d, room);
-        auto& g = w.daddy_get_graphics(d);
+        auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         // (the digestion sound loop isn't ported: no looping emitters here)
         if (g.reaction_sound_delay > 0)
             --g.reaction_sound_delay;
         if (g.feel_something_reaction_delay > 0)
             --g.feel_something_reaction_delay;
         float most = 0.f;
-        auto const& z = w.daddy_get_core(d);
+        auto const& z = w.daddy_data_get_core(creature::daddy_data(w, d));
         for (uint32_t i = 0; i < z.eat_count; ++i)
             most = mathf::max(most, z.eats[i].progression);
         g.digesting = mathf::lerp(g.digesting, mathf::clamp(mathf::pow(most, 0.5f), 0.f, 1.f), 0.1f);
@@ -792,9 +781,9 @@ namespace daddy_graphics {
 
     namespace {
         // the eye a reaction goes to: the one facing it, preferring free ones
-        uint32_t pick_eye(sys::game_state const& state, dcon::daddy_id d, vec2 at) {
+        uint32_t pick_eye(sys::game_state const& state, dcon::creature_id d, vec2 at) {
             auto const& w = state.world;
-            auto const& g = w.daddy_get_graphics(d);
+            auto const& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
             vec2 const middle = daddy::middle_of_body(state, d);
             uint32_t const n = std::min(daddy::chunk_count(state, d), daddy::max_chunks);
             float best = std::numeric_limits<float>::lowest();
@@ -814,29 +803,29 @@ namespace daddy_graphics {
         }
     }
 
-    void feel_something(sys::game_state& state, dcon::daddy_id d, uint8_t player, vec2 feel_pos) {
+    void feel_something(sys::game_state& state, dcon::creature_id d, uint8_t player, vec2 feel_pos) {
         auto& w = state.world;
-        auto& g = w.daddy_get_graphics(d);
+        auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         if (g.feel_something_reaction_delay > 0)
             return;
-        g.feel_something_reaction_delay = g.random.range(10, 40);
+        g.feel_something_reaction_delay = w.creature_get_graphics_random(d).range(10, 40);
         // (Bro_React_To_Tentacle_Touch and Daddy_React_To_Tentacle_Touch have
         // no sound in sounds.txt)
-        if (!w.daddy_get_size_class(d))
+        if (!w.creature_get_payload(d).daddy.size_class)
             return;
         auto& e = g.eyes[pick_eye(state, d, feel_pos)];
         // Eye.ReactToCreature
         e.sound_source = 0;
         e.creature_player = player;
-        e.light = mathf::max(e.light, g.random.value());
+        e.light = mathf::max(e.light, w.creature_get_graphics_random(d).value());
     }
 
-    void react_to_noise(sys::game_state& state, dcon::daddy_id d, uint16_t source, vec2 noise_pos, float strength) {
+    void react_to_noise(sys::game_state& state, dcon::creature_id d, uint16_t source, vec2 noise_pos, float strength) {
         auto& w = state.world;
-        if (!w.daddy_get_size_class(d))
+        if (!w.creature_get_payload(d).daddy.size_class)
             return;
-        auto& g = w.daddy_get_graphics(d);
-        auto const& ai = w.daddy_get_ai(d);
+        auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
+        auto const& ai = w.daddy_data_get_ai(creature::daddy_data(w, d));
         uint32_t const idx = pick_eye(state, d, noise_pos);
         auto& e = g.eyes[idx];
         // Eye.ReactToSound
@@ -847,34 +836,34 @@ namespace daddy_graphics {
         auto const* s = daddy::detail::source(ai, source);
         uint8_t const rep = s != nullptr ? s->player : 0;
         float num4 = 0.5f;
-        if (ai.current == daddy::behavior::hunt && ai.player != 0)
-            num4 = ai.player == rep ? 1.f : 0.2f;
-        else if (ai.current == daddy::behavior::examine_sound && ai.noise.sound_to_examine != 0)
+        if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::hunt && w.creature_get_seen_player(d) != 0)
+            num4 = w.creature_get_seen_player(d) == rep ? 1.f : 0.2f;
+        else if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::examine_sound && ai.noise.sound_to_examine != 0)
             num4 = ai.noise.sound_to_examine == source ? 1.f : 0.2f;
         num4 = mathf::clamp01((num4 + mathf::inverse_lerp(150.f, 400.f, strength) + num4) / 3.f);
-        if (rep != 0 && ai.visual_contact)
+        if (rep != 0 && w.creature_get_sees_player(d))
             num4 *= 0.1f;
         if (num4 * 40.f > float(g.reaction_sound_delay)) {
             // (the DaddyBubbles and DaddyRipple it lets out aren't ported, nor
             // Daddy_React_To_Noise, which has no sound)
-            g.random.value();
-            g.reaction_sound_delay = std::max(g.reaction_sound_delay, g.random.range(10, 40));
+            w.creature_get_graphics_random(d).value();
+            g.reaction_sound_delay = std::max(g.reaction_sound_delay, w.creature_get_graphics_random(d).range(10, 40));
         }
     }
 
     namespace {
         // DaddyTubeGraphic.DrawSprite + ApplyPalette
-        void tube_cmds(sys::game_state const& state, dcon::daddy_id d, dcon::daddy_tube_id t, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+        void tube_cmds(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
             auto const& w = state.world;
-            auto const segs = w.daddy_tube_get_segments(t);
+            auto const segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             uint32_t const ns = segs.size();
             if (ns < 2)
                 return;
-            bool const sc = w.daddy_get_size_class(d) != 0;
-            bool const color_class = w.daddy_get_color_class(d) != 0;
-            auto const kind = w.daddy_tube_get_kind(t);
+            bool const sc = w.creature_get_payload(d).daddy.size_class != 0;
+            bool const color_class = w.creature_get_payload(d).daddy.color_class != 0;
+            auto const kind = w.creature_part_get_payload(t).daddy_tube.kind;
             vec3 const body = body_color(state, d, pal);
-            vec3 const effect = w.daddy_get_effect_color(d);
+            vec3 const effect = w.creature_get_payload(d).daddy.effect_color;
             float const rad = sc ? 2.f : 1.7f;
             auto const at = [&](uint32_t i) { return rw::lerp(segs.at(i).last_pos, segs.at(i).pos, alpha); };
             static thread_local std::vector<vec2> verts;
@@ -898,7 +887,7 @@ namespace daddy_graphics {
                 cols[i] = rw::vec4{c.x, c.y, c.z, 1.f};
             }
             sprites::long_mesh(out, verts.data(), cols.data(), verts.size());
-            auto const bumps = w.daddy_tube_get_bumps(t);
+            auto const bumps = w.daddy_tube_get_bumps(daddy::tube_data(w, t));
             for (auto const& b : bumps) {
                 vec2 const p = on_tube_pos(state, t, b.pos, alpha);
                 float const s = mathf::lerp(2.f, 6.f, b.size) / 10.f;
@@ -907,7 +896,7 @@ namespace daddy_graphics {
             // the bumps' eyes: DaddyGraphics.TubeBumpColor
             vec3 eye = body;
             if (color_class)
-                eye = kind == tube_kind::dead_leg ? effect * mathf::lerp(0.5f, 0.2f, w.daddy_tube_get_deadness(t)) : effect;
+                eye = kind == tube_kind::dead_leg ? effect * mathf::lerp(0.5f, 0.2f, w.creature_part_get_payload(t).daddy_tube.deadness) : effect;
             for (auto const& b : bumps) {
                 if (b.eye_size <= 0.f)
                     continue;
@@ -923,8 +912,8 @@ namespace daddy_graphics {
         }
 
         // HunterDummy.DrawSprites + ApplyPalette
-        void dummy_cmds(sys::game_state const& state, dcon::daddy_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
-            auto const& m = state.world.daddy_get_graphics(d).dummy;
+        void dummy_cmds(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+            auto const& m = state.world.daddy_data_get_graphics(creature::daddy_data(state.world, d)).dummy;
             vec3 const color = hunter_color();
             float const num = 0.5f + 0.5f * std::sin(mathf::lerp(m.last_breath, m.breath, alpha) * mathf::pi * 2.f);
             vec2 const v = rw::lerp(m.draw_pos[0][1], m.draw_pos[0][0], alpha);
@@ -978,13 +967,13 @@ namespace daddy_graphics {
         }
     }
 
-    void build(sys::game_state const& state, dcon::daddy_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
         auto const& w = state.world;
-        auto const& g = w.daddy_get_graphics(d);
-        bool const hd = w.daddy_get_hd(d) != 0;
+        auto const& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
+        bool const hd = w.creature_get_payload(d).daddy.hd != 0;
         uint32_t const n = std::min(daddy::chunk_count(state, d), daddy::max_chunks);
         vec3 const body = body_color(state, d, pal);
-        vec3 const eye_color = w.daddy_get_eye_color(d);
+        vec3 const eye_color = w.creature_get_payload(d).daddy.eye_color;
         float const bump = bump_size(state, d);
         // InitiateSprites' order: the legs, dead legs and danglers, then the eyes
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i)

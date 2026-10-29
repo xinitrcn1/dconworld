@@ -368,22 +368,20 @@ namespace lizard {
         float best_utility = 0.f;
     };
 
-    // Tracker's creature representation of the slugcat it knows of
+    // Tracker's creature representation of the slugcat it knows of (the
+    // slugcat, visual contact, ticks since seen and where are the
+    // creature's seen_player, sees_player, ticks_since_seen, last_seen_pos)
     struct tracked_player {
-        uint8_t player = 0; // index + 1, 0 none
-        bool visual_contact = false;
-        int32_t ticks_since_seen = 0;
         int32_t age = 0;
-        rw::vec2 last_seen_pos{0.f, 0.f};
         // PreyTracker.TrackedPrey
         int32_t unreachable_counter = 0;
         int32_t at_position_but_cant_see_counter = 0;
         rw::ivec2 last_best_guess{0, 0};
     };
 
-    // LizardAI and the modules it keeps
+    // LizardAI and the modules it keeps (its behavior, current utility,
+    // destination and forbidden idle spot are the creature's)
     struct ai_state {
-        behavior current = behavior::idle;
         float excitement = 0.5f;
         int32_t panic = 0;
         float hunger = 0.f;
@@ -391,10 +389,8 @@ namespace lizard {
         float rain_fear = 0.f;
         int32_t last_distress_length = 0;
         float run_speed = 0.f;
-        float current_utility = 0.f;
         int32_t idle_counter = 0;
         int32_t idle_spot_win_streak = 0;
-        rw::ivec2 forbidden_idle_spot{-1, -1};
         int32_t idle_restlessness = 0;
         int32_t unable_to_find_comfortable_position = 0;
         // focusCreature / casualAggressionTarget: the tracked slugcat
@@ -402,7 +398,6 @@ namespace lizard {
         bool casual_aggression = false;
         int32_t time_in_room = 0;
         int32_t attempt_bite_frames = 0;
-        rw::ivec2 destination{0, 0};
         tracked_player rep;
         // PreyTracker.frustration
         float frustration = 0.f;
@@ -676,8 +671,7 @@ namespace lizard {
         float last_voice_visualization = 0.f;
         int32_t override_head_graphic = -1;
         individual_variations ivars;
-        // UnityEngine.Random as the graphics module uses it
-        rw::rng random;
+        // (its UnityEngine.Random is the creature's graphics_random)
         cosmetics_state cosmetics;
     };
 
@@ -726,10 +720,8 @@ namespace lizard {
         bool shortcut_upcoming = false;
         float body_wiggle = 0.f;
         int32_t body_wiggle_counter = 0; // bwc, clamped to 0..100
-        // grasps[0]: the slugcat in its jaws (player index + 1, 0 none) and
-        // the chunk, and how long it has held it (Player.dangerGraspTime)
-        uint8_t grasp_player = 0;
-        uint8_t grasp_chunk = 0;
+        // how long it has held the slugcat in its jaws (the creature's
+        // grasps[0]: Player.dangerGraspTime)
         int32_t danger_grasp_time = 0;
         // LizardVoice: the emotion's sound while it lasts
         int32_t voice_index = -1;

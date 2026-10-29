@@ -41,13 +41,13 @@ namespace lizard_graphics {
         constexpr float limb_surface_friction = 0.7f;
         constexpr float limb_air_friction = 0.99f;
 
-        vec2 chunk_pos(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        vec2 chunk_pos(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return state.world.body_chunk_get_pos(lizard::chunk(state, l, i));
         }
-        vec2 chunk_vel(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        vec2 chunk_vel(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return state.world.body_chunk_get_vel(lizard::chunk(state, l, i));
         }
-        float chunk_rad(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        float chunk_rad(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return state.world.body_chunk_get_rad(lizard::chunk(state, l, i));
         }
         // BodyChunk.rotationChunk (as the BodyChunkConnections leave it): the
@@ -61,8 +61,8 @@ namespace lizard_graphics {
             return a + (b - a) * mathf::clamp01(t);
         }
 
-        bool stunned(sys::game_state const& state, dcon::lizard_id l) {
-            return state.world.lizard_get_stun(l) > 0;
+        bool stunned(sys::game_state const& state, dcon::creature_id l) {
+            return state.world.creature_get_stun(l) > 0;
         }
 
         // BodyPart.Reset
@@ -72,7 +72,7 @@ namespace lizard_graphics {
         }
 
         // LizardGraphics.BodyChunkDisplayRad
-        float display_rad(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        float display_rad(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return chunk_rad(state, l, i) * (1.f / lizard::params_of(state, l).body_rad_fac);
         }
 
@@ -82,8 +82,8 @@ namespace lizard_graphics {
         }
 
         // LizardLimb.health
-        float limb_health(sys::game_state const& state, dcon::lizard_id l, int32_t i) {
-            return lizard::consious(state, l) ? state.world.lizard_get_limb_health(l).v[i] : 0.f;
+        float limb_health(sys::game_state const& state, dcon::creature_id l, int32_t i) {
+            return lizard::consious(state, l) ? state.world.creature_get_payload(l).lizard.limb_health.v[i] : 0.f;
         }
 
         // Limb.Update (with Limb.retract and BodyPart.terrainContact)
@@ -130,12 +130,12 @@ namespace lizard_graphics {
         }
 
         // LizardLimb.Update
-        void limb_update(sys::game_state& state, dcon::lizard_id l, room_view const& room, int32_t n) {
+        void limb_update(sys::game_state& state, dcon::creature_id l, room_view const& room, int32_t n) {
             auto& w = state.world;
-            auto& g = w.lizard_get_graphics(l);
-            auto& rng = g.random;
+            auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
+            auto& rng = w.creature_get_graphics_random(l);
             auto const& p = lizard::params_of(state, l);
-            auto const& z = w.lizard_get_core(l);
+            auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
             auto& lb = g.limbs[n];
             auto& h = lb.h;
             lizard::limb* const other = n % 2 == 1 ? &g.limbs[n - 1] : nullptr;
@@ -211,7 +211,7 @@ namespace lizard_graphics {
                             lb.extra_long_step = other && p.smoothen_leg_movement && other->grip_counter < 1;
                             lb.reaching_for_terrain = false;
                         }
-                        if (w.lizard_get_ai(l).run_speed > 0.1f && p.smoothen_leg_movement) {
+                        if (w.lizard_data_get_ai(creature::lizard_data(w, l)).run_speed > 0.1f && p.smoothen_leg_movement) {
                             bool all = true;
                             for (int32_t i = 0; i < g.limb_count; ++i)
                                 if (g.limbs[i].grip_counter > lb.grip_counter || g.limbs[i].grip_counter == 0) {
@@ -278,11 +278,11 @@ namespace lizard_graphics {
         }
 
         // LizardGraphics.UpdateTailSegment
-        void update_tail_segment(sys::game_state& state, dcon::lizard_id l, room_view const& room, int32_t i, float stiffness) {
+        void update_tail_segment(sys::game_state& state, dcon::creature_id l, room_view const& room, int32_t i, float stiffness) {
             auto& w = state.world;
-            auto& g = w.lizard_get_graphics(l);
+            auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
             auto const& p = lizard::params_of(state, l);
-            auto const& z = w.lizard_get_core(l);
+            auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
             int32_t const n = p.tail_segments;
             tail_segment_update(g, i, g.draw_positions[2][0], room);
             auto& bp = g.tail[i].bp;
@@ -316,22 +316,23 @@ namespace lizard_graphics {
                     return;
                 }
             } else if (g.show_dominance > 0.f) {
-                bp.vel += custom::rnv(g.random) * g.show_dominance * g.random.value() * 2.f;
+                auto& rng = state.world.creature_get_graphics_random(l);
+                bp.vel += custom::rnv(rng) * g.show_dominance * rng.value() * 2.f;
             }
         }
 
         // LizardGraphics.effectColor
-        vec3 effect_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
-            return lizard::breed_of(state, l) == breed::black ? pal.black : state.world.lizard_get_effect_color(l);
+        vec3 effect_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
+            return lizard::breed_of(state, l) == breed::black ? pal.black : state.world.creature_get_payload(l).lizard.effect_color;
         }
 
         // ApplyPalette's own blackColor (the Blizzard's and Indigo's)
-        palette breed_palette(sys::game_state const& state, dcon::lizard_id l, palette pal) {
+        palette breed_palette(sys::game_state const& state, dcon::creature_id l, palette pal) {
             auto const b = lizard::breed_of(state, l);
             if (b == breed::blizzard) {
                 pal.black = vec3{0.8f, 0.81f, 0.84f};
             } else if (b == breed::indigo) {
-                vec3 const hsl = custom::rgb2hsl(state.world.lizard_get_effect_color(l));
+                vec3 const hsl = custom::rgb2hsl(state.world.creature_get_payload(l).lizard.effect_color);
                 pal.black = mix(custom::hsl2rgb(hsl.x, hsl.y, 0.4f), pal.black, 0.95f);
             }
             return pal;
@@ -347,15 +348,15 @@ namespace lizard_graphics {
         }
 
         // LizardGraphics.SalamanderColor
-        vec3 salamander_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
-            if (state.world.lizard_get_graphics(l).black_salamander)
+        vec3 salamander_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
+            if (state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).black_salamander)
                 return mix(pal.black, effect_color(state, l, pal), 0.1f);
             return mix(vec3{0.9f, 0.9f, 0.95f}, effect_color(state, l, pal), 0.06f);
         }
 
         // LizardGraphics.DynamicBodyColor
-        vec3 dynamic_body_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
-            auto const& g = state.world.lizard_get_graphics(l);
+        vec3 dynamic_body_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
+            auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
             auto const b = lizard::breed_of(state, l);
             if (b == breed::white)
                 return mix(vec3{1.f, 1.f, 1.f}, white_camo_color(g, pal), white_camo_amount(g));
@@ -365,17 +366,17 @@ namespace lizard_graphics {
             return pal.black;
         }
 
-        vec3 head_color_impl(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal);
+        vec3 head_color_impl(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal);
 
         // the colour ApplyPalette and DrawSprites give the body (ColorBody)
-        vec3 body_sprite_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal) {
+        vec3 body_sprite_color(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal) {
             auto const b = lizard::breed_of(state, l);
             if (b == breed::white || b == breed::zoop)
-                return b == breed::white ? dynamic_body_color(state, l, pal) : state.world.lizard_get_graphics(l).ivar_body_color;
+                return b == breed::white ? dynamic_body_color(state, l, pal) : state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).ivar_body_color;
             if (b == breed::basilisk)
                 return head_color(state, l, alpha, pal);
             if (b == breed::caramel)
-                return state.world.lizard_get_graphics(l).ivar_body_color;
+                return state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).ivar_body_color;
             if (b == breed::salamander)
                 return salamander_color(state, l, pal);
             return pal.black;
@@ -427,9 +428,9 @@ namespace lizard_graphics {
         }
 
         // LizardGraphics.HeadColor, with the breed's palette
-        vec3 head_color_impl(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal) {
-            auto const& g = state.world.lizard_get_graphics(l);
-            auto const& a = state.world.lizard_get_ai(l);
+        vec3 head_color_impl(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal) {
+            auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+            auto const& a = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l));
             auto const b = lizard::breed_of(state, l);
             if (g.white_flicker > 0 && (g.white_flicker > 15 || g.every_second_draw))
                 return vec3{1.f, 1.f, 1.f};
@@ -459,8 +460,8 @@ namespace lizard_graphics {
         }
 
         // LizardGraphics.BodyColor, with the breed's palette
-        vec3 body_color_impl(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal) {
-            auto const& g = state.world.lizard_get_graphics(l);
+        vec3 body_color_impl(sys::game_state const& state, dcon::creature_id l, float f, palette const& pal) {
+            auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
             auto const b = lizard::breed_of(state, l);
             auto const& p = lizard::params_of(state, l);
             float const body = g.body_length / (g.body_length + g.tail_length);
@@ -479,17 +480,17 @@ namespace lizard_graphics {
         }
     }
 
-    vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal) {
+    vec3 head_color(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal) {
         return head_color_impl(state, l, alpha, breed_palette(state, l, pal));
     }
 
-    vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal) {
+    vec3 body_color(sys::game_state const& state, dcon::creature_id l, float f, palette const& pal) {
         return body_color_impl(state, l, f, breed_palette(state, l, pal));
     }
 
-    float head_rotation(sys::game_state const& state, dcon::lizard_id l, float alpha) {
-        auto const& g = state.world.lizard_get_graphics(l);
-        auto const& z = state.world.lizard_get_core(l);
+    float head_rotation(sys::game_state const& state, dcon::creature_id l, float alpha) {
+        auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+        auto const& z = state.world.lizard_data_get_core(creature::lizard_data(state.world, l));
         auto const& p = lizard::params_of(state, l);
         float const num = custom::aim(rw::lerp(g.draw_positions[0][1], g.draw_positions[0][0], alpha), rw::lerp(g.head.last_pos, g.head.pos, alpha));
         float const depth = mathf::lerp(g.last_head_depth_rotation, g.head_depth_rotation, alpha);
@@ -497,19 +498,19 @@ namespace lizard_graphics {
         return num + p.jaw_open_angle * (1.f - p.jaw_open_lower_jaw_fac) * jaw * depth;
     }
 
-    void stun(sys::game_state& state, dcon::lizard_id l, int32_t st) {
-        state.world.lizard_get_graphics(l).flicker = custom::int_clamp(st / 3, 3, 15);
+    void stun(sys::game_state& state, dcon::creature_id l, int32_t st) {
+        state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).flicker = custom::int_clamp(st / 3, 3, 15);
     }
 
-    void white_flicker(sys::game_state& state, dcon::lizard_id l, int32_t fl) {
-        auto& g = state.world.lizard_get_graphics(l);
+    void white_flicker(sys::game_state& state, dcon::creature_id l, int32_t fl) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         if (fl > g.white_flicker)
             g.white_flicker = fl;
         g.every_second_draw = false;
     }
 
-    void creature_spotted(sys::game_state& state, dcon::lizard_id l, bool first_spot, dcon::player_id) {
-        auto& g = state.world.lizard_get_graphics(l);
+    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, dcon::player_id) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         if (head_lights_up_from_noise(lizard::breed_of(state, l)))
             g.black_lizard_light_up_head = mathf::min(g.black_lizard_light_up_head + 0.5f, 1.f);
         // CreatureLooker.ReevaluateLookObject: the slugcat is all it tracks
@@ -517,8 +518,8 @@ namespace lizard_graphics {
         g.look_creature = true;
     }
 
-    void reset_positions(sys::game_state& state, dcon::lizard_id l) {
-        auto& g = state.world.lizard_get_graphics(l);
+    void reset_positions(sys::game_state& state, dcon::creature_id l) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         auto const& p = lizard::params_of(state, l);
         for (uint32_t i = 0; i < 3; ++i)
             g.draw_positions[i][0] = g.draw_positions[i][1] = chunk_pos(state, l, i);
@@ -538,13 +539,13 @@ namespace lizard_graphics {
             reset_part(g.tongue[i], chunk_pos(state, l, 0));
     }
 
-    void reset(sys::game_state& state, dcon::lizard_id l) {
+    void reset(sys::game_state& state, dcon::creature_id l) {
         auto& w = state.world;
-        auto& g = w.lizard_get_graphics(l);
+        auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
         g = lizard::graphics_state{};
         // vanilla seeds these from the creature's ID
-        g.random = rw::rng{w.lizard_get_random(l).state ^ 0x6C1Au};
-        auto& rng = g.random;
+        w.creature_get_graphics_random(l) = rw::rng{w.creature_get_random(l).state ^ 0x6C1Au};
+        auto& rng = w.creature_get_graphics_random(l);
         auto const& p = lizard::params_of(state, l);
         auto const b = lizard::breed_of(state, l);
         g.ivars = generate_ivars(b, rng);
@@ -609,8 +610,8 @@ namespace lizard_graphics {
             float const light = range(rng, 0.7f, 1.f);
             if (light >= 0.8f) {
                 g.ivar_body_color = custom::hsl2rgb(range(rng, 0.075f, 0.125f), range(rng, 0.4f, 0.9f), light);
-                w.lizard_set_effect_color(l, custom::hsl2rgb(custom::wrapped_random_variation(0.1f, 0.03f, 0.2f, rng), 0.55f,
-                    custom::clamped_random_variation(0.55f, 0.05f, 0.2f, rng)));
+                w.creature_get_payload(l).lizard.effect_color = custom::hsl2rgb(custom::wrapped_random_variation(0.1f, 0.03f, 0.2f, rng), 0.55f,
+                    custom::clamped_random_variation(0.55f, 0.05f, 0.2f, rng));
             } else {
                 g.ivar_body_color = custom::hsl2rgb(range(rng, 0.075f, 0.125f), range(rng, 0.3f, 0.5f), light);
             }
@@ -621,17 +622,17 @@ namespace lizard_graphics {
         reset_positions(state, l);
     }
 
-    void update(sys::game_state& state, dcon::lizard_id l, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
         auto& w = state.world;
-        auto& g = w.lizard_get_graphics(l);
-        auto& rng = g.random;
+        auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
+        auto& rng = w.creature_get_graphics_random(l);
         auto const& p = lizard::params_of(state, l);
-        auto const& z = w.lizard_get_core(l);
-        auto const& a = w.lizard_get_ai(l);
+        auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
+        auto const& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
         auto const b = lizard::breed_of(state, l);
         bool const awake = lizard::consious(state, l);
-        bool const dead = w.lizard_get_dead(l) != 0;
-        float const health = w.lizard_get_health(l);
+        bool const dead = w.creature_get_dead(l) != 0;
+        float const health = w.creature_get_health(l);
 
         // the voice's visualisation: CreatureVoice.MakingASound and its
         // VisualizedIntensity, from the articulation's volume (the sample's
@@ -702,7 +703,7 @@ namespace lizard_graphics {
         } else if (g.look_counter < 1 && rng.value() < 1.f / float(p.frames_between_look_focus_change)) {
             g.look_counter = p.frames_between_look_focus_change;
             if (rng.value() > 0.3f) {
-                g.look_creature = a.rep.player != 0 && lizard::grasped(state, l) != lizard::player_of(state, a.rep.player);
+                g.look_creature = w.creature_get_seen_player(l) != 0 && lizard::grasped(state, l) != lizard::player_of(state, w.creature_get_seen_player(l));
             } else {
                 g.look_creature = false;
                 // LookAtNothing
@@ -712,12 +713,12 @@ namespace lizard_graphics {
             }
         }
         if (z.anim == lizard::animation::prey_spotted || z.anim == lizard::animation::prey_re_spotted)
-            g.look_creature = a.rep.player != 0;
-        auto const look_player = g.look_creature ? lizard::player_of(state, a.rep.player) : dcon::player_id{};
+            g.look_creature = w.creature_get_seen_player(l) != 0;
+        auto const look_player = g.look_creature ? lizard::player_of(state, w.creature_get_seen_player(l)) : dcon::player_id{};
         if (look_player) {
-            vec2 const target = a.rep.visual_contact && lizard::player_here(state, look_player, room.id)
+            vec2 const target = w.creature_get_sees_player(l) && lizard::player_here(state, look_player, room.id)
                 ? w.body_chunk_get_pos(player::body_chunk(state, look_player, 0))
-                : room_view::middle_of_tile(a.rep.last_seen_pos);
+                : room_view::middle_of_tile(w.creature_get_last_seen_pos(l));
             g.look_pos = custom::move_towards(g.look_pos, target, mathf::lerp(100.f, 20.f, p.neck_stiffness));
         }
         // (the eyes only aim lizardLaserEyes, a debug setup value: not ported)
@@ -850,7 +851,7 @@ namespace lizard_graphics {
         vec2 const head_move = g.head.pos - g.head.last_pos;
         body_parts::generic_update(g.head, room, 0.99f, 0.5f);
         if (auto const held = lizard::grasped(state, l)) {
-            g.head.pos = w.body_chunk_get_pos(player::body_chunk(state, held, z.grasp_chunk));
+            g.head.pos = w.body_chunk_get_pos(player::body_chunk(state, held, w.creature_get_grasp_chunk(l)[0]));
         } else if (awake) {
             vec2 v = custom::dir_vec(g.draw_positions[0][0], g.look_pos);
             if (z.upcoming_count > 0)
@@ -862,7 +863,7 @@ namespace lizard_graphics {
                 v = rw::slerp(v, custom::dir_vec(g.draw_positions[1][0], g.draw_positions[0][0]), num);
             g.head.vel += v * mathf::lerp(6.f, 2.f, p.neck_stiffness);
         }
-        auto const& tg = w.lizard_get_tongue(l);
+        auto const& tg = w.lizard_data_get_tongue(creature::lizard_data(w, l));
         if (lizard::tongue_out(state, l))
             g.head.vel = custom::dir_vec(g.draw_positions[0][0], tg.pos) * 5.f;
         body_parts::connect_to_point(g.head, g.draw_positions[0][0] + custom::dir_vec(g.draw_positions[1][0], g.draw_positions[0][0]) * 12.f * p.head_size,
@@ -918,10 +919,10 @@ namespace lizard_graphics {
             g.flicker_color = rng.value();
     }
 
-    void build(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal_in, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal_in, std::vector<sprites::draw_cmd>& out) {
         auto const& w = state.world;
-        auto const& g = w.lizard_get_graphics(l);
-        auto const& z = w.lizard_get_core(l);
+        auto const& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
+        auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
         auto const& p = lizard::params_of(state, l);
         auto const b = lizard::breed_of(state, l);
         palette const pal = breed_palette(state, l, pal_in);
@@ -946,7 +947,7 @@ namespace lizard_graphics {
         // the body: four circles (SpriteBodyCirclesStart..) and the mesh between them
         float edge = 5.f;
         vec2 prev = rw::lerp(dp(0), rw::lerp(g.head.last_pos, g.head.pos, alpha), 0.2f);
-        float const breath = (std::sin(mathf::lerp(g.last_breath, g.breath, alpha) * mathf::pi * 2.f) + 1.f) * 0.5f * mathf::pow(1.f - w.lizard_get_ai(l).run_speed, 2.f);
+        float const breath = (std::sin(mathf::lerp(g.last_breath, g.breath, alpha) * mathf::pi * 2.f) + 1.f) * 0.5f * mathf::pow(1.f - w.lizard_data_get_ai(creature::lizard_data(w, l)).run_speed, 2.f);
         vec2 body_mesh[16];
         sprite circles[4];
         for (int32_t j = 0; j < 4; ++j) {
@@ -1114,11 +1115,11 @@ namespace lizard_graphics {
             heads[1].color = head_col;
             heads[2].color = head_col;
         } else if (b == breed::indigo) {
-            vec3 const hsl = custom::rgb2hsl(w.lizard_get_effect_color(l));
+            vec3 const hsl = custom::rgb2hsl(w.creature_get_payload(l).lizard.effect_color);
             heads[4].color = custom::hsl2rgb(hsl.x, hsl.y, 0.7f);
             heads[1].color = head_col;
         } else if (b == breed::basilisk) {
-            vec3 c = mix(head_col, w.lizard_get_effect_color(l), 0.7f);
+            vec3 c = mix(head_col, w.creature_get_payload(l).lizard.effect_color, 0.7f);
             if (g.white_flicker > 0 && (g.white_flicker > 15 || g.every_second_draw))
                 c = vec3{1.f, 1.f, 1.f};
             heads[0].color = c;
@@ -1146,7 +1147,7 @@ namespace lizard_graphics {
         sprite tongue_tip;
         int32_t const tongue_n = std::min(p.tongue_segments, lizard::max_tongue);
         if (tongue && tongue_n >= 2) {
-            auto const& tg = w.lizard_get_tongue(l);
+            auto const& tg = w.lizard_data_get_tongue(creature::lizard_data(w, l));
             int32_t const n = tongue_n;
             tongue_verts = size_t((n - 1) * 4 + 3);
             vec2 const tip = rw::lerp(tg.graph_pos[1], tg.graph_pos[0], alpha);
@@ -1242,8 +1243,8 @@ namespace lizard_graphics {
     }
 
     namespace shared {
-        spine_frame make_spine_frame(sys::game_state const& state, dcon::lizard_id l, float alpha) {
-            auto const& g = state.world.lizard_get_graphics(l);
+        spine_frame make_spine_frame(sys::game_state const& state, dcon::creature_id l, float alpha) {
+            auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
             auto const& p = lizard::params_of(state, l);
             spine_frame fr;
             for (int32_t i = 0; i < 4; ++i)
@@ -1319,20 +1320,20 @@ namespace lizard_graphics {
         float body_and_tail_length(lizard::graphics_state const& g) {
             return g.body_length + g.tail_length;
         }
-        vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal) {
+        vec3 head_color(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal) {
             return head_color_impl(state, l, alpha, pal);
         }
-        vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal) {
+        vec3 body_color(sys::game_state const& state, dcon::creature_id l, float f, palette const& pal) {
             return body_color_impl(state, l, f, pal);
         }
-        vec3 dynamic_body_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
+        vec3 dynamic_body_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
             return lizard_graphics::dynamic_body_color(state, l, pal);
         }
-        vec3 effect_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
+        vec3 effect_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
             return lizard_graphics::effect_color(state, l, pal);
         }
-        vec3 white_camo_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
-            return lizard_graphics::white_camo_color(state.world.lizard_get_graphics(l), pal);
+        vec3 white_camo_color(sys::game_state const& state, dcon::creature_id l, palette const& pal) {
+            return lizard_graphics::white_camo_color(state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)), pal);
         }
     }
 }

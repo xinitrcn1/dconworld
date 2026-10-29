@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "config.h"
+#include "creature_types.hpp"
 #include "dcon_generated.hpp"
 #include "layered_fs.hpp"
 #include "pathing_types.hpp"
@@ -40,17 +41,21 @@ namespace sys {
                 return {};
             return std::span<ID const>{ids.data() + first[r], ids.data() + first[r + 1]};
         }
+        // buckets [from, to) of a bucketing with several buckets per room
+        std::span<ID const> range(size_t from, size_t to) const noexcept {
+            if (to >= first.size())
+                return {};
+            return std::span<ID const>{ids.data() + first[from], ids.data() + first[to]};
+        }
     };
     struct room_index {
         // only while the rooms update in parallel (simulation.cpp); the
         // helpers of rooms.hpp walk every object of the kind otherwise
         bool valid = false;
         room_buckets<dcon::player_id> players;
-        room_buckets<dcon::centipede_id> centipedes;
-        room_buckets<dcon::dropbug_id> dropbugs;
-        room_buckets<dcon::cicada_id> cicadas;
-        room_buckets<dcon::lizard_id> lizards;
-        room_buckets<dcon::daddy_id> daddies;
+        // creatures by room and kind: kind `t` of room `r` is bucket
+        // r * creature::type_count + t, so a room's are kind by kind
+        room_buckets<dcon::creature_id> creatures;
         room_buckets<dcon::item_id> items;
         room_buckets<dcon::lizard_spit_id> spits;
     };

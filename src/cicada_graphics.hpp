@@ -24,16 +24,16 @@ namespace cicada_graphics {
     };
 
     // the CicadaGraphics constructor (and GraphicsModule.Reset)
-    void reset(sys::game_state& state, dcon::cicada_id c);
+    void reset(sys::game_state& state, dcon::creature_id c);
     // GraphicsModule.Reset when a camera looks at the creature's room again:
     // the parts back to the body, the look (rolled at creation) kept
-    void reset_positions(sys::game_state& state, dcon::cicada_id id);
+    void reset_positions(sys::game_state& state, dcon::creature_id id);
     // CicadaGraphics.Update, once per tick after the cicada's update
-    void update(sys::game_state& state, dcon::cicada_id c, world::room_view const& room);
+    void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
     // CicadaGraphics.DrawSprites (+ ApplyPalette); `alpha` interpolates
     // between ticks
-    void build(sys::game_state const& state, dcon::cicada_id c, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
+    void build(sys::game_state const& state, dcon::creature_id c, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
     // the colours ApplyPalette picks: body, shield (wings), eyes (the plain
     // shapes the renderer draws without the game's atlases use them too)
-    void colors(sys::game_state const& state, dcon::cicada_id c, palette const& pal, rw::vec3& body, rw::vec3& shield, rw::vec3& eyes);
+    void colors(sys::game_state const& state, dcon::creature_id c, palette const& pal, rw::vec3& body, rw::vec3& shield, rw::vec3& eyes);
 }

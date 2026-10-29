@@ -6,16 +6,7 @@
 #include <tbb/parallel_for.h>
 
 #include "simulation.hpp"
-#include "centipede.hpp"
-#include "centipede_graphics.hpp"
-#include "cicada.hpp"
-#include "cicada_graphics.hpp"
-#include "lizard.hpp"
-#include "lizard_graphics.hpp"
-#include "daddy.hpp"
-#include "daddy_graphics.hpp"
-#include "dropbug.hpp"
-#include "dropbug_graphics.hpp"
+#include "creature.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "outposts.hpp"
@@ -33,24 +24,23 @@
 
 namespace rooms {
     namespace {
-        template<typename ID, typename All, typename Room>
-        void fill(sys::room_buckets<ID>& b, size_t room_count, All&& all, Room&& room_of) {
-            // a counting sort by room: ids come in ascending order, and stay so
-            b.first.assign(room_count + 1, 0);
+        // `bucket_of` an object's bucket, or `count` for none
+        template<typename ID, typename All, typename Bucket>
+        void fill(sys::room_buckets<ID>& b, size_t count, All&& all, Bucket&& bucket_of) {
+            // a counting sort by bucket: ids come in ascending order, and stay so
+            b.first.assign(count + 1, 0);
             b.ids.clear();
             all([&](ID id) {
-                auto const r = room_of(id);
-                if (r && size_t(r.index()) < room_count)
-                    ++b.first[size_t(r.index()) + 1];
+                if (size_t const k = bucket_of(id); k < count)
+                    ++b.first[k + 1];
             });
-            for (size_t i = 0; i < room_count; ++i)
+            for (size_t i = 0; i < count; ++i)
                 b.first[i + 1] += b.first[i];
-            b.ids.resize(b.first[room_count]);
+            b.ids.resize(b.first[count]);
             std::vector<uint32_t> at(b.first.begin(), b.first.end() - 1);
             all([&](ID id) {
-                auto const r = room_of(id);
-                if (r && size_t(r.index()) < room_count)
-                    b.ids[at[size_t(r.index())]++] = id;
+                if (size_t const k = bucket_of(id); k < count)
+                    b.ids[at[k]++] = id;
             });
         }
     }
@@ -59,13 +49,18 @@ namespace rooms {
         auto const& w = state.world;
         auto& x = state.index;
         size_t const n = size_t(w.room_size());
-        auto const of = [&](auto id) { return room_of(state, id); };
+        // a room's bucket, `n` for none
+        auto const of = [&](auto id) {
+            auto const r = room_of(state, id);
+            return r && size_t(r.index()) < n ? size_t(r.index()) : n;
+        };
         fill(x.players, n, [&](auto&& f) { w.for_each_player(f); }, of);
-        fill(x.centipedes, n, [&](auto&& f) { w.for_each_centipede(f); }, of);
-        fill(x.dropbugs, n, [&](auto&& f) { w.for_each_dropbug(f); }, of);
-        fill(x.cicadas, n, [&](auto&& f) { w.for_each_cicada(f); }, of);
-        fill(x.lizards, n, [&](auto&& f) { w.for_each_lizard(f); }, of);
-        fill(x.daddies, n, [&](auto&& f) { w.for_each_daddy(f); }, of);
+        // a room's creatures kind by kind
+        size_t const nt = creature::type_count;
+        fill(x.creatures, n * nt, [&](auto&& f) { w.for_each_creature(f); }, [&](dcon::creature_id c) {
+            size_t const r = of(c);
+            return r < n ? r * nt + size_t(w.creature_get_type(c)) : n * nt;
+        });
         fill(x.items, n, [&](auto&& f) { w.for_each_item(f); }, of);
         fill(x.spits, n, [&](auto&& f) { w.for_each_lizard_spit(f); }, of);
     }
@@ -195,16 +190,7 @@ namespace simulation {
                 items::carry_update(state, p);
                 items::back_spear_update(state, p);
             }
-            centipede::update_room(state, view);
-            centipede::collide(state, view);
-            dropbug::update_room(state, view);
-            dropbug::collide(state, view);
-            cicada::update_room(state, view);
-            cicada::collide(state, view);
-            lizard::update_room(state, view);
-            lizard::collide(state, view);
-            daddy::update_room(state, view);
-            daddy::collide(state, view);
+            creature::update_room(state, view);
             outposts::update_room(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
@@ -212,24 +198,6 @@ namespace simulation {
             terrain::update_room(state, view);
             particles::ambient(state, view);
             gates::update_room(state, room);
-        }
-
-        // InitiateGraphicsModule + Reset: a room a camera starts looking at
-        // gets its creatures' graphics modules back, the parts on the bodies
-        void graphics_came_into_view(sys::game_state& state, dcon::room_id room) {
-            auto& w = state.world;
-            rooms::for_each_centipede(state, room, [&](dcon::centipede_id c) { centipede_graphics::reset_positions(state, c); });
-            rooms::for_each_dropbug(state, room, [&](dcon::dropbug_id d) { dropbug_graphics::reset_positions(state, d); });
-            rooms::for_each_cicada(state, room, [&](dcon::cicada_id c) { cicada_graphics::reset_positions(state, c); });
-            rooms::for_each_lizard(state, room, [&](dcon::lizard_id l) {
-                lizard_graphics::reset_positions(state, l);
-                // no limb has found a grip yet: Lizard.LegsGripping's 2 until
-                // the first update
-                auto& g = w.lizard_get_graphics(l);
-                g.legs_grabbing = 2;
-                g.no_grip_counter = 0;
-            });
-            rooms::for_each_daddy(state, room, [&](dcon::daddy_id d) { daddy_graphics::reset(state, d); });
         }
     }
 
@@ -268,8 +236,11 @@ namespace simulation {
             view(r);
         for (size_t r = 0; r < state.rooms.size(); ++r) {
             auto& rt = state.rooms[r];
+            // InitiateGraphicsModule + Reset: a room a camera starts looking
+            // at gets its creatures' graphics modules back, the parts on the
+            // bodies
             if (rt.viewed && !rt.was_viewed)
-                graphics_came_into_view(state, dcon::room_id{dcon::room_id::value_base_t(r)});
+                creature::came_into_view(state, dcon::room_id{dcon::room_id::value_base_t(r)});
             rt.was_viewed = rt.viewed;
         }
 

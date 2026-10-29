@@ -97,7 +97,6 @@ namespace dropbug {
         float deep_ceiling_mode = 0.f;
         float last_deep_ceiling_mode = 0.f;
         uint8_t ceiling_jump = 0;
-        // UnityEngine.Random as the graphics module uses it
-        rw::rng random;
+        // (its UnityEngine.Random is the creature's graphics_random)
     };
 }

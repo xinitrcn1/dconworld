@@ -194,11 +194,12 @@ namespace world {
         uint16_t count = 0;
     };
 
-    // a creature body chunk held by the rot
+    // a creature body chunk held by the rot: a slugcat's (`id` the player's
+    // index) or a creature's (the creature's index)
     enum class prey_kind : uint8_t {
         none,
         player,
-        centipede,
+        creature,
     };
     struct rot_prey {
         prey_kind kind = prey_kind::none;

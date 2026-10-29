@@ -75,10 +75,10 @@ namespace lizard_cosmetics {
             bp.vel = vec2{0.f, 0.f};
         }
 
-        vec2 chunk_pos(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        vec2 chunk_pos(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return state.world.body_chunk_get_pos(lizard::chunk(state, l, i));
         }
-        vec2 chunk_vel(sys::game_state const& state, dcon::lizard_id l, uint32_t i) {
+        vec2 chunk_vel(sys::game_state const& state, dcon::creature_id l, uint32_t i) {
             return state.world.body_chunk_get_vel(lizard::chunk(state, l, i));
         }
 
@@ -101,7 +101,7 @@ namespace lizard_cosmetics {
         // (with the LongBodyScales' LizardScales), committed by AddCosmetic
         struct maker {
             sys::game_state& state;
-            dcon::lizard_id l;
+            dcon::creature_id l;
             lizard::graphics_state& g;
             rw::rng& rng;
             breed b;
@@ -610,7 +610,7 @@ namespace lizard_cosmetics {
             for (int32_t i = 0; i < an.segments; ++i)
                 for (int32_t s = 0; s < 2; ++s)
                     an.antennae[s][i] = player::body_part{vec2{0.f, 0.f}, vec2{0.f, 0.f}, vec2{0.f, 0.f}, feeler_rad, 1.f};
-            vec3 t = m.state.world.lizard_get_effect_color(m.l);
+            vec3 t = m.state.world.creature_get_payload(m.l).lizard.effect_color;
             t.y *= 0.5f;
             t.z *= 0.5f;
             t.x = mathf::lerp(t.x, 1.f, 0.75f);
@@ -708,7 +708,7 @@ namespace lizard_cosmetics {
             auto& wc = m.g.cosmetics.watcher;
             m.begin(cosmetic_type::peach_head_stripes, sprites_overlap::in_front);
             wc.stripes_alpha = m.rng.value();
-            vec3 t = m.state.world.lizard_get_effect_color(m.l);
+            vec3 t = m.state.world.creature_get_payload(m.l).lizard.effect_color;
             t.y *= 0.5f;
             t.z *= 0.5f;
             t.x = mathf::lerp(t.x, 1.f, 0.75f);
@@ -789,9 +789,9 @@ namespace lizard_cosmetics {
         // ---- Update ----
 
         // LongBodyScales.Update (LizardScale.Update included)
-        void update_long_body_scales(sys::game_state& state, dcon::lizard_id l, cosmetic const& c, shared::spine_frame const& fr, room_view const& room) {
-            auto& g = state.world.lizard_get_graphics(l);
-            auto& rng = g.random;
+        void update_long_body_scales(sys::game_state& state, dcon::creature_id l, cosmetic const& c, shared::spine_frame const& fr, room_view const& room) {
+            auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+            auto& rng = state.world.creature_get_graphics_random(l);
             float const head_rot = lizard_graphics::head_rotation(state, l, 1.f);
             float const backwards_exponent = mathf::lerp(1.f, 15.f, g.show_dominance);
             for (int32_t i = 0; i < c.count; ++i) {
@@ -826,9 +826,9 @@ namespace lizard_cosmetics {
         }
 
         // Whiskers.Update
-        void update_whiskers(sys::game_state& state, dcon::lizard_id l, room_view const& room) {
-            auto& g = state.world.lizard_get_graphics(l);
-            auto& rng = g.random;
+        void update_whiskers(sys::game_state& state, dcon::creature_id l, room_view const& room) {
+            auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+            auto& rng = state.world.creature_get_graphics_random(l);
             auto& wh = g.cosmetics.whiskers;
             vec2 const host_vel = chunk_vel(state, l, 0);
             float const light = mathf::inverse_lerp(0.f, 0.3f, g.black_lizard_light_up_head);
@@ -856,11 +856,11 @@ namespace lizard_cosmetics {
         }
 
         // Antennae.Update
-        void update_antennae(sys::game_state& state, dcon::lizard_id l, room_view const& room) {
-            auto& g = state.world.lizard_get_graphics(l);
-            auto& rng = g.random;
+        void update_antennae(sys::game_state& state, dcon::creature_id l, room_view const& room) {
+            auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+            auto& rng = state.world.creature_get_graphics_random(l);
             auto& an = g.cosmetics.antennae;
-            float num = state.world.lizard_get_ai(l).comm_flicker;
+            float num = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).comm_flicker;
             if (!lizard::consious(state, l))
                 num = 0.f;
             float const num2 = mathf::lerp(10.f, 7.f, an.length);
@@ -901,9 +901,9 @@ namespace lizard_cosmetics {
         }
 
         // WingScales.Update
-        void update_wing_scales(sys::game_state& state, dcon::lizard_id l, shared::spine_frame const& fr, room_view const& room) {
-            auto& g = state.world.lizard_get_graphics(l);
-            auto& rng = g.random;
+        void update_wing_scales(sys::game_state& state, dcon::creature_id l, shared::spine_frame const& fr, room_view const& room) {
+            auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+            auto& rng = state.world.creature_get_graphics_random(l);
             auto& ws = g.cosmetics.wings;
             vec2 const host_vel = chunk_vel(state, l, 1);
             for (int32_t i = 0; i < ws.per_side; ++i) {
@@ -924,7 +924,7 @@ namespace lizard_cosmetics {
                     s.pos += (goal - s.pos) * 0.6f * mathf::pow(ws.sturdy, 3.f);
                 }
             }
-            if (state.world.lizard_get_core(l).anim == lizard::animation::prepare_to_jump && lizard::consious(state, l)) {
+            if (state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).anim == lizard::animation::prepare_to_jump && lizard::consious(state, l)) {
                 vec2 const fwd = custom::dir_vec(chunk_pos(state, l, 1), chunk_pos(state, l, 0));
                 for (int32_t k = 0; k < 2; ++k)
                     for (int32_t i = 0; i < ws.per_side; ++i) {
@@ -953,8 +953,8 @@ namespace lizard_cosmetics {
 
         // BasiliskSlowField.Update (Lizard.BasiliskMushroomField isn't ported:
         // its intensity stays 0)
-        void update_slow_field(sys::game_state& state, dcon::lizard_id l) {
-            auto& wc = state.world.lizard_get_graphics(l).cosmetics.watcher;
+        void update_slow_field(sys::game_state& state, dcon::creature_id l) {
+            auto& wc = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).cosmetics.watcher;
             wc.field_smoothed_vel = rw::lerp(wc.field_smoothed_vel, chunk_vel(state, l, 0), 0.2f);
             wc.field_last_intensity = wc.field_intensity;
             float const v = rw::magnitude(wc.field_smoothed_vel);
@@ -977,17 +977,16 @@ namespace lizard_cosmetics {
             wc.halo_heat *= 0.97f + mathf::clamp01(wc.halo_heat) * 0.03f;
             wc.halo_heat = mathf::max(wc.halo_heat - 0.0019f, 0.f);
         }
-        void update_beam(sys::game_state& state, dcon::lizard_id l) {
-            auto& wc = state.world.lizard_get_graphics(l).cosmetics.watcher;
+        void update_beam(sys::game_state& state, dcon::creature_id l) {
+            auto& wc = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).cosmetics.watcher;
             wc.beam_last_hit_pos = wc.beam_hit_pos;
             wc.beam_last_size = wc.beam_size;
             ++wc.beam_time;
             wc.beam_size = std::fabs(std::sin(float(wc.beam_time) * 0.44f));
             wc.beam_hit_pos = chunk_pos(state, l, 0);
         }
-        void update_steam(lizard::graphics_state& g) {
+        void update_steam(lizard::graphics_state& g, rw::rng& rng) {
             auto& h = g.cosmetics.watcher.steam_heaters_heat;
-            auto& rng = g.random;
             h[1] = h[0];
             h[2] = mathf::min(h[2] + 0.0016666667f, 1.f);
             h[0] = mathf::lerp(h[0], h[2], 0.7f);
@@ -1000,7 +999,7 @@ namespace lizard_cosmetics {
         // what every cosmetic's DrawSprites/ApplyPalette reads off the lizard
         struct draw_ctx {
             sys::game_state const& state;
-            dcon::lizard_id l;
+            dcon::creature_id l;
             lizard::graphics_state const& g;
             breed b;
             float alpha;
@@ -1259,7 +1258,7 @@ namespace lizard_cosmetics {
         void draw_antennae(draw_ctx const& d) {
             auto const& g = d.g;
             auto const& an = g.cosmetics.antennae;
-            float const comm = d.state.world.lizard_get_ai(d.l).comm_flicker;
+            float const comm = d.state.world.lizard_data_get_ai(creature::lizard_data(d.state.world, d.l)).comm_flicker;
             float flicker = mathf::pow(d.jitter.value(), 1.f - 0.5f * comm) * comm;
             if (!lizard::consious(d.state, d.l))
                 flicker = 0.f;
@@ -1314,7 +1313,7 @@ namespace lizard_cosmetics {
         // JumpRings
         void draw_jump_rings(draw_ctx const& d) {
             auto const& g = d.g;
-            auto const& z = d.state.world.lizard_get_core(d.l);
+            auto const& z = d.state.world.lizard_data_get_core(creature::lizard_data(d.state.world, d.l));
             float const bd = mathf::lerp(g.last_depth_rotation, g.depth_rotation, d.alpha);
             float const hd = head_depth(g, d.alpha);
             vec3 color = d.head_color;
@@ -1493,7 +1492,7 @@ namespace lizard_cosmetics {
         }
         void draw_peach_head_stripes(draw_ctx const& d, sprite const& head) {
             auto const& wc = d.g.cosmetics.watcher;
-            float const comm = d.state.world.lizard_get_ai(d.l).comm_flicker;
+            float const comm = d.state.world.lizard_data_get_ai(creature::lizard_data(d.state.world, d.l)).comm_flicker;
             float num = mathf::pow(d.jitter.value(), 1.f - 0.5f * comm) * comm;
             if (!lizard::consious(d.state, d.l))
                 num = 0.f;
@@ -1528,9 +1527,9 @@ namespace lizard_cosmetics {
         }
     }
 
-    void add_cosmetics(sys::game_state& state, dcon::lizard_id l) {
-        auto& g = state.world.lizard_get_graphics(l);
-        auto& rng = g.random;
+    void add_cosmetics(sys::game_state& state, dcon::creature_id l) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+        auto& rng = state.world.creature_get_graphics_random(l);
         breed const b = lizard::breed_of(state, l);
         maker m{state, l, g, rng, b, lizard::params_of(state, l), cosmetic{}, {}};
         g.cosmetics.count = 0;
@@ -1685,9 +1684,9 @@ namespace lizard_cosmetics {
         // (LizardRotGraphics: no rot module on the lizards here)
     }
 
-    void reset(sys::game_state& state, dcon::lizard_id l) {
-        auto& g = state.world.lizard_get_graphics(l);
-        auto& rng = g.random;
+    void reset(sys::game_state& state, dcon::creature_id l) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
+        auto& rng = state.world.creature_get_graphics_random(l);
         auto& cs = g.cosmetics;
         for (int32_t k = 0; k < cs.count; ++k) {
             switch (cs.list[k].type) {
@@ -1714,8 +1713,8 @@ namespace lizard_cosmetics {
         }
     }
 
-    void update(sys::game_state& state, dcon::lizard_id l, room_view const& room) {
-        auto& g = state.world.lizard_get_graphics(l);
+    void update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
+        auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         auto const& cs = g.cosmetics;
         if (cs.count == 0)
             return;
@@ -1752,7 +1751,7 @@ namespace lizard_cosmetics {
                     update_beam(state, l);
                     break;
                 case cosmetic_type::blizzard_steam:
-                    update_steam(g);
+                    update_steam(g, state.world.creature_get_graphics_random(l));
                     break;
                 default:
                     break;
@@ -1760,9 +1759,9 @@ namespace lizard_cosmetics {
         }
     }
 
-    void build(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal, sprites_overlap overlap, sprite const& head, rw::rng& jitter,
+    void build(sys::game_state const& state, dcon::creature_id l, float alpha, palette const& pal, sprites_overlap overlap, sprite const& head, rw::rng& jitter,
         std::vector<sprites::draw_cmd>& out) {
-        auto const& g = state.world.lizard_get_graphics(l);
+        auto const& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         auto const& cs = g.cosmetics;
         bool any = false;
         for (int32_t k = 0; k < cs.count && !any; ++k)

@@ -326,7 +326,7 @@ namespace player_graphics {
             if (limb == 0 && carried)
                 flag = true;
             if (flag && carried) {
-                auto const gc = cicada::chunk(state, carried, w.cicada_get_held_chunk(carried));
+                auto const gc = cicada::chunk(state, carried, w.creature_get_payload(carried).cicada.held_chunk);
                 vec2 const gp = w.body_chunk_get_pos(gc);
                 h.mode = limb_mode::hunt_absolute_position;
                 h.absolute_hunt_pos = gp + custom::perpendicular_vector(c0 - gp) * w.body_chunk_get_rad(gc) * 0.8f * (limb == 0 ? -1.f : 1.f);

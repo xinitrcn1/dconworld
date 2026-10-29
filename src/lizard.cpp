@@ -29,7 +29,7 @@ namespace lizard {
         // One lizard during its update: the storage it works on
         struct ctx {
             sys::game_state& state;
-            dcon::lizard_id id;
+            dcon::creature_id id;
             room_view const& room;
             breed_params const& p;
             body_state& z;
@@ -41,9 +41,9 @@ namespace lizard {
             // a camera looks at the room: it has a graphicsModule (LizardGraphics)
             bool viewed;
 
-            ctx(sys::game_state& s, dcon::lizard_id l, room_view const& r)
-                : state(s), id(l), room(r), p(params_of(s, l)), z(s.world.lizard_get_core(l)), g(s.world.lizard_get_graphics(l)),
-                  a(s.world.lizard_get_ai(l)), rng(s.world.lizard_get_random(l)), o(body(s, l)), viewed(s.viewed(r.id)) {
+            ctx(sys::game_state& s, dcon::creature_id l, room_view const& r)
+                : state(s), id(l), room(r), p(params_of(s, l)), z(s.world.lizard_data_get_core(creature::lizard_data(s.world, l))), g(s.world.lizard_data_get_graphics(creature::lizard_data(s.world, l))),
+                  a(s.world.lizard_data_get_ai(creature::lizard_data(s.world, l))), rng(s.world.creature_get_random(l)), o(body(s, l)), viewed(s.viewed(r.id)) {
                 for (uint32_t i = 0; i < 3; ++i)
                     c[i] = physics::chunk(s, o, i);
             }
@@ -58,9 +58,12 @@ namespace lizard {
             bool solid(uint32_t i, int32_t x, int32_t y) { return physics::is_tile_solid(state, room, c[i], x, y); }
             float total_mass() { return mass(0) + mass(1) + mass(2); }
             bool consious() { return lizard::consious(state, id); }
-            bool is(breed b) { return state.world.lizard_get_breed(id) == b; }
-            breed kind() { return state.world.lizard_get_breed(id); }
-            float health() { return state.world.lizard_get_health(id); }
+            // grasps[0]: the slugcat in its jaws (player index + 1, 0 none) and the chunk
+            uint8_t& grasp_player() { return state.world.creature_get_grasp_player(id)[0]; }
+            uint8_t& grasp_chunk() { return state.world.creature_get_grasp_chunk(id)[0]; }
+            bool is(breed b) { return state.world.creature_get_payload(id).lizard.breed == b; }
+            breed kind() { return state.world.creature_get_payload(id).lizard.breed; }
+            float health() { return state.world.creature_get_health(id); }
             void sound(sound::sound_id s, float vol = 1.f, float pitch = 1.f) { state.play_sound(s, room.id, pos(0), vol, pitch); }
             void sound_at(sound::sound_id s, vec2 at, float vol = 1.f, float pitch = 1.f) { state.play_sound(s, room.id, at, vol, pitch); }
             // AItile.acc / TileAccessibleToCreature
@@ -117,24 +120,24 @@ namespace lizard {
         }
 
         // Creature.Die
-        void die(sys::game_state& state, dcon::lizard_id l);
+        void die(sys::game_state& state, dcon::creature_id l);
         // Lizard.LoseAllGrasps
-        void lose_all_grasps(sys::game_state& state, dcon::lizard_id l) {
+        void lose_all_grasps(sys::game_state& state, dcon::creature_id l) {
             auto& w = state.world;
-            auto& z = w.lizard_get_core(l);
-            if (auto const p = player_of(state, z.grasp_player)) {
+            auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
+            if (auto const p = player_of(state, state.world.creature_get_grasp_player(l)[0])) {
                 uint8_t& n = w.physical_object_get_grabbed_by_count(player::body(state, p));
                 if (n > 0)
                     --n;
             }
-            z.grasp_player = 0;
+            state.world.creature_get_grasp_player(l)[0] = 0;
             z.danger_grasp_time = 0;
         }
 
         // LizardTongue.Retract
-        void tongue_retract(sys::game_state& state, dcon::lizard_id l) {
+        void tongue_retract(sys::game_state& state, dcon::creature_id l) {
             auto& w = state.world;
-            auto& t = w.lizard_get_tongue(l);
+            auto& t = w.lizard_data_get_tongue(creature::lizard_data(w, l));
             auto const room = room_of(state, l);
             if (t.state == tongue_state::stuck_in_terrain)
                 state.play_sound(sound::sound_id::lizard_tongue_detatch_npc_or_terrain, room, t.pos);
@@ -145,24 +148,24 @@ namespace lizard {
         }
 
         // Lizard.Stun (+ Creature.Stun)
-        void stun(sys::game_state& state, dcon::lizard_id l, int32_t st) {
+        void stun(sys::game_state& state, dcon::creature_id l, int32_t st) {
             auto& w = state.world;
-            float const health = w.lizard_get_health(l);
+            float const health = w.creature_get_health(l);
             if (health < 0.5f)
                 st = int32_t(float(st) * (1.f + mathf::inverse_lerp(0.75f, 0.f, health) * 1.5f));
-            if (st > 5 && w.lizard_get_stun(l) <= 0 && state.viewed(room_of(state, l)))
+            if (st > 5 && w.creature_get_stun(l) <= 0 && state.viewed(room_of(state, l)))
                 lizard_graphics::stun(state, l, st);
-            w.lizard_set_stun(l, std::max(w.lizard_get_stun(l), st));
-            if (w.lizard_get_stun(l) > 0) {
-                auto& z = w.lizard_get_core(l);
+            w.creature_set_stun(l, std::max(w.creature_get_stun(l), st));
+            if (w.creature_get_stun(l) > 0) {
+                auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
                 z.has_grip_point = false;
                 z.move_anim.active = false;
                 lose_all_grasps(state, l);
             }
         }
 
-        void die(sys::game_state& state, dcon::lizard_id l) {
-            state.world.lizard_set_dead(l, 1);
+        void die(sys::game_state& state, dcon::creature_id l) {
+            state.world.creature_set_dead(l, 1);
             lose_all_grasps(state, l);
         }
 
@@ -176,7 +179,7 @@ namespace lizard {
             int32_t const st = int32_t(damage * 30.f + stun_bonus);
             player::stun(state, p, st);
             bool held = false;
-            rooms::for_each_lizard(state, rooms::room_of(state, p), [&](dcon::lizard_id o) { held = held || grasped(state, o) == p; });
+            rooms::for_each_creature(state, rooms::room_of(state, p), ::creature::type::lizard, [&](dcon::creature_id o) { held = held || grasped(state, o) == p; });
             if (!held && st > rng.range(5, 12))
                 items::release_all(state, p);
             if (damage >= 1.f)
@@ -191,7 +194,7 @@ namespace lizard {
                     vec2 const a = custom::rnv(x.rng);
                     particles::spawn(x.state, x.room.id, particles::kind::spark, x.pos(0) + a * 40.f, a * mathf::lerp(4.f, 30.f, x.rng.value()), 2.f, 0.4f, vec3{1.f, 1.f, 1.f});
                 }
-            if (x.z.grasp_player)
+            if (x.grasp_player())
                 return; // (grasps[0] != null and nothing holds it)
             x.z.jaw_open = 0.f;
             x.z.last_jaw_open = 0.f;
@@ -208,7 +211,7 @@ namespace lizard {
                 // stronger one keeps it
                 float const dominance = x.p.bite_dominance * x.rng.value();
                 grabbed = true;
-                rooms::for_each_lizard(x.state, x.room.id, [&](dcon::lizard_id other) {
+                rooms::for_each_creature(x.state, x.room.id, ::creature::type::lizard, [&](dcon::creature_id other) {
                     if (other == x.id || grasped(x.state, other) != p)
                         return;
                     if (params_of(x.state, other).bite_dominance > dominance)
@@ -217,8 +220,8 @@ namespace lizard {
                         lose_all_grasps(x.state, other);
                 });
                 if (grabbed) {
-                    x.z.grasp_player = player_ref(p);
-                    x.z.grasp_chunk = uint8_t(k);
+                    x.grasp_player() = player_ref(p);
+                    x.grasp_chunk() = uint8_t(k);
                     x.z.danger_grasp_time = 0;
                     ++w.physical_object_get_grabbed_by_count(player::body(x.state, p));
                 }
@@ -236,7 +239,7 @@ namespace lizard {
             }
             // (only an Attacks relationship makes a DamageAttack of it)
             x.sound(sound::sound_id::lizard_jaws_shut_miss_creature);
-            rooms::for_each_lizard(x.state, x.room.id, [&](dcon::lizard_id other) {
+            rooms::for_each_creature(x.state, x.room.id, ::creature::type::lizard, [&](dcon::creature_id other) {
                 if (grasped(x.state, other) == p)
                     lose_all_grasps(x.state, other);
             });
@@ -245,7 +248,7 @@ namespace lizard {
         // Lizard.CarryObject: the slugcat held in front of the head
         void carry_object(ctx& x) {
             auto& w = x.state.world;
-            auto const p = player_of(x.state, x.z.grasp_player);
+            auto const p = player_of(x.state, x.grasp_player());
             if (!p || !player_here(x.state, p, x.room.id)) {
                 lose_all_grasps(x.state, x.id);
                 return;
@@ -255,7 +258,7 @@ namespace lizard {
                 return;
             }
             vec2 const hold = x.pos(0) + custom::dir_vec(x.pos(1), x.pos(0)) * 25.f * x.p.head_size;
-            auto const gc = player::body_chunk(x.state, p, x.z.grasp_chunk);
+            auto const gc = player::body_chunk(x.state, p, x.grasp_chunk());
             vec2 const rel = w.body_chunk_get_vel(gc) - x.vel(0);
             w.body_chunk_set_vel(gc, x.vel(0));
             if (rw::magnitude(rel) * w.body_chunk_get_mass(gc) > 30.f || !custom::dist_less(hold, w.body_chunk_get_pos(gc), 70.f + w.body_chunk_get_rad(gc))) {
@@ -266,7 +269,7 @@ namespace lizard {
             w.body_chunk_set_pos(gc, hold);
             // PhysicalObject.PushOutOf: the slugcat's other chunk out of the head and middle
             for (uint32_t i = 0; i < 2; ++i) {
-                auto const other = player::body_chunk(x.state, p, 1 - x.z.grasp_chunk);
+                auto const other = player::body_chunk(x.state, p, 1 - x.grasp_chunk());
                 vec2& op = w.body_chunk_get_pos(other);
                 float const r = x.rad(i) + w.body_chunk_get_rad(other);
                 if (custom::dist_less(op, x.pos(i), r)) {
@@ -282,7 +285,7 @@ namespace lizard {
         // holds after 30 ticks, and it is over for it at 60 (Player.Update,
         // RainWorldGame.GameOver)
         void danger_grasp(ctx& x) {
-            auto const p = player_of(x.state, x.z.grasp_player);
+            auto const p = player_of(x.state, x.grasp_player());
             if (!p)
                 return;
             ++x.z.danger_grasp_time;
@@ -366,7 +369,7 @@ namespace lizard {
         // LizardTongue.Update
         void tongue_update(ctx& x) {
             auto& w = x.state.world;
-            auto& t = w.lizard_get_tongue(x.id);
+            auto& t = w.lizard_data_get_tongue(creature::lizard_data(w, x.id));
             auto const& tp = x.p.tongue_p;
             t.graph_pos[1] = t.graph_pos[0];
             if (!x.consious() && t.state != tongue_state::hidden)
@@ -525,7 +528,7 @@ namespace lizard {
 
         // LizardTongue.LashOut
         void tongue_lash_out(ctx& x, vec2 target) {
-            auto& t = x.state.world.lizard_get_tongue(x.id);
+            auto& t = x.state.world.lizard_data_get_tongue(creature::lizard_data(x.state.world, x.id));
             auto const& tp = x.p.tongue_p;
             target.y += rw::distance(x.pos(0), target) * 0.05f;
             vec2 const fwd = custom::dir_vec(x.pos(1), x.pos(0));
@@ -546,7 +549,7 @@ namespace lizard {
                 if (x.is(breed::indigo)) {
                     for (int j = 0; j < 3; ++j)
                         particles::spawn(x.state, x.room.id, particles::kind::spark, x.pos(0) + v * x.rng.value() * 3.f, v * 0.25f * x.rng.value(), 2.f, 0.6f,
-                            x.state.world.lizard_get_effect_color(x.id));
+                            x.state.world.creature_get_payload(x.id).lizard.effect_color);
                 } else {
                     particles::spawn(x.state, x.room.id, particles::kind::drop, x.pos(0), v * 0.5f * x.rng.value(), 1.5f, 0.6f, vec3{0.75f, 0.8f, 0.85f}, 0.6f);
                 }
@@ -942,9 +945,9 @@ namespace lizard {
                 x.vel(0).y += mathf::clamp(x.room.float_water_level - x.pos(0).y, -10.f, 10.f) * 0.1f;
             }
             ivec2 wc = room_view::get_tile_position(x.pos(0));
-            ivec2 const dest = x.a.destination;
+            ivec2 const dest = x.state.world.creature_get_destination(x.id);
             if (x.p.swimmer) {
-                if (x.a.current == behavior::lurk && custom::manhattan_distance(dest, room_view::get_tile_position(x.pos(2))) < 3) {
+                if (behavior(x.state.world.creature_get_behavior(x.id)) == behavior::lurk && custom::manhattan_distance(dest, room_view::get_tile_position(x.pos(2))) < 3) {
                     x.vel(2) += rw::clamp_magnitude(room_view::middle_of_tile(dest) - x.pos(2), 10.f) / 7.f;
                     x.vel(0) += custom::dir_vec(x.pos(2), room_view::middle_of_tile(x.a.lurk.look_position)) * 0.2f;
                     z.salamander_lurk = true;
@@ -996,9 +999,9 @@ namespace lizard {
         }
 
         // LizardJumpModule.NoRunBehavior
-        bool no_run_behavior(sys::game_state const& state, dcon::lizard_id l) {
-            auto const& j = state.world.lizard_get_jump(l);
-            return j.has_act_on && state.world.lizard_get_core(l).anim == animation::jumping && j.jump_counter < j.act_on.best.tick;
+        bool no_run_behavior(sys::game_state const& state, dcon::creature_id l) {
+            auto const& j = state.world.lizard_data_get_jump(creature::lizard_data(state.world, l));
+            return j.has_act_on && state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).anim == animation::jumping && j.jump_counter < j.act_on.best.tick;
         }
 
         void jump_now(ctx& x);
@@ -1160,12 +1163,12 @@ namespace lizard {
             if (z.anim == animation::shake_prey) {
                 set_wiggle(x, custom::int_clamp(50 - z.time_in_animation, 0, 100));
                 vec2 v = custom::rnv(x.rng) * 12.f * x.rng.value();
-                if (!z.grasp_player) {
+                if (!x.grasp_player()) {
                     v *= 0.5f;
                 } else {
                     // the slugcat's chunk weighs 0.315/0.385 against the head
-                    auto const p = player_of(x.state, z.grasp_player);
-                    float const m = p ? x.state.world.body_chunk_get_mass(player::body_chunk(x.state, p, z.grasp_chunk)) : 0.f;
+                    auto const p = player_of(x.state, x.grasp_player());
+                    float const m = p ? x.state.world.body_chunk_get_mass(player::body_chunk(x.state, p, x.grasp_chunk())) : 0.f;
                     float n = std::fabs(m - x.mass(0) * 0.5f);
                     n = mathf::pow(mathf::inverse_lerp(x.mass(0) * 0.5f, 0.f, n), 1.5f);
                     v *= n;
@@ -1198,7 +1201,7 @@ namespace lizard {
             auto& z = x.z;
             auto& w = x.state.world;
             auto const focus = ai::focus(x.state, x.id);
-            bool const focus_seen = focus && x.a.rep.visual_contact;
+            bool const focus_seen = focus && x.state.world.creature_get_sees_player(x.id);
             vec2 const focus_pos = focus ? w.body_chunk_get_pos(player::body_chunk(x.state, focus, 0)) : vec2{0.f, 0.f};
             float num = 0.f;
             int32_t const grip = legs_gripping(x.state, x.id);
@@ -1237,7 +1240,7 @@ namespace lizard {
             case animation::shoot_tongue:
                 set_wiggle(x, 0);
                 num = 0.2f;
-                if (x.a.current != behavior::hunt || !focus_seen || rw::dot(custom::dir_vec(x.pos(1), x.pos(0)), custom::dir_vec(x.pos(0), focus_pos)) < 0.3f)
+                if (behavior(x.state.world.creature_get_behavior(x.id)) != behavior::hunt || !focus_seen || rw::dot(custom::dir_vec(x.pos(1), x.pos(0)), custom::dir_vec(x.pos(0), focus_pos)) < 0.3f)
                     enter_animation(x.state, x.id, animation::standard, true);
                 if (z.time_in_animation == z.time_to_remain_in_animation / 2 && focus) {
                     set_jaw_open(x.state, x.id, 1.f);
@@ -1275,7 +1278,7 @@ namespace lizard {
                 break;
             }
             case animation::prepare_to_jump: {
-                auto const& j = w.lizard_get_jump(x.id);
+                auto const& j = w.lizard_data_get_jump(creature::lizard_data(w, x.id));
                 if (j.has_act_on && x.consious() && custom::dist_less(x.pos(1), room_view::middle_of_tile(j.act_on.start), 50.f)) {
                     vec2 const iv = rw::normalized(j.act_on.best.init_vel);
                     x.vel(1) *= 0.5f;
@@ -1300,7 +1303,7 @@ namespace lizard {
                 break;
             case animation::prepare_to_lounge:
                 set_wiggle(x, 0);
-                if (!x.p.can_exit_lounge_warm_up || (x.a.current == behavior::hunt && focus_seen)) {
+                if (!x.p.can_exit_lounge_warm_up || (behavior(x.state.world.creature_get_behavior(x.id)) == behavior::hunt && focus_seen)) {
                     if (focus) {
                         if (grip > 0)
                             for (uint32_t i = 0; i < 3; ++i)
@@ -1315,7 +1318,7 @@ namespace lizard {
                 }
                 break;
             case animation::lounge:
-                if (z.time_in_animation < x.p.lounge_maximum_frames && (!x.p.can_exit_lounge || (x.a.current == behavior::hunt && focus_seen))) {
+                if (z.time_in_animation < x.p.lounge_maximum_frames && (!x.p.can_exit_lounge || (behavior(x.state.world.creature_get_behavior(x.id)) == behavior::hunt && focus_seen))) {
                     set_jaw_open(x.state, x.id, jaw_open(x.state, x.id) + 0.1f);
                     if (z.time_in_animation < x.p.lounge_propulsion_frames && grip > 0)
                         for (uint32_t k = 0; k < 3; ++k)
@@ -1329,7 +1332,7 @@ namespace lizard {
                 break;
             case animation::shake_prey:
                 num = 0.75f;
-                if (!z.grasp_player && x.rng.value() < 0.025f)
+                if (!x.grasp_player() && x.rng.value() < 0.025f)
                     enter_animation(x.state, x.id, animation::standard, true);
                 break;
             }
@@ -1342,7 +1345,7 @@ namespace lizard {
                         for (uint32_t i = 0; i < 3; ++i)
                             x.vel(i) *= d;
                         if (grip > 0)
-                            x.vel(2) += custom::dir_vec(w.lizard_get_tongue(x.id).pos, x.pos(2)) * 1.2f;
+                            x.vel(2) += custom::dir_vec(w.lizard_data_get_tongue(creature::lizard_data(w, x.id)).pos, x.pos(2)) * 1.2f;
                     }
                 } else {
                     num *= 0.6f;
@@ -1391,13 +1394,13 @@ namespace lizard {
             }
             s.jagged_alpha = x.rng.value() * 0.5f;
             s.dot_alpha = x.rng.value() * 0.5f;
-            s.color = x.is(breed::red) ? vec3{1.f, 0.f, 0.f} : w.lizard_get_effect_color(x.id);
+            s.color = x.is(breed::red) ? vec3{1.f, 0.f, 0.f} : w.creature_get_payload(x.id).lizard.effect_color;
             // room.AddObject: a new object, made once the rooms are done updating
             x.state.defer(x.room.id, [s, room = x.room.id, owner = x.id](sys::game_state& st) {
                 auto& sw = st.world;
                 auto const sp = sw.create_lizard_spit();
                 sw.lizard_spit_set_room(sp, uint32_t(room.index()));
-                sw.lizard_spit_set_owner(sp, sw.lizard_is_valid(owner) ? uint32_t(owner.index() + 1) : 0u);
+                sw.lizard_spit_set_owner(sp, ::creature::is(sw, owner, ::creature::type::lizard) ? uint32_t(owner.index() + 1) : 0u);
                 sw.lizard_spit_set_spit(sp, s);
             });
             x.a.spit.delay = 12;
@@ -1412,8 +1415,8 @@ namespace lizard {
         void spit_update(sys::game_state& state, dcon::lizard_spit_id sp, room_view const& room) {
             auto& w = state.world;
             auto& s = w.lizard_spit_get_spit(sp);
-            dcon::lizard_id const owner{dcon::lizard_id::value_base_t(w.lizard_spit_get_owner(sp) - 1)};
-            bool const has_owner = w.lizard_spit_get_owner(sp) != 0 && w.lizard_is_valid(owner);
+            dcon::creature_id const owner{dcon::creature_id::value_base_t(w.lizard_spit_get_owner(sp) - 1)};
+            bool const has_owner = w.lizard_spit_get_owner(sp) != 0 && ::creature::is(w, owner, ::creature::type::lizard);
             rw::rng& rng = state.room_random(room.id);
             s.last_pos = s.pos;
             s.pos += s.vel;
@@ -1553,7 +1556,7 @@ namespace lizard {
             if (jf.chain_jump)
                 num *= 0.5f;
             float speed = mathf::lerp(14.f, 50.f, num);
-            if (x.z.grasp_player)
+            if (x.grasp_player())
                 speed *= 0.75f;
             speed *= mathf::lerp(1.f, mathf::clamp01(x.health()), 0.5f + 0.5f * x.rng.value());
             float const ang = (45.f * mathf::pow(x.rng.value(), 0.75f) + 135.f * mathf::pow(x.rng.value(), 2.f)) * (x.rng.value() < 0.5f ? -1.f : 1.f);
@@ -1580,11 +1583,11 @@ namespace lizard {
 
         // JumpFinder.BeneficialMovement
         bool beneficial(ctx& x, pathing::field_id f, jump_finder const& jf) {
-            auto const& j = x.state.world.lizard_get_jump(x.id);
+            auto const& j = x.state.world.lizard_data_get_jump(creature::lizard_data(x.state.world, x.id));
             if (!jf.best.set || !jf.best.has_goal)
                 return false;
             uint16_t const goal = cell(x, f, jf.best.goal);
-            return float_dist(jf.start, jf.best.goal) > 5.f && float_dist(x.a.destination, jf.best.goal) > 3.f
+            return float_dist(jf.start, jf.best.goal) > 5.f && float_dist(x.state.world.creature_get_destination(x.id), jf.best.goal) > 3.f
                 && !path_weight_comparison(goal, j.lizard_cell) && !path_weight_comparison(goal, cell(x, f, jf.start));
         }
 
@@ -1611,7 +1614,7 @@ namespace lizard {
                 if (!jf.ventured_away_from_terrain && prox > 1 && !beam)
                     jf.ventured_away_from_terrain = true;
                 if (jf.ventured_away_from_terrain && x.accessible(t) && (prox == 1 || beam)
-                && float_dist(jf.start, t) > float(custom::int_clamp(int32_t(rw::magnitude(jf.current.init_vel) / 3.f), 5, 20)) && float_dist(x.a.destination, t) > 3.f) {
+                && float_dist(jf.start, t) > float(custom::int_clamp(int32_t(rw::magnitude(jf.current.init_vel) / 3.f), 5, 20)) && float_dist(x.state.world.creature_get_destination(x.id), t) > 3.f) {
                     uint16_t const c = cell(x, f, t);
                     if (path_weight_comparison(jf.best.has_goal ? cell(x, f, jf.best.goal) : pathing::unreachable, c)) {
                         jf.best = jf.current;
@@ -1635,7 +1638,7 @@ namespace lizard {
 
         // LizardJumpModule.InitiateJump
         void initiate_jump(ctx& x, jump_finder const& jf, bool chain) {
-            auto& j = x.state.world.lizard_get_jump(x.id);
+            auto& j = x.state.world.lizard_data_get_jump(creature::lizard_data(x.state.world, x.id));
             if (!jf.best.set || !jf.best.has_goal)
                 return;
             j.act_on = jf;
@@ -1658,13 +1661,13 @@ namespace lizard {
             for (auto& f : j.finders)
                 f.active = false;
             // canChainJump: a Cyan with nothing in its jaws
-            if (!x.z.grasp_player && (j.act_on.chain_jump || j.act_on.best.power > 0.25f))
+            if (!x.grasp_player() && (j.act_on.chain_jump || j.act_on.best.power > 0.25f))
                 jump_finder_start(x, j.finders[0], jf.best.goal, true);
         }
 
         // LizardJumpModule.Jump (entering the Jumping animation)
         void jump_now(ctx& x) {
-            auto& j = x.state.world.lizard_get_jump(x.id);
+            auto& j = x.state.world.lizard_data_get_jump(creature::lizard_data(x.state.world, x.id));
             if (!j.has_act_on || !j.act_on.best.set)
                 return;
             auto const& b = j.act_on.best;
@@ -1689,13 +1692,13 @@ namespace lizard {
             // (the CyanLizardSmoke, JumpLight and ShockWave are cosmetics left out)
             for (int i = 0; i < 6; ++i)
                 particles::spawn(x.state, x.room.id, particles::kind::dust, start, -b.init_vel * x.rng.value() * 0.3f + custom::rnv(x.rng) * mathf::lerp(2.f, 6.f, b.power),
-                    mathf::lerp(4.f, 10.f, b.power), 0.6f, x.state.world.lizard_get_effect_color(x.id), 0.5f);
+                    mathf::lerp(4.f, 10.f, b.power), 0.6f, x.state.world.creature_get_payload(x.id).lizard.effect_color, 0.5f);
         }
 
         // LizardJumpModule.TryChainJump
         bool try_chain_jump(ctx& x, pathing::field_id f) {
-            auto& j = x.state.world.lizard_get_jump(x.id);
-            if (x.z.grasp_player)
+            auto& j = x.state.world.lizard_data_get_jump(creature::lizard_data(x.state.world, x.id));
+            if (x.grasp_player())
                 return false;
             for (auto& jf : j.finders) {
                 if (!jf.active || !jf.chain_jump || !beneficial(x, f, jf))
@@ -1717,8 +1720,8 @@ namespace lizard {
         // LizardJumpModule.Update
         void jump_module_update(ctx& x) {
             auto& w = x.state.world;
-            auto& j = w.lizard_get_jump(x.id);
-            if (w.lizard_get_dead(x.id))
+            auto& j = w.lizard_data_get_jump(creature::lizard_data(w, x.id));
+            if (w.creature_get_dead(x.id))
                 return;
             auto const f = ai::field(x.state, x.id, x.room);
             if (!x.consious() && (x.z.anim == animation::prepare_to_jump || x.z.anim == animation::jumping))
@@ -1921,145 +1924,13 @@ namespace lizard {
             }
         }
 
-        void update(sys::game_state& state, dcon::lizard_id l, room_view const& room) {
-            auto& w = state.world;
-            ctx x{state, l, room};
-            auto& z = x.z;
-            if (x.p.swimmer)
-                w.physical_object_set_buoyancy(x.o, 0.92f);
-            z.jaw_open = jaw_open(state, l);
-            z.last_jaw_open = z.jaw_open;
-            voice_update(x);
-            if (jaw_open(state, l) > 0.9f) {
-                if (z.bite_delay > 0)
-                    --z.bite_delay;
-            } else if (z.bite_delay < x.p.bite_delay) {
-                ++z.bite_delay;
-            }
-            z.jaw_forced_shut = mathf::max(0.f, z.jaw_forced_shut - 0.016666668f);
-            bool const dead = w.lizard_get_dead(l) != 0;
-            float const health = x.health();
-            if (!dead && x.rng.value() * 0.7f > health && x.rng.value() < 0.125f)
-                stun(state, l, x.rng.range(1, x.rng.range(1, 27 - custom::int_clamp(int32_t(20.f * health), 0, 10))));
-            if (!dead && x.rng.value() * 0.2f > health && x.rng.value() < 0.025f) {
-                int32_t const flicker = x.rng.range(1, 5);
-                if (x.viewed)
-                    lizard_graphics::white_flicker(state, l, flicker);
-            }
-            if (!dead && x.rng.value() * 0.5f > health && x.rng.value() < 0.05f)
-                set_jaw_open(state, l, x.rng.value());
-            // bodyChunkConnections[2].active = BodyStiff()
-            bool const stiff = !x.consious() || !z.move_anim.active;
-            w.physical_object_for_each_chunk_connection_as_owner(x.o, [&](dcon::chunk_connection_id k) {
-                if (w.chunk_connection_get_type(k) == physics::connection_type::push)
-                    w.chunk_connection_set_active(k, stiff);
-            });
-            if (z.turned_by_rock_counter > 0) {
-                --z.turned_by_rock_counter;
-                // PhysicalObject.WeightedPush(0, 2, dir, frc)
-                auto const push = [&](vec2 dir, float frc) {
-                    float const r = x.mass(2) / (x.mass(0) + x.mass(2));
-                    x.vel(0) += dir * frc * r;
-                    x.vel(2) -= dir * frc * (1.f - r);
-                };
-                push(vec2{float(z.turned_by_rock_direction), 0.f}, 6.f);
-                if (std::fabs(x.pos(0).y - x.pos(2).y) < 5.f)
-                    push(vec2{0.f, 1.f}, 2.f);
-            }
-            if (z.bubble > 0)
-                --z.bubble;
-            --z.lounge_delay;
-            if (x.p.tongue)
-                tongue_update(x);
-            if (x.consious())
-                act(x);
-            else
-                z.apply_gravity = true;
-            // (slugcats can't grab lizards: no grabbedAttackCounter bites)
-            // the chunk connections are Normal while no Standard
-            // MovementAnimation runs (and one never does here)
-            w.physical_object_for_each_chunk_connection_as_owner(x.o, [&](dcon::chunk_connection_id k) {
-                if (w.chunk_connection_get_type(k) != physics::connection_type::push)
-                    w.chunk_connection_set_type(k, physics::connection_type::normal);
-            });
-            if (x.p.tongue && (z.anim == animation::shoot_tongue || (!x.is(breed::blue) && tongue_out(state, l))))
-                z.jaw_open += 0.1f;
-            if (x.viewed && x.is(breed::caramel) && !x.narrow(here(state, l)) && z.anim == animation::prepare_to_lounge) {
-                // the Caramel rears up for its lunge (all of it under
-                // graphicsModule != null in vanilla, the body's pull too)
-                x.g.show_dominance = 1.f;
-                vec2 v{x.pos(2).x + z.lounge_dir.x * 10.f, x.pos(2).y + 15.f};
-                x.vel(1) += custom::dir_vec(x.pos(1), v);
-                x.vel(0) += custom::dir_vec(x.pos(0), x.pos(1) + z.lounge_dir * 10.f);
-                x.g.head.pos = rw::lerp(x.g.head.pos, x.pos(0) + z.lounge_dir * 20.f, 0.25f);
-                x.g.head.vel = z.lounge_dir * 20.f;
-                // (limbs[0..3] only: the middle pair keeps stepping)
-                for (int32_t i = 0; i < 4; ++i) {
-                    float const ahead = i < 2 ? 10.f : 20.f;
-                    x.g.limbs[i].h.mode = player::limb_mode::hunt_absolute_position;
-                    x.g.limbs[i].h.absolute_hunt_pos = vec2{x.pos(2).x + z.lounge_dir.x * ahead, x.pos(2).y - 15.f};
-                }
-            }
-            // the body's physics settings for this tick
-            float g = 0.9f, air = 0.999f, surface = 0.5f;
-            bool through_floors = true;
-            if (z.anim == animation::lounge || z.post_lounge_stun > 0 || (x.is(breed::cyan) && no_run_behavior(state, l))) {
-                surface = z.anim == animation::lounge ? 0.5f : 0.4f;
-                through_floors = z.lounge_dir.y < 0.f;
-                --z.post_lounge_stun;
-            } else if (z.apply_gravity) {
-                surface = 0.3f;
-                through_floors = z.swim > 0.f;
-            } else {
-                air = 0.8f;
-                g = 0.f;
-            }
-            w.physical_object_set_g(x.o, g);
-            w.physical_object_set_air_friction(x.o, air);
-            w.physical_object_set_surface_friction(x.o, surface);
-            w.physical_object_set_bounce(x.o, 0.1f);
-            physics::set_go_through_floors(state, x.o, through_floors);
-            if (z.grasp_player) {
-                carry_object(x);
-                danger_grasp(x);
-            }
-            // (LizardBreedParams.pullDownFac is 1 for every breed)
-            if (x.is(breed::cyan))
-                jump_module_update(x);
-            // (the Blizzard's beam, the Basilisk's poison field and the rot
-            // modules aren't ported)
-            // Creature.Update + PhysicalObject.Update
-            if (w.lizard_get_stun(l) > 0)
-                --w.lizard_get_stun(l);
-            if (!w.lizard_get_dead(l) && w.lizard_get_health(l) < 0.f && x.rng.value() < -w.lizard_get_health(l) && x.rng.value() < 0.025f)
-                die(state, l);
-            impact_ctx ic{&x};
-            physics::update_object(state, room, x.o, &terrain_impact, &ic);
-        }
 
-        // Room collision response between two chunks, weighted by mass
-        bool push_apart(sys::game_state& state, dcon::body_chunk_id a, dcon::body_chunk_id b) {
-            auto& w = state.world;
-            vec2& pa = w.body_chunk_get_pos(a);
-            vec2& pb = w.body_chunk_get_pos(b);
-            float const r = w.body_chunk_get_rad(a) + w.body_chunk_get_rad(b);
-            if (!custom::dist_less(pa, pb, r))
-                return false;
-            float const dist = rw::distance(pa, pb);
-            vec2 const dir = custom::dir_vec(pa, pb);
-            float const ratio = w.body_chunk_get_mass(b) / (w.body_chunk_get_mass(a) + w.body_chunk_get_mass(b));
-            pa -= dir * ((r - dist) * ratio);
-            w.body_chunk_get_vel(a) -= dir * ((r - dist) * ratio);
-            pb += dir * ((r - dist) * (1.f - ratio));
-            w.body_chunk_get_vel(b) += dir * ((r - dist) * (1.f - ratio));
-            return true;
-        }
 
         // Lizard.Collide with a slugcat: myChunk `i`, their chunk `j`
-        void collide_player(sys::game_state& state, dcon::lizard_id l, room_view const& room, uint32_t i, dcon::player_id p, uint32_t j) {
+        void collide_with_player(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, dcon::player_id p, uint32_t j) {
             auto& w = state.world;
             ai::see_player(state, l, p);
-            auto& a = w.lizard_get_ai(l);
+            auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             // SocialMemory: bumping into a slugcat it doesn't like much
             if (ai::player_relationship(state, l, p).eats && a.temp_like > -0.5f)
                 a.temp_like = mathf::clamp(a.temp_like - 0.05f, -1.f, 1.f);
@@ -2077,26 +1948,15 @@ namespace lizard {
     // What lizard_ai.cpp and lizard_graphics.cpp call
     //
 
-    dcon::room_id room_of(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return state.world.physical_object_get_room_from_object_location(body(state, l));
+    breed breed_of(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return state.world.creature_get_payload(l).lizard.breed;
     }
 
-    dcon::player_id player_of(sys::game_state const& state, uint8_t v) noexcept {
-        if (v == 0)
-            return dcon::player_id{};
-        dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-        return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
+    breed_params const& params_of(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return params(state.world.creature_get_payload(l).lizard.breed);
     }
 
-    breed breed_of(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return state.world.lizard_get_breed(l);
-    }
-
-    breed_params const& params_of(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return params(state.world.lizard_get_breed(l));
-    }
-
-    ivec2 here(sys::game_state const& state, dcon::lizard_id l) noexcept {
+    ivec2 here(sys::game_state const& state, dcon::creature_id l) noexcept {
         return room_view::get_tile_position(state.world.body_chunk_get_pos(chunk(state, l, 0)));
     }
 
@@ -2105,18 +1965,18 @@ namespace lizard {
         return p && !w.player_get_in_shortcut(p) && player::body(state, p) && w.physical_object_get_room_from_object_location(player::body(state, p)) == room;
     }
 
-    void enter_animation(sys::game_state& state, dcon::lizard_id l, animation a, bool force) {
+    void enter_animation(sys::game_state& state, dcon::creature_id l, animation a, bool force) {
         auto& w = state.world;
-        auto& z = w.lizard_get_core(l);
+        auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
         if ((!force && uint8_t(a) < uint8_t(z.anim)) || z.anim == a)
             return;
         auto const& p = params_of(state, l);
-        auto& rng = w.lizard_get_random(l);
+        auto& rng = w.creature_get_random(l);
         auto const room = room_of(state, l);
         vec2 const head = w.body_chunk_get_pos(chunk(state, l, 0));
         z.time_in_animation = 0;
         z.anim = a;
-        breed const b = w.lizard_get_breed(l);
+        breed const b = w.creature_get_payload(l).lizard.breed;
         switch (a) {
         case animation::standard:
             z.time_to_remain_in_animation = -1;
@@ -2141,9 +2001,9 @@ namespace lizard {
             if (b == breed::yellow) {
                 // the pack leader calls the others: the most dominant yellow in the room
                 bool leader = true;
-                float const dom = w.lizard_get_dominance(l);
-                rooms::for_each_lizard(state, room, [&](dcon::lizard_id o) {
-                    if (o != l && w.lizard_get_breed(o) == breed::yellow && w.lizard_get_dominance(o) > dom)
+                float const dom = w.creature_get_payload(l).lizard.dominance;
+                rooms::for_each_creature(state, room, ::creature::type::lizard, [&](dcon::creature_id o) {
+                    if (o != l && w.creature_get_payload(o).lizard.breed == breed::yellow && w.creature_get_payload(o).lizard.dominance > dom)
                         leader = false;
                 });
                 if (leader)
@@ -2213,7 +2073,7 @@ namespace lizard {
         case animation::shake_prey: {
             z.bubble_intensity = 0.f;
             z.time_to_remain_in_animation = rng.range(p.shake_prey, p.shake_prey * 2);
-            auto const prey = player_of(state, z.grasp_player);
+            auto const prey = player_of(state, state.world.creature_get_grasp_player(l)[0]);
             float const intensity = prey ? ai::player_relationship(state, l, prey).intensity : 0.f;
             z.time_to_remain_in_animation = int32_t(float(z.time_to_remain_in_animation) * intensity);
             break;
@@ -2226,11 +2086,11 @@ namespace lizard {
         }
     }
 
-    float jaw_open(sys::game_state const& state, dcon::lizard_id l) noexcept {
+    float jaw_open(sys::game_state const& state, dcon::creature_id l) noexcept {
         // Lizard.JawOpen's getter (vanilla writes these clamps back: Update
         // does so once a tick here)
-        auto const& z = state.world.lizard_get_core(l);
-        float v = z.grasp_player ? 0.f : z.jaw_open;
+        auto const& z = state.world.lizard_data_get_core(creature::lizard_data(state.world, l));
+        float v = state.world.creature_get_grasp_player(l)[0] ? 0.f : z.jaw_open;
         if (params_of(state, l).tongue && tongue_out(state, l))
             v = mathf::max(v, 0.5f);
         if (z.jaw_forced_shut > 0.f)
@@ -2238,16 +2098,16 @@ namespace lizard {
         return v;
     }
 
-    void set_jaw_open(sys::game_state& state, dcon::lizard_id l, float v) {
-        auto& z = state.world.lizard_get_core(l);
-        z.jaw_open = z.grasp_player ? 0.f : mathf::clamp(v, 0.f, 1.f);
+    void set_jaw_open(sys::game_state& state, dcon::creature_id l, float v) {
+        auto& z = state.world.lizard_data_get_core(creature::lizard_data(state.world, l));
+        z.jaw_open = state.world.creature_get_grasp_player(l)[0] ? 0.f : mathf::clamp(v, 0.f, 1.f);
     }
 
-    bool jaw_ready_for_bite(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return jaw_open(state, l) > 0.9f && state.world.lizard_get_core(l).bite_delay == 0;
+    bool jaw_ready_for_bite(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return jaw_open(state, l) > 0.9f && state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).bite_delay == 0;
     }
 
-    void attempt_bite(sys::game_state& state, dcon::lizard_id l, dcon::player_id p) {
+    void attempt_bite(sys::game_state& state, dcon::creature_id l, dcon::player_id p) {
         auto& w = state.world;
         if (grasped(state, l) || !consious(state, l))
             return;
@@ -2265,7 +2125,7 @@ namespace lizard {
                 // (no Remix: the chunk's own radius)
                 if (custom::dist_less(front, w.body_chunk_get_pos(c), w.body_chunk_get_rad(c) + x.p.bite_rad_bonus)) {
                     if (tongue_out(state, l)) {
-                        if (w.lizard_get_tongue(l).state != tongue_state::stuck_in_terrain)
+                        if (w.lizard_data_get_tongue(creature::lizard_data(w, l)).state != tongue_state::stuck_in_terrain)
                             tongue_retract(state, l);
                         return;
                     }
@@ -2292,7 +2152,7 @@ namespace lizard {
         }
     }
 
-    void jaws_snap_shut(sys::game_state& state, dcon::lizard_id l, vec2 at) {
+    void jaws_snap_shut(sys::game_state& state, dcon::creature_id l, vec2 at) {
         auto const room = world::get_room_view(state, room_of(state, l));
         ctx x{state, l, room};
         x.sound(sound::sound_id::lizard_jaws_shut_miss_creature);
@@ -2306,33 +2166,33 @@ namespace lizard {
         x.z.jaw_forced_shut = 1.f;
     }
 
-    int32_t legs_gripping(sys::game_state const& state, dcon::lizard_id l) noexcept {
+    int32_t legs_gripping(sys::game_state const& state, dcon::creature_id l) noexcept {
         // Lizard.LegsGripping: the limbs' grip of LizardGraphics, 2 without
         // a graphicsModule (off screen)
         if (!state.viewed(room_of(state, l)))
             return 2;
-        return state.world.lizard_get_graphics(l).legs_grabbing;
+        return state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).legs_grabbing;
     }
 
-    int32_t no_grip_counter(sys::game_state const& state, dcon::lizard_id l) noexcept {
+    int32_t no_grip_counter(sys::game_state const& state, dcon::creature_id l) noexcept {
         // Lizard.NoGripCounter: 0 without a graphicsModule
         if (!state.viewed(room_of(state, l)))
             return 0;
-        return state.world.lizard_get_graphics(l).no_grip_counter;
+        return state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).no_grip_counter;
     }
 
-    void make_sound(sys::game_state& state, dcon::lizard_id l, emotion e) {
-        make_sound(state, l, e, mathf::lerp(0.8f, 1.2f, state.world.lizard_get_random(l).value()));
+    void make_sound(sys::game_state& state, dcon::creature_id l, emotion e) {
+        make_sound(state, l, e, mathf::lerp(0.8f, 1.2f, state.world.creature_get_random(l).value()));
     }
 
-    void make_sound(sys::game_state& state, dcon::lizard_id l, emotion e, float intensity) {
+    void make_sound(sys::game_state& state, dcon::creature_id l, emotion e, float intensity) {
         auto& w = state.world;
-        auto& z = w.lizard_get_core(l);
+        auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
         if (!consious(state, l))
             return;
-        if (intensity < (z.voice_index >= 0 ? z.voice_intensity : 0.f) / 2.f || z.grasp_player)
+        if (intensity < (z.voice_index >= 0 ? z.voice_intensity : 0.f) / 2.f || state.world.creature_get_grasp_player(l)[0])
             return;
-        breed const b = w.lizard_get_breed(l);
+        breed const b = w.creature_get_payload(l).lizard.breed;
         if (!has_voice(b))
             return;
         // the articulation's length (VoiceArticulation, times the lizard's 0.5..1.5)
@@ -2363,27 +2223,27 @@ namespace lizard {
         z.voice_index = int32_t(e);
         z.voice_progression = 0.f;
         z.voice_intensity = intensity;
-        z.voice_length = len * mathf::lerp(0.5f, 1.5f, w.lizard_get_energy(l));
+        z.voice_length = len * mathf::lerp(0.5f, 1.5f, w.creature_get_payload(l).lizard.energy);
         // (the trigger is a loop shaped by the articulation in vanilla; here
         // the sample plays once at the lizard's pitch)
         state.play_sound(voice_sound(b, z.voice_trigger), room_of(state, l), w.body_chunk_get_pos(chunk(state, l, 0)),
             mathf::min(1.f, custom::lerp_map(intensity, 0.f, 2.f, 0.4f, 3.f) * 0.5f), z.voice_pitch);
     }
 
-    bool is_wall_climber(sys::game_state const& state, dcon::lizard_id l) noexcept {
+    bool is_wall_climber(sys::game_state const& state, dcon::creature_id l) noexcept {
         return params_of(state, l).wall_climber || world::get_room_view(state, room_of(state, l)).gravity <= 0.3f;
     }
 
-    bool tongue_out(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return params_of(state, l).tongue && state.world.lizard_get_tongue(l).state != tongue_state::hidden;
+    bool tongue_out(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return params_of(state, l).tongue && state.world.lizard_data_get_tongue(creature::lizard_data(state.world, l)).state != tongue_state::hidden;
     }
 
-    bool tongue_ready(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return state.world.lizard_get_tongue(l).delay < 1;
+    bool tongue_ready(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return state.world.lizard_data_get_tongue(creature::lizard_data(state.world, l)).delay < 1;
     }
 
-    bool tongue_stuck(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        auto const s = state.world.lizard_get_tongue(l).state;
+    bool tongue_stuck(sys::game_state const& state, dcon::creature_id l) noexcept {
+        auto const s = state.world.lizard_data_get_tongue(creature::lizard_data(state.world, l)).state;
         return params_of(state, l).tongue && (s == tongue_state::attatched || s == tongue_state::stuck_in_terrain);
     }
 
@@ -2391,25 +2251,13 @@ namespace lizard {
     // Public
     //
 
-    dcon::physical_object_id body(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return state.world.lizard_get_body_from_lizard_body(l);
+    dcon::player_id grasped(sys::game_state const& state, dcon::creature_id l) noexcept {
+        return player_of(state, state.world.creature_get_grasp_player(l)[0]);
     }
 
-    dcon::body_chunk_id chunk(sys::game_state const& state, dcon::lizard_id l, uint32_t i) noexcept {
-        return physics::chunk(state, body(state, l), i);
-    }
-
-    bool consious(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return state.world.lizard_get_stun(l) <= 0 && !state.world.lizard_get_dead(l);
-    }
-
-    dcon::player_id grasped(sys::game_state const& state, dcon::lizard_id l) noexcept {
-        return player_of(state, state.world.lizard_get_core(l).grasp_player);
-    }
-
-    dcon::lizard_id create(sys::game_state& state, dcon::room_id room, vec2 at, breed b) {
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, breed b) {
         auto& w = state.world;
-        auto const l = w.create_lizard();
+        auto const l = creature::make(state, creature::type::lizard);
         rw::rng rng{state.random.next() | 1u};
         auto const view = world::get_room_view(state, room);
         auto const& p = params(b);
@@ -2439,24 +2287,24 @@ namespace lizard {
         physics::add_connection(state, o, c1, c2, link, physics::connection_type::normal, 0.95f, 0.5f);
         physics::add_connection(state, o, c0, c2, link * (1.f + p.body_stiffnes), physics::connection_type::push, 1.f - mathf::lerp(0.9f, 0.5f, p.body_stiffnes), 0.5f);
         physics::set_go_through_floors(state, o, true);
-        w.try_create_lizard_body(l, o);
-        w.lizard_set_breed(l, b);
-        w.lizard_set_stun(l, 0);
-        w.lizard_set_dead(l, 0);
-        w.lizard_set_health(l, 1.f);
-        w.lizard_set_throat_health(l, 1.f);
-        w.lizard_set_limb_health(l, limb_health{});
+        w.try_create_creature_body(l, o);
+        w.creature_get_payload(l).lizard.breed = b;
+        w.creature_set_stun(l, 0);
+        w.creature_set_dead(l, 0);
+        w.creature_set_health(l, 1.f);
+        w.creature_get_payload(l).lizard.throat_health = 1.f;
+        w.creature_get_payload(l).lizard.limb_health = limb_health{};
         // AbstractCreature.personality
-        w.lizard_set_dominance(l, rng.value());
-        w.lizard_set_energy(l, rng.value());
+        w.creature_get_payload(l).lizard.dominance = rng.value();
+        w.creature_get_payload(l).lizard.energy = rng.value();
         body_state z;
         z.bite_delay = p.bite_delay;
         // LizardVoice: the trigger and the pitch
         z.voice_trigger = uint8_t(b == breed::pink ? rng.range(0, 5) : 0);
         z.voice_pitch = custom::clamped_random_variation(0.5f, 0.2f, 0.8f, rng) * 2.f;
-        w.lizard_set_core(l, z);
-        w.lizard_set_tongue(l, tongue{});
-        w.lizard_set_jump(l, jump_module{});
+        w.lizard_data_set_core(creature::lizard_data(w, l), z);
+        w.lizard_data_set_tongue(creature::lizard_data(w, l), tongue{});
+        w.lizard_data_set_jump(creature::lizard_data(w, l), jump_module{});
         // Lizard constructor: effectColor (vanilla seeds these from the creature's ID)
         vec3 color = p.standard_color;
         switch (b) {
@@ -2501,14 +2349,14 @@ namespace lizard {
         default:
             break;
         }
-        w.lizard_set_effect_color(l, color);
-        w.lizard_set_random(l, rng);
+        w.creature_get_payload(l).lizard.effect_color = color;
+        w.creature_set_random(l, rng);
         ai::reset(state, l);
         lizard_graphics::reset(state, l);
         return l;
     }
 
-    void destroy(sys::game_state& state, dcon::lizard_id l) {
+    void destroy(sys::game_state& state, dcon::creature_id l) {
         auto& w = state.world;
         lose_all_grasps(state, l);
         std::vector<dcon::lizard_spit_id> spits;
@@ -2518,22 +2366,126 @@ namespace lizard {
         });
         for (auto const s : spits)
             w.delete_lizard_spit(s);
-        auto const o = body(state, l);
-        w.delete_lizard(l);
-        if (o)
-            physics::delete_object(state, o);
+        creature::erase(state, l);
     }
 
-    void update_room(sys::game_state& state, room_view const& room) {
+    void update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
         auto& w = state.world;
-        bool const viewed = state.viewed(room.id);
-        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
-            update(state, l, room);
-            // the GraphicsModule only exists where a camera looks (the legs'
-            // grip the body runs on falls back to Lizard.LegsGripping's 2)
-            if (viewed)
-                lizard_graphics::update(state, l, room);
+        ctx x{state, l, room};
+        auto& z = x.z;
+        if (x.p.swimmer)
+            w.physical_object_set_buoyancy(x.o, 0.92f);
+        z.jaw_open = jaw_open(state, l);
+        z.last_jaw_open = z.jaw_open;
+        voice_update(x);
+        if (jaw_open(state, l) > 0.9f) {
+            if (z.bite_delay > 0)
+                --z.bite_delay;
+        } else if (z.bite_delay < x.p.bite_delay) {
+            ++z.bite_delay;
+        }
+        z.jaw_forced_shut = mathf::max(0.f, z.jaw_forced_shut - 0.016666668f);
+        bool const dead = w.creature_get_dead(l) != 0;
+        float const health = x.health();
+        if (!dead && x.rng.value() * 0.7f > health && x.rng.value() < 0.125f)
+            stun(state, l, x.rng.range(1, x.rng.range(1, 27 - custom::int_clamp(int32_t(20.f * health), 0, 10))));
+        if (!dead && x.rng.value() * 0.2f > health && x.rng.value() < 0.025f) {
+            int32_t const flicker = x.rng.range(1, 5);
+            if (x.viewed)
+                lizard_graphics::white_flicker(state, l, flicker);
+        }
+        if (!dead && x.rng.value() * 0.5f > health && x.rng.value() < 0.05f)
+            set_jaw_open(state, l, x.rng.value());
+        // bodyChunkConnections[2].active = BodyStiff()
+        bool const stiff = !x.consious() || !z.move_anim.active;
+        w.physical_object_for_each_chunk_connection_as_owner(x.o, [&](dcon::chunk_connection_id k) {
+            if (w.chunk_connection_get_type(k) == physics::connection_type::push)
+                w.chunk_connection_set_active(k, stiff);
         });
+        if (z.turned_by_rock_counter > 0) {
+            --z.turned_by_rock_counter;
+            // PhysicalObject.WeightedPush(0, 2, dir, frc)
+            auto const push = [&](vec2 dir, float frc) {
+                float const r = x.mass(2) / (x.mass(0) + x.mass(2));
+                x.vel(0) += dir * frc * r;
+                x.vel(2) -= dir * frc * (1.f - r);
+            };
+            push(vec2{float(z.turned_by_rock_direction), 0.f}, 6.f);
+            if (std::fabs(x.pos(0).y - x.pos(2).y) < 5.f)
+                push(vec2{0.f, 1.f}, 2.f);
+        }
+        if (z.bubble > 0)
+            --z.bubble;
+        --z.lounge_delay;
+        if (x.p.tongue)
+            tongue_update(x);
+        if (x.consious())
+            act(x);
+        else
+            z.apply_gravity = true;
+        // (slugcats can't grab lizards: no grabbedAttackCounter bites)
+        // the chunk connections are Normal while no Standard
+        // MovementAnimation runs (and one never does here)
+        w.physical_object_for_each_chunk_connection_as_owner(x.o, [&](dcon::chunk_connection_id k) {
+            if (w.chunk_connection_get_type(k) != physics::connection_type::push)
+                w.chunk_connection_set_type(k, physics::connection_type::normal);
+        });
+        if (x.p.tongue && (z.anim == animation::shoot_tongue || (!x.is(breed::blue) && tongue_out(state, l))))
+            z.jaw_open += 0.1f;
+        if (x.viewed && x.is(breed::caramel) && !x.narrow(here(state, l)) && z.anim == animation::prepare_to_lounge) {
+            // the Caramel rears up for its lunge (all of it under
+            // graphicsModule != null in vanilla, the body's pull too)
+            x.g.show_dominance = 1.f;
+            vec2 v{x.pos(2).x + z.lounge_dir.x * 10.f, x.pos(2).y + 15.f};
+            x.vel(1) += custom::dir_vec(x.pos(1), v);
+            x.vel(0) += custom::dir_vec(x.pos(0), x.pos(1) + z.lounge_dir * 10.f);
+            x.g.head.pos = rw::lerp(x.g.head.pos, x.pos(0) + z.lounge_dir * 20.f, 0.25f);
+            x.g.head.vel = z.lounge_dir * 20.f;
+            // (limbs[0..3] only: the middle pair keeps stepping)
+            for (int32_t i = 0; i < 4; ++i) {
+                float const ahead = i < 2 ? 10.f : 20.f;
+                x.g.limbs[i].h.mode = player::limb_mode::hunt_absolute_position;
+                x.g.limbs[i].h.absolute_hunt_pos = vec2{x.pos(2).x + z.lounge_dir.x * ahead, x.pos(2).y - 15.f};
+            }
+        }
+        // the body's physics settings for this tick
+        float g = 0.9f, air = 0.999f, surface = 0.5f;
+        bool through_floors = true;
+        if (z.anim == animation::lounge || z.post_lounge_stun > 0 || (x.is(breed::cyan) && no_run_behavior(state, l))) {
+            surface = z.anim == animation::lounge ? 0.5f : 0.4f;
+            through_floors = z.lounge_dir.y < 0.f;
+            --z.post_lounge_stun;
+        } else if (z.apply_gravity) {
+            surface = 0.3f;
+            through_floors = z.swim > 0.f;
+        } else {
+            air = 0.8f;
+            g = 0.f;
+        }
+        w.physical_object_set_g(x.o, g);
+        w.physical_object_set_air_friction(x.o, air);
+        w.physical_object_set_surface_friction(x.o, surface);
+        w.physical_object_set_bounce(x.o, 0.1f);
+        physics::set_go_through_floors(state, x.o, through_floors);
+        if (state.world.creature_get_grasp_player(l)[0]) {
+            carry_object(x);
+            danger_grasp(x);
+        }
+        // (LizardBreedParams.pullDownFac is 1 for every breed)
+        if (x.is(breed::cyan))
+            jump_module_update(x);
+        // (the Blizzard's beam, the Basilisk's poison field and the rot
+        // modules aren't ported)
+        // Creature.Update + PhysicalObject.Update
+        creature::stun_countdown(state, l);
+        if (!w.creature_get_dead(l) && w.creature_get_health(l) < 0.f && x.rng.value() < -w.creature_get_health(l) && x.rng.value() < 0.025f)
+            die(state, l);
+        impact_ctx ic{&x};
+        physics::update_object(state, room, x.o, &terrain_impact, &ic);
+    }
+
+    void update_spit(sys::game_state& state, room_view const& room) {
+        auto& w = state.world;
         rooms::for_each_lizard_spit(state, room.id, [&](dcon::lizard_spit_id s) {
             if (w.lizard_spit_get_spit(s).dead)
                 return;
@@ -2547,54 +2499,19 @@ namespace lizard {
         });
     }
 
-    void collide(sys::game_state& state, room_view const& room) {
-        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                // what it holds is kept out of it by CarryObject
-                if (!player_here(state, p, room.id) || grasped(state, l) == p)
-                    return;
-                for (uint32_t i = 0; i < 3; ++i)
-                    for (uint32_t j = 0; j < 2; ++j)
-                        if (push_apart(state, chunk(state, l, i), player::body_chunk(state, p, j)))
-                            collide_player(state, l, room, i, p, j);
-            });
-            // lizards push each other about (their fights and communication
-            // aren't ported, the Yellow pack's aside)
-            rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id other) {
-                if (other.index() <= l.index())
-                    return;
-                for (uint32_t i = 0; i < 3; ++i)
-                    for (uint32_t j = 0; j < 3; ++j)
-                        push_apart(state, chunk(state, l, i), chunk(state, other, j));
-            });
-        });
+    bool collides(sys::game_state const& state, dcon::creature_id l, dcon::player_id p, dcon::room_id room) {
+        // what it holds is kept out of it by CarryObject
+        return player_here(state, p, room) && grasped(state, l) != p;
     }
 
-    bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::lizard_id& hit, uint32_t& hit_chunk) {
-        auto const& w = state.world;
-        float best = 2.f;
-        rooms::for_each_lizard(state, room, [&](dcon::lizard_id l) {
-            for (uint32_t i = 0; i < 3; ++i) {
-                auto const c = chunk(state, l, i);
-                vec2 const p = w.body_chunk_get_pos(c);
-                float const r = rad + w.body_chunk_get_rad(c);
-                vec2 const dv = to - from;
-                float const len2 = rw::sqr_magnitude(dv);
-                float const t = len2 > 0.f ? mathf::clamp01(rw::dot(p - from, dv) / len2) : 0.f;
-                if (custom::dist_less(from + dv * t, p, r) && t < best) {
-                    best = t;
-                    hit = l;
-                    hit_chunk = i;
-                }
-            }
-        });
-        return best <= 1.f;
+    void collide_player(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, dcon::player_id p, uint32_t j) {
+        collide_with_player(state, l, room, i, p, j);
     }
 
-    void violence(sys::game_state& state, dcon::lizard_id l, uint32_t k, vec2 momentum, float damage, float stun_bonus, bool rock, bool explosion) {
+    void violence(sys::game_state& state, dcon::creature_id l, uint32_t k, vec2 momentum, float damage, float stun_bonus, bool rock, bool explosion) {
         auto& w = state.world;
         auto const& p = params_of(state, l);
-        auto& rng = w.lizard_get_random(l);
+        auto& rng = w.creature_get_random(l);
         auto const room = room_of(state, l);
         auto const hit = chunk(state, l, k);
         float num = damage / p.base_damage_resistance;
@@ -2622,46 +2539,43 @@ namespace lizard {
                         custom::rnv(rng) * mathf::lerp(0.2f, 0.4f, rng.value()) * rw::magnitude(momentum), 2.f, 0.3f, vec3{1.f, 1.f, 1.f});
                 if (state.viewed(room)) {
                     lizard_graphics::white_flicker(state, l, sparks);
-                    w.lizard_get_graphics(l).head.vel += momentum * 2.f;
+                    w.lizard_data_get_graphics(creature::lizard_data(w, l)).head.vel += momentum * 2.f;
                 }
                 num *= 0.1f;
                 st = (damage * 0.5f * 30.f + stun_bonus * 0.6666667f) / p.base_stun_resistance;
-                if (w.lizard_get_breed(l) == breed::cyan)
+                if (w.creature_get_payload(l).lizard.breed == breed::cyan)
                     st *= 1.2f;
                 momentum /= 3.f;
             } else if (in_mouth(momentum)) {
                 num *= 1.5f;
                 st = mathf::min(st * 2.f, 120.f);
-                w.lizard_get_throat_health(l) -= num;
+                w.creature_get_payload(l).lizard.throat_health -= num;
             }
         }
         w.body_chunk_get_vel(hit) += momentum / w.body_chunk_get_mass(hit);
-        auto& z = w.lizard_get_core(l);
-        if (rock && w.lizard_get_breed(l) != breed::red && momentum.x != 0.f) {
+        auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
+        if (rock && w.creature_get_payload(l).lizard.breed != breed::red && momentum.x != 0.f) {
             z.turned_by_rock_direction = int32_t(mathf::sign(momentum.x));
             z.turned_by_rock_counter = 20;
         }
-        st *= 1.f + mathf::inverse_lerp(0.75f, 0.f, w.lizard_get_health(l)) * rng.value();
+        st *= 1.f + mathf::inverse_lerp(0.75f, 0.f, w.creature_get_health(l)) * rng.value();
         stun(state, l, int32_t(st));
-        w.lizard_get_health(l) -= num;
+        w.creature_get_health(l) -= num;
         // SocialEventRecognizer: the slugcat's attack (lethal or not) on it
         // lowers its like of the slugcat (LizardPlayerRelationChange)
-        auto& a = w.lizard_get_ai(l);
+        auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
         float const change = damage >= 0.5f ? 1.f : 0.15f;
         a.temp_like = mathf::clamp(a.temp_like - change * 1.5f, -1.f, 1.f);
     }
 
-    void release_player(sys::game_state& state, dcon::player_id p) {
+    void release_player(sys::game_state& state, dcon::creature_id l, dcon::player_id p) {
         auto& w = state.world;
-        // whatever holds the slugcat or has its tongue on it is in its room
-        rooms::for_each_lizard(state, rooms::room_of(state, p), [&](dcon::lizard_id l) {
-            if (grasped(state, l) == p)
-                lose_all_grasps(state, l);
-            auto& t = w.lizard_get_tongue(l);
-            if (t.attached_player == player_ref(p)) {
-                t.attached_player = 0;
-                t.state = tongue_state::retracting;
-            }
-        });
+        if (grasped(state, l) == p)
+            lose_all_grasps(state, l);
+        auto& t = w.lizard_data_get_tongue(creature::lizard_data(w, l));
+        if (t.attached_player == player_ref(p)) {
+            t.attached_player = 0;
+            t.state = tongue_state::retracting;
+        }
     }
 }

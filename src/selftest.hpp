@@ -23,13 +23,14 @@ namespace selftest {
     int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks);
     // the creatures spawn_creatures put in a room (invalid: no spot found)
     struct world_creatures {
-        dcon::centipede_id centipede;
-        dcon::dropbug_id dropbug;
-        dcon::cicada_id cicada;
-        dcon::lizard_id lizard;
+        dcon::creature_id centipede;
+        dcon::creature_id dropbug;
+        dcon::creature_id cicada;
+        dcon::creature_id lizard;
         lizard::breed breed{};
-        dcon::daddy_id daddy;
+        dcon::creature_id daddy;
         daddy::variant variant{};
+        dcon::creature_id& of(creature::type t) noexcept;
     };
     // one creature of each kind in the room, placed with rolls seeded by the
     // room's index (the fuzz's and the bench's world)

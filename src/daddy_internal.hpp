@@ -16,6 +16,8 @@
 namespace daddy::detail {
     // one tentacle while its daddy updates
     struct tentacle_work {
+        // its creature_part (the stun, the health) and data object
+        dcon::creature_part_id part;
         dcon::daddy_tentacle_id id;
         tentacle t;
         std::vector<tentacle_chunk> c;
@@ -33,11 +35,19 @@ namespace daddy::detail {
 
     struct ctx {
         sys::game_state& state;
-        dcon::daddy_id d;
+        dcon::creature_id d;
         world::room_view const& room;
         rw::rng& rng;
         body_state& z;
         ai_state& a;
+        // what every creature's AI keeps (the creature's properties): the
+        // Tracker's one representation (the slugcat, felt this tick, ticks
+        // since and where) and the destination
+        uint8_t& seen_player;
+        uint8_t& sees_player;
+        int32_t& ticks_since_seen;
+        rw::vec2& last_seen_pos;
+        rw::ivec2& destination;
         std::vector<tentacle_work>& tents;
         // the `ref List<IntVector2> path` scratch lists
         std::vector<rw::ivec2>& scratch;
@@ -50,14 +60,17 @@ namespace daddy::detail {
         // AImap.getTerrainProximity of the room (pathing's map)
         std::vector<uint16_t> const* prox = nullptr;
 
-        ctx(sys::game_state& s, dcon::daddy_id id, world::room_view const& r, std::vector<tentacle_work>& t, std::vector<rw::ivec2>& sc);
+        ctx(sys::game_state& s, dcon::creature_id id, world::room_view const& r, std::vector<tentacle_work>& t, std::vector<rw::ivec2>& sc);
 
         rw::vec2& pos(uint32_t i) { return state.world.body_chunk_get_pos(chunks[i]); }
         rw::vec2& vel(uint32_t i) { return state.world.body_chunk_get_vel(chunks[i]); }
         float mass(uint32_t i) const { return state.world.body_chunk_get_mass(chunks[i]); }
         float rad(uint32_t i) const { return state.world.body_chunk_get_rad(chunks[i]); }
-        bool dead() const { return state.world.daddy_get_dead(d) != 0; }
-        bool consious() const { return !dead() && state.world.daddy_get_stun(d) <= 0; }
+        bool dead() const { return state.world.creature_get_dead(d) != 0; }
+        bool consious() const { return !dead() && state.world.creature_get_stun(d) <= 0; }
+        // DaddyAI.behavior
+        behavior current() const { return behavior(state.world.creature_get_behavior(d)); }
+        void set_current(behavior b) { state.world.creature_set_behavior(d, uint8_t(b)); }
         // abstractCreature.pos: the main chunk's tile
         rw::ivec2 here() { return world::room_view::get_tile_position(pos(0)); }
         rw::vec2 middle_of_body();

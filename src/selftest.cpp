@@ -564,7 +564,7 @@ namespace selftest {
                 return s.dead();
             });
             char d[96];
-            std::snprintf(d, sizeof(d), " grabbed=%d killed=%d behavior=%d", int(grabbed), int(killed), int(gs.world.centipede_get_behavior(c)));
+            std::snprintf(d, sizeof(d), " grabbed=%d killed=%d behavior=%d", int(grabbed), int(killed), int(world::centipede_behavior(gs.world.creature_get_behavior(c))));
             r.check("centipede hunts and shocks", grabbed && killed, s.describe() + d);
             centipede::destroy(gs, c);
         }
@@ -574,10 +574,10 @@ namespace selftest {
             sim s(gs, pit, feet_at(18, 1));
             auto const c = centipede::create(gs, pit, feet_at(23, 1), 0.f);
             s.run(60);
-            bool const flees = gs.world.centipede_get_behavior(c) == world::centipede_behavior::flee;
+            bool const flees = world::centipede_behavior(gs.world.creature_get_behavior(c)) == world::centipede_behavior::flee;
             // a spear's worth of damage (a rock barely stuns a healthy one)
             centipede::violence(gs, c, 0, vec2{0.f, 0.f}, 1.f, 0.f);
-            bool const stunned = gs.world.centipede_get_stun(c) > 0;
+            bool const stunned = gs.world.creature_get_stun(c) > 0;
             char d[64];
             std::snprintf(d, sizeof(d), " flees=%d stunned=%d", int(flees), int(stunned));
             r.check("small centipede flees, spears stun", flees && stunned && !s.dead(), s.describe() + d);
@@ -592,15 +592,15 @@ namespace selftest {
             sim s(gs, pit, feet_at(3, 1));
             auto const d = dropbug::create(gs, pit, world::room_view::middle_of_tile(20, 8));
             s.run(100);
-            bool const waits = dropbug::sitting_in_ceiling(gs, d) && gs.world.dropbug_get_in_ceiling_mode(d) == 1.f
+            bool const waits = dropbug::sitting_in_ceiling(gs, d) && gs.world.creature_get_payload(d).dropbug.in_ceiling_mode == 1.f
                 && world::room_view::get_tile_position(gs.world.body_chunk_get_pos(dropbug::chunk(gs, d, 1))).y == 14;
             bool dropped = false;
             bool const hurt = s.until(1500, [&] {
-                dropped = dropped || gs.world.dropbug_get_from_ceiling_jump(d);
+                dropped = dropped || gs.world.creature_get_payload(d).dropbug.from_ceiling_jump;
                 return s.stun() > 0 || s.dead() || dropbug::grasped(gs, d) == s.p;
             }, 1); // walking right, under it and on to the wall
             char d_[96];
-            std::snprintf(d_, sizeof(d_), " waits=%d dropped=%d hurt=%d behavior=%d", int(waits), int(dropped), int(hurt), int(gs.world.dropbug_get_behavior(d)));
+            std::snprintf(d_, sizeof(d_), " waits=%d dropped=%d hurt=%d behavior=%d", int(waits), int(dropped), int(hurt), int(::dropbug::behavior(gs.world.creature_get_behavior(d))));
             r.check("dropwig drops and bites", waits && dropped && hurt, s.describe() + d_);
             dropbug::destroy(gs, d);
         }
@@ -611,7 +611,7 @@ namespace selftest {
             auto const hall = make_room(gs, region, box(40, 70, [](int32_t, int32_t) { return ' '; }));
             sim s(gs, hall, feet_at(3, 1));
             auto const c = cicada::create(gs, hall, world::room_view::middle_of_tile(30, 20), true);
-            bool const sat = s.until(2000, [&] { return !gs.world.cicada_get_flying(c) && cicada::consious(gs, c); });
+            bool const sat = s.until(2000, [&] { return !gs.world.creature_get_payload(c).cicada.flying && cicada::consious(gs, c); });
             // a plain jump to compare with
             auto const jump = [&] {
                 s.step(0, 1); // up off all fours first
@@ -645,7 +645,7 @@ namespace selftest {
             s.step(0, 0, true);
             bool const landed = s.until(1500, [&] { return s.contact(1).y == -1 || s.dead(); }, 0, 0, true);
             uint32_t const glide = s.ticks - t0;
-            bool const tired = gs.world.cicada_get_stamina(c) < 0.5f;
+            bool const tired = gs.world.creature_get_payload(c).cicada.stamina < 0.5f;
             bool const still_held = cicada::held_by(gs, s.p) == c;
             char d[192];
             std::snprintf(d, sizeof(d), " sat=%d held=%d jump=%.0f/%.0fpx glide=%u ticks tired=%d alive=%d", int(sat), int(held), boosted, plain, glide, int(tired), int(!s.dead()));
@@ -665,9 +665,9 @@ namespace selftest {
             auto const c = cicada::create(gs, hall, world::room_view::middle_of_tile(24, 6), false);
             bool antagonized = false, charged = false, clung = false;
             s.until(2400, [&] {
-                antagonized = antagonized || gs.world.cicada_get_behavior(c) == cicada::behavior::antagonize;
+                antagonized = antagonized || ::cicada::behavior(gs.world.creature_get_behavior(c)) == cicada::behavior::antagonize;
                 charged = charged || cicada::charging(gs, c);
-                clung = clung || gs.world.cicada_get_sticky_player(c) != 0;
+                clung = clung || gs.world.creature_get_payload(c).cicada.sticky_player != 0;
                 return antagonized && (charged || clung) && s.stun() == 0;
             });
             char d[96];
@@ -683,8 +683,8 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(40, 1), lizard::breed::green);
             bool spotted = false, hunted = false, bit = false;
             bool const killed = s.until(4000, [&] {
-                spotted = spotted || gs.world.lizard_get_ai(l).rep.visual_contact;
-                hunted = hunted || gs.world.lizard_get_ai(l).current == lizard::behavior::hunt;
+                spotted = spotted || gs.world.creature_get_sees_player(l);
+                hunted = hunted || lizard::behavior(gs.world.creature_get_behavior(l)) == lizard::behavior::hunt;
                 bit = bit || lizard::grasped(gs, l) == s.p;
                 return s.dead();
             });
@@ -726,7 +726,7 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(17, 1), lizard::breed::blue);
             bool shot = false;
             bool const caught = s.until(3000, [&] {
-                auto const& t = gs.world.lizard_get_tongue(l);
+                auto const& t = gs.world.lizard_data_get_tongue(creature::lizard_data(gs.world, l));
                 shot = shot || t.state == lizard::tongue_state::lashing_out;
                 return t.state == lizard::tongue_state::attatched && t.attached_player == uint8_t(s.p.index() + 1);
             });
@@ -746,7 +746,7 @@ namespace selftest {
             bool swam = false;
             float furthest = x0;
             s.until(3000, [&] {
-                swam = swam || gs.world.lizard_get_core(l).swim > 0.5f;
+                swam = swam || gs.world.lizard_data_get_core(creature::lizard_data(gs.world, l)).swim > 0.5f;
                 furthest = std::max(furthest, gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)).x);
                 return swam && furthest > x0 + 400.f;
             });
@@ -763,7 +763,7 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(10, 1), lizard::breed::red);
             bool spat = false, flew = false;
             s.until(3000, [&] {
-                spat = spat || gs.world.lizard_get_core(l).anim == lizard::animation::spit;
+                spat = spat || gs.world.lizard_data_get_core(creature::lizard_data(gs.world, l)).anim == lizard::animation::spit;
                 gs.world.for_each_lizard_spit([&](dcon::lizard_spit_id) { flew = true; });
                 return spat && flew;
             });
@@ -780,7 +780,7 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(5, 5), lizard::breed::cyan);
             bool jumped = false;
             s.until(4000, [&] {
-                jumped = jumped || gs.world.lizard_get_core(l).anim == lizard::animation::jumping;
+                jumped = jumped || gs.world.lizard_data_get_core(creature::lizard_data(gs.world, l)).anim == lizard::animation::jumping;
                 return jumped;
             });
             r.check("cyan lizard jumps", jumped, s.describe() + (jumped ? " jumped=1" : " jumped=0"));
@@ -796,7 +796,7 @@ namespace selftest {
             bool gripped = false, hunted = false, held = false, eating = false;
             bool const eaten = s.until(4000, [&] {
                 gripped = gripped || daddy::legs_gripping(gs, d) > 0;
-                hunted = hunted || gs.world.daddy_get_ai(d).current == daddy::behavior::hunt;
+                hunted = hunted || daddy::behavior(gs.world.creature_get_behavior(d)) == daddy::behavior::hunt;
                 held = held || daddy::holds(gs, d, s.p);
                 eating = eating || daddy::eating(gs, d, s.p);
                 return gs.world.player_get_eaten(s.p) != 0;
@@ -823,8 +823,8 @@ namespace selftest {
             uint32_t const builds = pathing::builds();
             bool over = false;
             bool const arrived = s.until(6000, [&] {
-                auto& ai = gs.world.daddy_get_ai(d);
-                ai.destination = target;
+                auto& ai = gs.world.daddy_data_get_ai(creature::daddy_data(gs.world, d));
+                gs.world.creature_set_destination(d, target);
                 ai.new_idle_pos_counter = 1000000;
                 vec2 const m = daddy::middle_of_body(gs, d);
                 over = over || (m.x < 30.f * 20.f && m.y > 14.f * 20.f);
@@ -853,9 +853,9 @@ namespace selftest {
             bool stunned = false;
             for (int i = 0; i < 6; ++i) {
                 s.step();
-                stunned = stunned || gs.world.daddy_get_stun(d) > 0;
+                stunned = stunned || gs.world.creature_get_stun(d) > 0;
             }
-            float const health = gs.world.daddy_get_health(d);
+            float const health = gs.world.creature_get_health(d);
             // rocks thrown across tentacle segments away from the body (one
             // the projectile trace says it would hit), until one is stunned
             bool limp = false;
@@ -865,14 +865,14 @@ namespace selftest {
                 vec2 at{0.f, 0.f};
                 float side = 1.f;
                 bool found = false;
-                for (uint32_t k = 0; k < gs.world.daddy_get_parts(d).tentacle_count && !found; ++k) {
+                for (uint32_t k = 0; k < daddy::tentacle_count(gs, d) && !found; ++k) {
                     auto const cs = gs.world.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, d, k));
                     for (uint32_t i = 1 + uint32_t(attempt) % 2; i < cs.size() && !found; ++i) {
                         vec2 const c = (cs.at(i - 1).pos + cs.at(i).pos) * 0.5f;
                         float const sd = c.x > mid.x ? 1.f : -1.f;
-                        dcon::daddy_id hd;
-                        daddy::hit_part hp;
-                        if (std::fabs(c.x - mid.x) > 60.f && c.y > 50.f && daddy::trace(gs, hall, c + vec2{sd * 30.f, 0.f}, c - vec2{sd * 30.f, 0.f}, 5.f, hd, hp) && hp.tentacle >= 0) {
+                        dcon::creature_id hd;
+                        creature::hit_part hp;
+                        if (std::fabs(c.x - mid.x) > 60.f && c.y > 50.f && creature::trace(gs, hall, c + vec2{sd * 30.f, 0.f}, c - vec2{sd * 30.f, 0.f}, 5.f, hd, hp) && hp.tentacle >= 0) {
                             at = c;
                             side = sd;
                             found = true;
@@ -891,9 +891,8 @@ namespace selftest {
                 gs.world.item_set_throw_mode_frames(rock, -1);
                 for (int i = 0; i < 6; ++i) {
                     s.step();
-                    auto const& parts = gs.world.daddy_get_parts(d);
-                    for (uint32_t k = 0; k < parts.tentacle_count; ++k)
-                        limp = limp || gs.world.daddy_tentacle_get_t(daddy::tentacle_of(gs, d, k)).stun > 0;
+                    for (uint32_t k = 0; k < daddy::tentacle_count(gs, d); ++k)
+                        limp = limp || gs.world.creature_part_get_stun(daddy::tentacle_part(gs, d, k)) > 0;
                 }
             }
             char dd[96];
@@ -1357,46 +1356,76 @@ namespace selftest {
         return r.failed == 0 ? 0 : 1;
     }
 
+    dcon::creature_id& world_creatures::of(creature::type t) noexcept {
+        switch (t) {
+        case creature::type::centipede: return centipede;
+        case creature::type::dropbug: return dropbug;
+        case creature::type::cicada: return cicada;
+        case creature::type::lizard: return lizard;
+        case creature::type::daddy: return daddy;
+        case creature::type::count: break;
+        }
+        return centipede;
+    }
+
     world_creatures spawn_creatures(sys::game_state& gs, dcon::room_id rid) {
         world_creatures out;
         auto const room = world::get_room_view(gs, rid);
         uint32_t const k0 = uint32_t(rid.index()) * 2654435761u;
-        // a centipede somewhere it can stand
-        rw::rng rng{(k0 ^ 0xCE7712EDu) | 1u};
-        for (int k = 0; k < 50 && !out.centipede; ++k) {
-            ivec2 const t{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
-            if (pathing::accessible(room, t, pathing::climber))
-                out.centipede = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
-        }
-        // a dropwig, placed in the room's best ceiling spot like a story session does
-        rw::rng bug_rng{(k0 ^ 0x51ED27u) | 1u};
-        for (int k = 0; k < 50 && !out.dropbug; ++k) {
-            ivec2 const t{bug_rng.range(1, std::max(2, room.width - 1)), bug_rng.range(1, std::max(2, room.height - 1))};
-            if (pathing::accessible(room, t, pathing::drop_bug))
-                out.dropbug = dropbug::create(gs, rid, world::room_view::middle_of_tile(t), true);
-        }
-        // a squidcada somewhere in the air, either colour
-        rw::rng cicada_rng{(k0 ^ 0xC1CADAu) | 1u};
-        for (int k = 0; k < 50 && !out.cicada; ++k) {
-            ivec2 const t{cicada_rng.range(1, std::max(2, room.width - 1)), cicada_rng.range(1, std::max(2, room.height - 1))};
-            if (pathing::accessible(room, t, pathing::cicada))
-                out.cicada = cicada::create(gs, rid, world::room_view::middle_of_tile(t), cicada_rng.value() < 0.5f);
-        }
-        // a lizard standing somewhere, the next breed in every room
+        // the next lizard breed and daddy long legs variant in every room
         out.breed = lizard::breed(uint32_t(rid.index()) % lizard::breed_count);
-        rw::rng lizard_rng{(k0 ^ 0x112A2Du) | 1u};
-        for (int k = 0; k < 50 && !out.lizard; ++k) {
-            ivec2 const t{lizard_rng.range(1, std::max(2, room.width - 1)), lizard_rng.range(1, std::max(2, room.height - 1))};
-            if (pathing::accessible(room, t, lizard::params(out.breed).movement) && !room.get_tile(t).solid())
-                out.lizard = lizard::create(gs, rid, world::room_view::middle_of_tile(t), out.breed);
-        }
-        // a daddy long legs in the open, the next variant in every room
         out.variant = daddy::variant(uint32_t(rid.index()) % daddy::variant_count);
-        rw::rng daddy_rng{(k0 ^ 0xDADD1u) | 1u};
-        for (int k = 0; k < 50 && !out.daddy; ++k) {
-            ivec2 const t{daddy_rng.range(1, std::max(2, room.width - 1)), daddy_rng.range(1, std::max(2, room.height - 1))};
-            if (pathing::accessible(room, t, pathing::daddy) && pathing::terrain_proximity(room, t) > 1)
-                out.daddy = daddy::create(gs, rid, world::room_view::middle_of_tile(t), out.variant);
+        for (auto const t : creature::all_types) {
+            // each kind rolls its spot from its own seed
+            uint32_t salt = 0;
+            switch (t) {
+            case creature::type::centipede: salt = 0xCE7712EDu; break;
+            case creature::type::dropbug: salt = 0x51ED27u; break;
+            case creature::type::cicada: salt = 0xC1CADAu; break;
+            case creature::type::lizard: salt = 0x112A2Du; break;
+            case creature::type::daddy: salt = 0xDADD1u; break;
+            case creature::type::count: break;
+            }
+            rw::rng rng{(k0 ^ salt) | 1u};
+            auto& id = out.of(t);
+            for (int k = 0; k < 50 && !id; ++k) {
+                ivec2 const tile{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
+                creature::spawn_desc d{t};
+                bool ok = false;
+                switch (t) {
+                case creature::type::centipede:
+                    // somewhere it can stand, any size
+                    ok = pathing::accessible(room, tile, pathing::climber);
+                    if (ok)
+                        d.size = rng.value();
+                    break;
+                case creature::type::dropbug:
+                    // placed in the room's best ceiling spot like a story session does
+                    ok = pathing::accessible(room, tile, pathing::drop_bug);
+                    d.relocate = true;
+                    break;
+                case creature::type::cicada:
+                    // somewhere in the air, either colour
+                    ok = pathing::accessible(room, tile, pathing::cicada);
+                    if (ok)
+                        d.size = rng.value() < 0.5f ? 1.f : 0.f;
+                    break;
+                case creature::type::lizard:
+                    // standing somewhere
+                    ok = pathing::accessible(room, tile, lizard::params(out.breed).movement) && !room.get_tile(tile).solid();
+                    d.variety = uint8_t(out.breed);
+                    break;
+                case creature::type::daddy:
+                    // in the open
+                    ok = pathing::accessible(room, tile, pathing::daddy) && pathing::terrain_proximity(room, tile) > 1;
+                    d.variety = uint8_t(out.variant);
+                    break;
+                case creature::type::count:
+                    break;
+                }
+                if (ok)
+                    id = creature::create(gs, rid, world::room_view::middle_of_tile(tile), d);
+            }
         }
         return out;
     }
@@ -1504,32 +1533,32 @@ namespace selftest {
                         finite = finite && finite_chunks(gs, centipede::body(gs, c.centipede));
                     if (c.dropbug) {
                         finite = finite && finite_chunks(gs, dropbug::body(gs, c.dropbug));
-                        x.bug_dropped = x.bug_dropped || w.dropbug_get_from_ceiling_jump(c.dropbug);
+                        x.bug_dropped = x.bug_dropped || w.creature_get_payload(c.dropbug).dropbug.from_ceiling_jump;
                     }
                     if (c.cicada) {
                         finite = finite && finite_chunks(gs, cicada::body(gs, c.cicada));
-                        x.cicada_sat = x.cicada_sat || !w.cicada_get_flying(c.cicada);
+                        x.cicada_sat = x.cicada_sat || !w.creature_get_payload(c.cicada).cicada.flying;
                         x.cicada_charged = x.cicada_charged || cicada::charging(gs, c.cicada);
                         x.cicada_held = x.cicada_held || cicada::held_by(gs, x.p) == c.cicada;
                     }
                     if (c.lizard) {
                         finite = finite && finite_chunks(gs, lizard::body(gs, c.lizard));
                         auto const l = c.lizard;
-                        x.lizard_hunted = x.lizard_hunted || w.lizard_get_ai(l).current == lizard::behavior::hunt;
+                        x.lizard_hunted = x.lizard_hunted || lizard::behavior(w.creature_get_behavior(l)) == lizard::behavior::hunt;
                         x.lizard_bit = x.lizard_bit || lizard::grasped(gs, l) == x.p;
-                        x.lizard_tongued = x.lizard_tongued || w.lizard_get_tongue(l).state == lizard::tongue_state::lashing_out;
-                        x.lizard_jumped = x.lizard_jumped || w.lizard_get_core(l).anim == lizard::animation::jumping;
-                        x.lizard_spat = x.lizard_spat || w.lizard_get_core(l).anim == lizard::animation::spit;
-                        x.lizard_swam = x.lizard_swam || w.lizard_get_core(l).swim > 0.5f;
+                        x.lizard_tongued = x.lizard_tongued || w.lizard_data_get_tongue(creature::lizard_data(w, l)).state == lizard::tongue_state::lashing_out;
+                        x.lizard_jumped = x.lizard_jumped || w.lizard_data_get_core(creature::lizard_data(w, l)).anim == lizard::animation::jumping;
+                        x.lizard_spat = x.lizard_spat || w.lizard_data_get_core(creature::lizard_data(w, l)).anim == lizard::animation::spit;
+                        x.lizard_swam = x.lizard_swam || w.lizard_data_get_core(creature::lizard_data(w, l)).swim > 0.5f;
                     }
                     if (c.daddy) {
                         auto const dll = c.daddy;
                         finite = finite && finite_chunks(gs, daddy::body(gs, dll));
-                        for (uint32_t k = 0; k < w.daddy_get_parts(dll).tentacle_count; ++k)
+                        for (uint32_t k = 0; k < daddy::tentacle_count(gs, dll); ++k)
                             for (auto const& tc : w.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, dll, k)))
                                 finite = finite && std::isfinite(tc.pos.x) && std::isfinite(tc.pos.y);
                         x.daddy_gripped = x.daddy_gripped || daddy::legs_gripping(gs, dll) > 0;
-                        x.daddy_hunted = x.daddy_hunted || w.daddy_get_ai(dll).current == daddy::behavior::hunt;
+                        x.daddy_hunted = x.daddy_hunted || daddy::behavior(w.creature_get_behavior(dll)) == daddy::behavior::hunt;
                         x.daddy_held = x.daddy_held || daddy::holds(gs, dll, x.p);
                         x.daddy_ate = x.daddy_ate || daddy::eating(gs, dll, x.p);
                     }
@@ -1598,27 +1627,15 @@ namespace selftest {
             if (!finite_chunks(gs, o))
                 ++unvisited_bad;
         };
-        w.for_each_centipede([&](dcon::centipede_id c) { check_all(centipede::body(gs, c)); });
-        w.for_each_dropbug([&](dcon::dropbug_id d) { check_all(dropbug::body(gs, d)); });
-        w.for_each_cicada([&](dcon::cicada_id c) { check_all(cicada::body(gs, c)); });
-        w.for_each_lizard([&](dcon::lizard_id l) { check_all(lizard::body(gs, l)); });
-        w.for_each_daddy([&](dcon::daddy_id d) { check_all(daddy::body(gs, d)); });
+        w.for_each_creature([&](dcon::creature_id c) { check_all(creature::body(gs, c)); });
         if (unvisited_bad > 0)
             std::printf("%u creatures with a non finite position\n", unvisited_bad);
         bad += unvisited_bad;
         uint32_t const world_ticks = gs.tick;
-        for (auto const& c : creatures) {
-            if (c.centipede && w.centipede_is_valid(c.centipede))
-                centipede::destroy(gs, c.centipede);
-            if (c.dropbug && w.dropbug_is_valid(c.dropbug))
-                dropbug::destroy(gs, c.dropbug);
-            if (c.cicada && w.cicada_is_valid(c.cicada))
-                cicada::destroy(gs, c.cicada);
-            if (c.lizard && w.lizard_is_valid(c.lizard))
-                lizard::destroy(gs, c.lizard);
-            if (c.daddy && w.daddy_is_valid(c.daddy))
-                daddy::destroy(gs, c.daddy);
-        }
+        for (auto& c : creatures)
+            for (auto const t : creature::all_types)
+                if (auto const id = c.of(t); id && creature::is(w, id, t))
+                    creature::destroy(gs, id);
 
         uint32_t rocks = 0;
         w.for_each_item([&](dcon::item_id) { ++rocks; });

@@ -87,14 +87,13 @@ namespace daddy {
         int32_t backtrack_from = -1;
         float retract_fac = 0.f;
         uint8_t limp = 0;
-        // DaddyTentacle
-        int32_t number = 0;
+        // DaddyTentacle (tentacleNumber and stun are the creature_part's
+        // index and stun)
         rw::vec2 tentacle_dir{0.f, 1.f};
         float away_from_body_rotation = 0.f;
         uint8_t at_grab_dest = 0;
         int32_t found_no_grab_pos = 0;
         float chunks_gripping = 0.f;
-        int32_t stun = 0;
         int32_t secondary_grab_back_track_counter = 0;
         uint8_t last_back_track = 0;
         rw::ivec2 secondary_grab_pos{0, 0};
@@ -192,23 +191,18 @@ namespace daddy {
 
     // DaddyAI with its Tracker (one representation: the slugcat its
     // tentacles felt, a blind creature sees nothing else), PreyTracker and
-    // NoiseTracker
+    // NoiseTracker. The behavior, the destination and the Tracker's
+    // representation (the slugcat, felt this tick, ticks since and where)
+    // are the creature's
     struct ai_state {
-        behavior current = behavior::idle;
         int32_t new_idle_pos_counter = 0;
-        rw::ivec2 destination{0, 0};
         // the goal of the field it follows (see daddy.cpp's destination_field)
         rw::ivec2 path_goal{0, 0};
         uint8_t has_path_goal = 0;
         uint32_t path_goal_tick = 0;
         int32_t react_noise_time = 0;
         rw::ivec2 react_target{0, 0};
-        // Tracker.CreatureRepresentation of a slugcat: player index + 1
-        uint8_t player = 0;
-        int32_t ticks_since_seen = 0;
-        rw::vec2 last_seen_pos{0.f, 0.f};
-        // VisualContact: felt this tick (SeeCreature)
-        uint8_t visual_contact = 0;
+        // felt this tick (SeeCreature)
         uint8_t seen_this_tick = 0;
         noise_tracker noise;
     };
@@ -252,22 +246,6 @@ namespace daddy {
         int32_t feel_something_reaction_delay = 0;
         eye eyes[max_chunks];
         hunter_dummy dummy;
-        // UnityEngine.Random as the graphics module draws from it per tick
-        rw::rng random;
-    };
-
-    // the daddy's tentacle and tube objects, in vanilla order (the tubes:
-    // the leg graphics, then the dead legs, then the danglers)
-    struct part_list {
-        uint16_t tentacles[max_tentacles] = {};
-        uint16_t tubes[max_tentacles + max_tubes] = {};
-        uint8_t tentacle_count = 0;
-        uint8_t dead_leg_count = 0;
-        uint8_t dangler_count = 0;
-    };
-
-    // DaddyState.tentacleHealth
-    struct tentacle_health {
-        float h[13] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
+        // (its UnityEngine.Random is the creature's graphics_random)
     };
 }

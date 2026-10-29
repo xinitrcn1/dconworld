@@ -1,11 +1,7 @@
 #include <cmath>
 
 #include "explosions.hpp"
-#include "centipede.hpp"
-#include "cicada.hpp"
-#include "dropbug.hpp"
-#include "lizard.hpp"
-#include "daddy.hpp"
+#include "creature.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -34,63 +30,8 @@ namespace explosions {
                 w.body_chunk_get_vel(c) += custom::dir_vec(at, cp) * d.force * k / mathf::max(0.3f, w.body_chunk_get_mass(c));
             });
         });
-        rooms::for_each_centipede(state, room.id, [&](dcon::centipede_id c) {
-            uint32_t const n = centipede::chunk_count(state, c);
-            for (uint32_t i = 0; i < n; ++i) {
-                vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, i));
-                float const dist = rw::distance(cp, at);
-                if (dist < d.rad) {
-                    float const k = 1.f - dist / d.rad;
-                    centipede::violence(state, c, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
-                    break;
-                }
-            }
-        });
-        rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id b) {
-            for (uint32_t i = 0; i < 3; ++i) {
-                vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, i));
-                float const dist = rw::distance(cp, at);
-                if (dist < d.rad) {
-                    float const k = 1.f - dist / d.rad;
-                    dropbug::violence(state, b, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
-                    break;
-                }
-            }
-        });
-        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id c) {
-            for (uint32_t i = 0; i < 2; ++i) {
-                vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, c, i));
-                float const dist = rw::distance(cp, at);
-                if (dist < d.rad) {
-                    float const k = 1.f - dist / d.rad;
-                    cicada::violence(state, c, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k);
-                    break;
-                }
-            }
-        });
-        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
-            for (uint32_t i = 0; i < 3; ++i) {
-                vec2 const cp = w.body_chunk_get_pos(lizard::chunk(state, l, i));
-                float const dist = rw::distance(cp, at);
-                if (dist < d.rad) {
-                    float const k = 1.f - dist / d.rad;
-                    lizard::violence(state, l, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k, false, true);
-                    break;
-                }
-            }
-        });
-        rooms::for_each_daddy(state, room.id, [&](dcon::daddy_id dl) {
-            uint32_t const n = daddy::chunk_count(state, dl);
-            for (uint32_t i = 0; i < n; ++i) {
-                vec2 const cp = w.body_chunk_get_pos(daddy::chunk(state, dl, i));
-                float const dist = rw::distance(cp, at);
-                if (dist < d.rad) {
-                    float const k = 1.f - dist / d.rad;
-                    daddy::violence(state, dl, daddy::hit_part{int32_t(i)}, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k, true);
-                    break;
-                }
-            }
-        });
+        // and what lives is hurt
+        creature::blast(state, room.id, at, d.rad, d.force, d.damage, d.stun);
         if (d.kill_rad > 0.f) {
             rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 auto const o = player::body(state, p);
@@ -128,28 +69,8 @@ namespace explosions {
     }
 
     void flash(sys::game_state& state, world::room_view const& room, vec2 at, float rad) {
-        auto& w = state.world;
         // FlareBomb: whatever sees the flash is blinded for a while
-        rooms::for_each_centipede(state, room.id, [&](dcon::centipede_id c) {
-            vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, centipede::head_index(state, c)));
-            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
-                centipede::violence(state, c, centipede::head_index(state, c), vec2{0.f, 0.f}, 0.f, 120.f);
-        });
-        rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id b) {
-            vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, 0));
-            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
-                dropbug::violence(state, b, 0, vec2{0.f, 0.f}, 0.f, 120.f);
-        });
-        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id c) {
-            vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, c, 0));
-            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
-                cicada::violence(state, c, 0, vec2{0.f, 0.f}, 0.f, 120.f);
-        });
-        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
-            vec2 const cp = w.body_chunk_get_pos(lizard::chunk(state, l, 0));
-            if (rw::custom::dist_less(cp, at, rad) && room.visual_contact(at, cp))
-                lizard::violence(state, l, 0, vec2{0.f, 0.f}, 0.f, 120.f);
-        });
+        creature::flash(state, room, at, rad);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.35f, 1.2f, rw::vec3{1.f, 1.f, 0.95f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.12f, 0.6f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
         state.play_sound(sound::sound_id::fire_spear_explode, room.id, at, 0.4f, 1.6f);
