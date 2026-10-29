@@ -69,7 +69,7 @@ namespace centipede {
         }
 
         bool accessible(room_view const& room, vec2 p) {
-            return pathing::accessible(room, room_view::get_tile_position(p), pathing::movement::climber);
+            return pathing::accessible(room, room_view::get_tile_position(p), pathing::climber);
         }
 
         void release(sys::game_state& state, dcon::centipede_id c, int g) {
@@ -261,7 +261,7 @@ namespace centipede {
 
         // CentipedeAI.IdleScore (no attractors, no other centipedes yet)
         float idle_score(sys::game_state const& state, dcon::centipede_id c, room_view const& room, ivec2 t) {
-            if (!room.inside(t.x, t.y) || !pathing::accessible(room, t, pathing::movement::climber))
+            if (!room.inside(t.x, t.y) || !pathing::accessible(room, t, pathing::climber))
                 return -1e9f;
             float score = 1000.f / mathf::max(1.f, float(pathing::terrain_proximity(room, t)) - 1.f);
             ivec2 const f = state.world.centipede_get_forbidden_idle_pos(c);
@@ -362,7 +362,7 @@ namespace centipede {
                 float best_d = rw::distance(room_view::middle_of_tile(dest), threat);
                 for (int k = 0; k < 6; ++k) {
                     ivec2 const t = here + ivec2{rng.range(-30, 31), rng.range(-30, 31)};
-                    if (!room.inside(t.x, t.y) || !pathing::accessible(room, t, pathing::movement::climber))
+                    if (!room.inside(t.x, t.y) || !pathing::accessible(room, t, pathing::climber))
                         continue;
                     float const d = rw::distance(room_view::middle_of_tile(t), threat);
                     if (d > best_d + 40.f) {
@@ -446,7 +446,7 @@ namespace centipede {
             uint32_t const n = chunk_count(state, c);
             float const size = w.centipede_get_size(c);
             ivec2 const dest = w.centipede_get_destination(c);
-            auto const field = pathing::field_to(state, room.id, dest, pathing::movement::climber);
+            auto const field = pathing::field_to(state, room.id, dest, pathing::climber);
 
             // turn around when the tail is the end closer to the goal
             int32_t& block = w.centipede_get_direction_change_block(c);
@@ -474,7 +474,7 @@ namespace centipede {
             ivec2 const goal = w.centipede_get_destination(c);
             bool moving = w.centipede_get_run(c) > 0.f && std::abs(head_t.x - goal.x) + std::abs(head_t.y - goal.y) > 2;
             if (moving) {
-                auto const f = goal == dest ? field : pathing::field_to(state, room.id, goal, pathing::movement::climber);
+                auto const f = goal == dest ? field : pathing::field_to(state, room.id, goal, pathing::climber);
                 if (pathing::distance(state, f, head_t) == pathing::unreachable && w.centipede_get_behavior(c) == centipede_behavior::idle) {
                     // nowhere to go from here: try somewhere else
                     w.centipede_set_forbidden_idle_pos(c, goal);
@@ -658,7 +658,7 @@ namespace centipede {
                     ivec2 const t = t0 + ivec2{dx, dy};
                     if (!view.inside(t.x, t.y) || view.get_tile(t).solid())
                         continue;
-                    int const score = dx * dx + dy * dy + (pathing::accessible(view, t, pathing::movement::climber) ? 0 : 50);
+                    int const score = dx * dx + dy * dy + (pathing::accessible(view, t, pathing::climber) ? 0 : 50);
                     if (score < best_score) {
                         best_score = score;
                         best = t;

@@ -15,15 +15,10 @@
 
 #include "gamestate.hpp"
 #include "math.hpp"
+#include "pathing_types.hpp"
 #include "world.hpp"
 
 namespace pathing {
-    // AItile.Accessibility sets a creature template may use
-    enum class movement : uint8_t {
-        // Floor, Corridor, Climb, Wall and Ceiling tiles (Centipede)
-        climber,
-    };
-
     inline constexpr uint16_t unreachable = 0xFFFF;
     // a field: its index in sys::game_state::path_fields
     using field_id = uint32_t;
@@ -32,14 +27,15 @@ namespace pathing {
     inline constexpr uint16_t diagonal_cost = 30;
     inline constexpr uint16_t drop_cost = 50;
 
+    access tile_access(world::room_view const& room, rw::ivec2 t) noexcept;
     // Whether the tile is one the movement kind can stand on
-    bool accessible(world::room_view const& room, rw::ivec2 t, movement m) noexcept;
+    bool accessible(world::room_view const& room, rw::ivec2 t, movement const& m) noexcept;
     // AImap.getTerrainProximity, capped: tiles to the nearest solid tile
     int32_t terrain_proximity(world::room_view const& room, rw::ivec2 t, int32_t cap = 4) noexcept;
 
     // The field to `goal`, built if no fresh one exists. An inaccessible goal
     // (a slugcat in mid air) is approached through the accessible tiles near it
-    field_id field_to(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement m);
+    field_id field_to(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement const& m);
     // travel cost from `t` to the field's goal (unreachable out of the room)
     uint16_t distance(sys::game_state const& state, field_id f, rw::ivec2 t) noexcept;
     // The neighbour of `from` to step to, none when there is no way on

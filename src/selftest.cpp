@@ -487,8 +487,8 @@ namespace selftest {
                 return (x == 15 && y < 10) ? '#' : ' ';
             }));
             uint32_t const before = pathing::builds();
-            auto const f = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::movement::climber);
-            auto const again = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::movement::climber);
+            auto const f = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::climber);
+            auto const again = pathing::field_to(gs, walled, ivec2{25, 1}, pathing::climber);
             ivec2 t{5, 1};
             int steps = 0;
             while (t != ivec2{25, 1} && steps < 200) {
@@ -880,7 +880,7 @@ namespace selftest {
             dcon::centipede_id centi;
             for (int k = 0; k < 50 && !centi; ++k) {
                 ivec2 const t{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, pathing::movement::climber))
+                if (pathing::accessible(room, t, pathing::climber))
                     centi = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
             }
             int32_t ix = 0, iy = 0;

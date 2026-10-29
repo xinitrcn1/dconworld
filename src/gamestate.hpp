@@ -18,6 +18,7 @@
 #include "config.h"
 #include "dcon_generated.hpp"
 #include "layered_fs.hpp"
+#include "pathing_types.hpp"
 #include "sound_types.hpp"
 #include "world_types.hpp"
 
@@ -105,7 +106,7 @@ namespace sys {
         struct path_field {
             dcon::room_id room;
             rw::ivec2 goal{0, 0};
-            uint8_t movement = 0;
+            pathing::movement movement;
             uint16_t geometry_version = 0;
             uint32_t last_used = 0;
             // travel cost to the goal per tile (row major), 0xFFFF unreachable

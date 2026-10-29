@@ -22,7 +22,7 @@ namespace pathing {
         }
 
         // reverse Dijkstra from the seeds over the forward connections
-        void build(room_view const& room, movement m, ivec2 goal, std::vector<uint16_t>& dist) {
+        void build(room_view const& room, movement const& m, ivec2 goal, std::vector<uint16_t>& dist) {
             int32_t const w = room.width, h = room.height;
             dist.assign(size_t(w) * size_t(h), unreachable);
             using node = std::pair<uint32_t, uint32_t>; // cost, tile index
@@ -42,6 +42,11 @@ namespace pathing {
                     for (int32_t dx = -3; dx <= 3; ++dx)
                         seed(goal + ivec2{dx, dy}, uint32_t(std::max(std::abs(dx), std::abs(dy))) * step_cost);
             }
+            // the resistance of the tile a step ends on
+            auto const enter = [&](ivec2 v, uint32_t base) {
+                uint32_t const r = m.resistance[uint32_t(tile_access(room, v))];
+                return base * (r == 0 ? 10u : r) / 10u;
+            };
             auto const relax = [&](ivec2 u, uint32_t c) {
                 if (c < dist[index(u)] && c < unreachable) {
                     dist[index(u)] = uint16_t(c);
@@ -61,14 +66,14 @@ namespace pathing {
                         continue;
                     if (d.x != 0 && d.y != 0) {
                         if (open_diagonal(room, u, -d))
-                            relax(u, c + diagonal_cost);
+                            relax(u, c + enter(v, diagonal_cost));
                     } else {
-                        relax(u, c + step_cost);
+                        relax(u, c + enter(v, step_cost));
                     }
                 }
                 // DropToFloor/DropToClimb: from the first walkable tile above an
                 // open column down to v
-                for (int32_t k = 1; v.y + k < h; ++k) {
+                for (int32_t k = 1; v.y + k < h && !m.allows(access::air); ++k) {
                     ivec2 const u = v + ivec2{0, k};
                     if (solid(room, u))
                         break;
@@ -82,19 +87,33 @@ namespace pathing {
         }
     }
 
-    bool accessible(room_view const& room, ivec2 t, movement m) noexcept {
-        (void)m;
-        auto const tile = room.get_tile(t);
-        if (tile.solid())
+    access tile_access(room_view const& room, ivec2 t) noexcept {
+        auto const at = [&](int32_t dx, int32_t dy) { return room.get_tile(t + ivec2{dx, dy}); };
+        auto const sol = [&](int32_t dx, int32_t dy) { return at(dx, dy).t == terrain::solid; };
+        auto const tile = at(0, 0);
+        if (tile.t == terrain::solid)
+            return access::solid;
+        if (sol(0, -1) || at(0, -1).t == terrain::floor || (sol(-1, -1) && !sol(-1, 0)) || (sol(1, -1) && !sol(1, 0)))
+            return access::floor;
+        if (sol(-1, 0) && sol(1, 0))
+            return access::corridor;
+        if (tile.any_beam())
+            return access::climb;
+        if ((tile.flags & world::tile_wall_behind) || sol(-1, 0) || sol(1, 0) || (sol(-1, 1) && !sol(0, 1)) || (sol(1, 1) && !sol(0, 1)))
+            return access::wall;
+        if (sol(0, 1))
+            return access::ceiling;
+        return access::air;
+    }
+
+    bool accessible(room_view const& room, ivec2 t, movement const& m) noexcept {
+        auto const a = tile_access(room, t);
+        if (a == access::solid)
             return false;
-        if (tile.t == terrain::slope || tile.t == terrain::floor || tile.t == terrain::shortcut_entrance || tile.any_beam())
+        if (m.allows(a))
             return true;
-        // Floor, Wall, Ceiling and Corridor: next to solid terrain
-        for (auto const d : rw::custom::four_directions)
-            if (solid(room, t + d))
-                return true;
-        auto const below = room.get_tile(t + ivec2{0, -1});
-        return below.t == terrain::floor || below.t == terrain::slope;
+        // swimmers go anywhere under the surface
+        return m.swim && room.get_tile(t).water != 0;
     }
 
     int32_t terrain_proximity(room_view const& room, ivec2 t, int32_t cap) noexcept {
@@ -106,20 +125,20 @@ namespace pathing {
         return cap;
     }
 
-    field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement m) {
+    field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement const& m) {
         auto& fields = state.path_fields;
         uint16_t const version = state.world.room_get_geometry_version(room);
         field_id oldest = 0;
         for (field_id f = 0; f < fields.size(); ++f) {
             auto& pf = fields[f];
-            if (pf.room == room && pf.goal == goal && pf.movement == uint8_t(m) && pf.geometry_version == version) {
+            if (pf.room == room && pf.goal == goal && pf.movement == m && pf.geometry_version == version) {
                 pf.last_used = state.tick;
                 return f;
             }
             if (pf.last_used < fields[oldest].last_used)
                 oldest = f;
         }
-        field_id const f = fields.size() < 32 ? field_id(fields.size()) : oldest;
+        field_id const f = fields.size() < 64 ? field_id(fields.size()) : oldest;
         if (f == fields.size())
             fields.emplace_back();
         auto& pf = fields[f];
@@ -127,7 +146,7 @@ namespace pathing {
         ++build_count;
         pf.room = room;
         pf.goal = goal;
-        pf.movement = uint8_t(m);
+        pf.movement = m;
         pf.geometry_version = version;
         pf.last_used = state.tick;
         return f;
