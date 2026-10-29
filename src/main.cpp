@@ -20,6 +20,7 @@
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "render.hpp"
+#include "unity_assets.hpp"
 #include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
@@ -293,6 +294,8 @@ namespace {
 
 int main(int argc, char* argv[]) {
     std::vector<std::string> roots;
+    // the game's Unity data (RainWorld_Data: resources.assets), for its sprites
+    std::string unity_dir;
     std::string start_room = "su_a22";
     std::string screenshot;
     uint32_t screenshot_ticks = 80;
@@ -309,6 +312,8 @@ int main(int argc, char* argv[]) {
         auto const next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
         if (a == "--root") {
             roots.push_back(next());
+        } else if (a == "--unity") {
+            unity_dir = next();
         } else if (a == "--room") {
             start_room = next();
         } else if (a == "--slugcat") {
@@ -406,6 +411,7 @@ int main(int argc, char* argv[]) {
     bool const headless = !screenshot.empty();
     if (!render::init(r, int(gs.screen_width), int(gs.screen_height), "rwcpp", headless))
         return 1;
+    r.unity_dir = unity::find_asset_dir(roots, unity_dir);
     render::load_assets(r, gs);
 
     if (headless) {

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +39,14 @@ namespace render {
 
     struct atlas_frame {
         float x = 0.f, y = 0.f, w = 0.f, h = 0.f; // pixels, top left origin
+    };
+    // a Futile element of the game's own atlases (TexturePacker sheets):
+    // where it sits in game_texture and how it was trimmed from its source
+    struct game_frame {
+        float x = 0.f, y = 0.f, w = 0.f, h = 0.f; // in game_texture, pixels, top left origin
+        bool rotated = false;                     // packed turned 90 degrees clockwise
+        float trim_x = 0.f, trim_y = 0.f;         // the packed part's offset in the source
+        float source_w = 0.f, source_h = 0.f;     // the element's size
     };
 
     struct room_shader_uniforms {
@@ -76,6 +85,13 @@ namespace render {
         int slugcat_width = 1;
         int slugcat_height = 1;
         std::unordered_map<std::string, atlas_frame> slugcat_frames;
+        // the game's own atlases (rainWorld, rainworldmsc...), read from the
+        // Unity data at `unity_dir` at startup; empty without it
+        std::string unity_dir;
+        uint32_t game_texture = 0;
+        int game_width = 1;
+        int game_height = 1;
+        std::unordered_map<std::string, game_frame> game_frames;
         // warp effects (assets/shaders/warp_*): the tears and the full screen
         // transition, both reading a copy of the frame drawn so far
         uint32_t warp_tear_program = 0;
@@ -97,7 +113,10 @@ namespace render {
 
     // `hidden` creates an invisible window (headless screenshots)
     bool init(state& r, int width, int height, char const* title, bool hidden);
-    // HUD font, room shader, palettes and the slugcat atlas (after world::load)
+    // the element's frame in the game's atlases, if they were loaded
+    game_frame const* find_game_frame(state const& r, std::string_view element);
+    // HUD font, room shader, palettes, the slugcat atlas and, if `r.unity_dir`
+    // is set, the game's own atlases (after world::load)
     void load_assets(state& r, sys::game_state const& s);
     // Makes the camera images of `rid` resident (drops the previous room's)
     void use_room(state& r, sys::game_state const& s, dcon::room_id rid);

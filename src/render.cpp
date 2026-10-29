@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include "stb_image.h"
 
 #include "render.hpp"
+#include "unity_assets.hpp"
 #include "centipede.hpp"
 #include "gates.hpp"
 #include "items.hpp"
@@ -406,12 +408,142 @@ void main() {
         }
     }
 
+    namespace {
+
+        // TexturePacker JSON ("frames": {"<name>.png": {"frame": {...}, "rotated": ..,
+        // "spriteSourceSize": {...}, "sourceSize": {...}}}), read with a small scanner
+        void parse_texturepacker(std::string const& js, float ox, float oy, std::unordered_map<std::string, game_frame>& out) {
+            size_t const key = js.find("\"frames\"");
+            if (key == std::string::npos)
+                return;
+            size_t i = js.find('{', key);
+            if (i == std::string::npos)
+                return;
+            ++i;
+            auto const skip_space = [&] {
+                while (i < js.size() && (std::isspace(uint8_t(js[i])) || js[i] == ','))
+                    ++i;
+            };
+            // a number field inside [from, limit)
+            auto const number = [&](size_t from, size_t limit, char const* name) -> float {
+                size_t const k = js.find(name, from);
+                if (k == std::string::npos || k >= limit)
+                    return 0.f;
+                return std::strtof(js.c_str() + js.find(':', k) + 1, nullptr);
+            };
+            while (true) {
+                skip_space();
+                if (i >= js.size() || js[i] != '"')
+                    break; // the closing brace of "frames"
+                size_t const name_end = js.find('"', i + 1);
+                if (name_end == std::string::npos)
+                    break;
+                std::string name = js.substr(i + 1, name_end - i - 1);
+                size_t const body = js.find('{', name_end);
+                if (body == std::string::npos)
+                    break;
+                size_t depth = 0, end = body;
+                for (; end < js.size(); ++end) {
+                    if (js[end] == '{')
+                        ++depth;
+                    else if (js[end] == '}' && --depth == 0)
+                        break;
+                }
+                if (end >= js.size())
+                    break;
+                size_t const fr = js.find("\"frame\"", body);
+                size_t const ss = js.find("\"spriteSourceSize\"", body);
+                size_t const so = js.find("\"sourceSize\"", body);
+                size_t const rot = js.find("\"rotated\"", body);
+                game_frame f;
+                f.x = ox + number(fr, end, "\"x\"");
+                f.y = oy + number(fr, end, "\"y\"");
+                f.w = number(fr, end, "\"w\"");
+                f.h = number(fr, end, "\"h\"");
+                if (rot < end) {
+                    size_t v = js.find(':', rot) + 1;
+                    while (v < end && std::isspace(uint8_t(js[v])))
+                        ++v;
+                    f.rotated = js.compare(v, 4, "true") == 0;
+                }
+                f.trim_x = number(ss, end, "\"x\"");
+                f.trim_y = number(ss, end, "\"y\"");
+                f.source_w = number(so, end, "\"w\"");
+                f.source_h = number(so, end, "\"h\"");
+                if (name.size() > 4 && name.compare(name.size() - 4, 4, ".png") == 0)
+                    name.resize(name.size() - 4);
+                out.emplace(std::move(name), f);
+                i = end + 1;
+            }
+        }
+
+        // the game's own Futile atlases out of the Unity data, stacked into one texture
+        void load_game_atlases(state& r) {
+            if (r.unity_dir.empty())
+                return;
+            unity::asset_library lib;
+            if (!lib.open(r.unity_dir)) {
+                reports::add_log("can't read the Unity data in " + r.unity_dir + ", game sprites are drawn as plain shapes");
+                return;
+            }
+            char const* const names[] = {"rainWorld", "rainworldmsc", "uiSprites", "uispritesmsc"};
+            std::vector<unity::image> images;
+            std::vector<std::string> sheets;
+            int width = 2, height = 2; // a white corner for untextured shapes
+            for (char const* n : names) {
+                unity::image im;
+                std::string js;
+                if (!lib.texture(n, im) || !lib.text(n, js)) {
+                    reports::add_log(std::string{"Unity data: no atlas "} + n);
+                    continue;
+                }
+                width = std::max(width, im.width);
+                height += im.height;
+                images.push_back(std::move(im));
+                sheets.push_back(std::move(js));
+            }
+            if (images.empty())
+                return;
+            std::vector<uint8_t> px(size_t(width) * size_t(height) * 4, 0);
+            // white 2x2 at the top left
+            for (int y = 0; y < 2; ++y)
+                for (int x = 0; x < 2; ++x)
+                    std::memset(&px[(size_t(y) * size_t(width) + size_t(x)) * 4], 255, 4);
+            r.game_frames["__white"] = game_frame{0.5f, 0.5f, 1.f, 1.f, false, 0.f, 0.f, 1.f, 1.f};
+            int oy = 2;
+            for (size_t i = 0; i < images.size(); ++i) {
+                auto const& im = images[i];
+                for (int y = 0; y < im.height; ++y)
+                    std::memcpy(&px[(size_t(oy + y) * size_t(width)) * 4], &im.rgba[size_t(y) * size_t(im.width) * 4], size_t(im.width) * 4);
+                parse_texturepacker(sheets[i], 0.f, float(oy), r.game_frames);
+                oy += im.height;
+            }
+            glGenTextures(1, &r.game_texture);
+            glBindTexture(GL_TEXTURE_2D, r.game_texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            r.game_width = width;
+            r.game_height = height;
+            reports::add_log("Unity data: " + std::to_string(images.size()) + " atlases, " + std::to_string(r.game_frames.size()) + " sprites from " + r.unity_dir);
+        }
+    }
+
+    game_frame const* find_game_frame(state const& r, std::string_view element) {
+        auto const it = r.game_frames.find(std::string{element});
+        return it == r.game_frames.end() ? nullptr : &it->second;
+    }
+
     void load_assets(state& r, sys::game_state const& s) {
         load_font(r, s.fs);
         load_room_shader(r, s.fs);
         load_palettes(r, s);
         load_slugcat_atlas(r, s.fs);
         load_warp_shaders(r, s.fs);
+        load_game_atlases(r);
     }
 
     // Camera images of the room as one texture array, replacing the last one

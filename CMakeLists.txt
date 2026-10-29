@@ -80,6 +80,7 @@ add_executable(rwcpp
     src/codecs.cpp
     src/unity_bundle.cpp
     src/fsb5.cpp
+    src/unity_assets.cpp
     "${GENERATED_DIR}/dcon_generated.hpp"
     "${GENERATED_DIR}/dcon_generated_ids.hpp"
     "${GENERATED_DIR}/parser_defs_generated.hpp"
