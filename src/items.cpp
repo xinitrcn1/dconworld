@@ -5,6 +5,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "explosions.hpp"
+#include "lizard.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -596,6 +597,7 @@ namespace items {
                     dcon::centipede_id hit;
                     dcon::dropbug_id hit_bug;
                     dcon::cicada_id hit_cicada;
+                    dcon::lizard_id hit_lizard;
                     uint32_t hit_chunk = 0;
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
@@ -639,6 +641,11 @@ namespace items {
                         hit_creature([&](vec2 m, float dmg, float st) { dropbug::violence(state, hit_bug, hit_chunk, m, dmg, st); });
                     else if (cicada::trace(state, room.id, pos, pos + vel, rad, hit_cicada, hit_chunk))
                         hit_creature([&](vec2 m, float dmg, float st) { cicada::violence(state, hit_cicada, hit_chunk, m, dmg, st); });
+                    else if (lizard::trace(state, room.id, pos, pos + vel, rad, hit_lizard, hit_chunk)) {
+                        // a Rock turns a lizard around (Lizard.Violence)
+                        bool const rock = w.item_get_type(it) == world::item_type::rock;
+                        hit_creature([&](vec2 m, float dmg, float st) { lizard::violence(state, hit_lizard, hit_chunk, m, dmg, st, rock); });
+                    }
                 }
                 break;
             }

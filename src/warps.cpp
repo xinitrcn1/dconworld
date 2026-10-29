@@ -6,6 +6,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "dropbug.hpp"
+#include "lizard.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -148,6 +149,7 @@ namespace warps {
                 centipede::release_player(state, p);
                 dropbug::release_player(state, p);
                 cicada::release_player(state, p);
+                lizard::release_player(state, p);
                 w.player_set_warp_point_cooldown(p, 80);
                 if (rw::distance(pos, main_chunk(state, p)) >= pull_radius && p != w.warp_point_get_triggered_by(wp))
                     return;
@@ -218,6 +220,13 @@ namespace warps {
                 if (w.physical_object_get_room_from_object_location(o) != room)
                     return;
                 w.cicada_set_stun(c, std::max(w.cicada_get_stun(c), 20));
+                swirl(o);
+            });
+            w.for_each_lizard([&](dcon::lizard_id l) {
+                auto const o = lizard::body(state, l);
+                if (w.physical_object_get_room_from_object_location(o) != room)
+                    return;
+                w.lizard_set_stun(l, std::max(w.lizard_get_stun(l), 20));
                 swirl(o);
             });
             w.for_each_player([&](dcon::player_id p) {

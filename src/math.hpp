@@ -170,6 +170,47 @@ namespace rw {
             float const dev = s_curve(r.value() * 0.5f, k) * 2.f * (r.value() < 0.5f ? 1.f : -1.f);
             return mathf::clamp(base + dev * max_deviation, 0.f, 1.f);
         }
+        // Custom.WrappedRandomVariation (with Custom.RandomDeviation) from `r`
+        template<typename R>
+        float wrapped_random_variation(float base, float max_deviation, float k, R& r) noexcept {
+            float const dev = s_curve(r.value() * 0.5f, k) * 2.f * (r.value() < 0.5f ? 1.f : -1.f);
+            float const num = base + dev * max_deviation + 1.f;
+            return num - std::floor(num);
+        }
+        // Custom.RGB2HSL: (hue, saturation, lightness)
+        inline vec3 rgb2hsl(vec3 c) noexcept {
+            float const mx = mathf::max(mathf::max(c.x, c.y), c.z);
+            float const mn = mathf::min(mathf::min(c.x, c.y), c.z);
+            float const l = (mx + mn) / 2.f;
+            if (mx == mn)
+                return vec3{0.f, 0.f, l};
+            float const d = mx - mn;
+            float const s = l > 0.5f ? d / (2.f - mx - mn) : d / (mx + mn);
+            float h;
+            if (mx == c.x)
+                h = (c.y - c.z) / d + (c.y < c.z ? 6.f : 0.f);
+            else if (mx == c.y)
+                h = (c.z - c.x) / d + 2.f;
+            else
+                h = (c.x - c.y) / d + 4.f;
+            return vec3{h / 6.f, s, l};
+        }
+        // Custom.ClosestPointOnLine (the infinite line through a, b)
+        inline vec2 closest_point_on_line(vec2 a, vec2 b, vec2 p) noexcept {
+            vec2 const ap = p - a, ab = b - a;
+            float const t = (ap.x * ab.x + ap.y * ab.y) / (ab.x * ab.x + ab.y * ab.y);
+            return a + ab * t;
+        }
+        // Custom.MoveTowards
+        inline vec2 move_towards(vec2 a, vec2 b, float speed) noexcept {
+            if (dist_less(a, b, speed))
+                return b;
+            return a + dir_vec(a, b) * speed;
+        }
+        // IntVector2.ClampAtOne
+        constexpr ivec2 clamp_at_one(ivec2 v) noexcept {
+            return ivec2{v.x < -1 ? -1 : (v.x > 1 ? 1 : v.x), v.y < -1 ? -1 : (v.y > 1 ? 1 : v.y)};
+        }
         // Custom.Decimal: the fractional part
         inline float decimal(float f) noexcept { return f - std::floor(f); }
         // Custom.ManhattanDistance
@@ -178,6 +219,12 @@ namespace rw {
         }
         inline constexpr ivec2 eight_directions[8] = {
             {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}
+        };
+        inline constexpr ivec2 eight_directions_diagonals_last[8] = {
+            {-1, 0}, {0, -1}, {1, 0}, {0, 1}, {-1, -1}, {1, -1}, {1, 1}, {-1, 1}
+        };
+        inline constexpr ivec2 eight_directions_and_zero[9] = {
+            {0, 0}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}
         };
         inline constexpr ivec2 four_directions[4] = {
             {-1, 0}, {0, -1}, {1, 0}, {0, 1}

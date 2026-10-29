@@ -11,6 +11,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "dropbug.hpp"
+#include "lizard.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
@@ -627,6 +628,113 @@ namespace selftest {
             cicada::destroy(gs, c);
         }
         {
+            // a green lizard spots the slugcat across the room, runs it down
+            // and bites it; held in its jaws the slugcat is done for
+            auto const hall = make_room(gs, region, box(50, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(5, 1));
+            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(40, 1), lizard::breed::green);
+            bool spotted = false, hunted = false, bit = false;
+            bool const killed = s.until(4000, [&] {
+                spotted = spotted || gs.world.lizard_get_ai(l).rep.visual_contact;
+                hunted = hunted || gs.world.lizard_get_ai(l).current == lizard::behavior::hunt;
+                bit = bit || lizard::grasped(gs, l) == s.p;
+                return s.dead();
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " spotted=%d hunted=%d bit=%d killed=%d", int(spotted), int(hunted), int(bit), int(killed));
+            r.check("green lizard kills the slugcat", spotted && hunted && bit && killed, s.describe() + d);
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
+            // a pink one climbs a pole down to the slugcat and gets it too
+            auto const hall = make_room(gs, region, box(40, 24, [](int32_t x, int32_t y) {
+                if (y == 12 && x >= 26)
+                    return '#';
+                return x == 25 && y <= 12 ? '|' : ' ';
+            }));
+            sim s(gs, hall, feet_at(6, 1));
+            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(29, 13), lizard::breed::pink);
+            bool bit = false, climbed = false;
+            bool const killed = s.until(5000, [&] {
+                bit = bit || lizard::grasped(gs, l) == s.p;
+                climbed = climbed || pathing::tile_access(s.room, world::room_view::get_tile_position(gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)))) == pathing::access::climb;
+                return s.dead();
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " climbed=%d bit=%d killed=%d", int(climbed), int(bit), int(killed));
+            r.check("pink lizard comes down a pole", climbed && bit && killed, s.describe() + d);
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
+            // a blue lizard's tongue catches the slugcat from a distance
+            auto const hall = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(10, 1));
+            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(17, 1), lizard::breed::blue);
+            bool shot = false;
+            bool const caught = s.until(3000, [&] {
+                auto const& t = gs.world.lizard_get_tongue(l);
+                shot = shot || t.state == lizard::tongue_state::lashing_out;
+                return t.state == lizard::tongue_state::attatched && t.attached_player == uint8_t(s.p.index() + 1);
+            });
+            char d[64];
+            std::snprintf(d, sizeof(d), " shot=%d caught=%d", int(shot), int(caught));
+            r.check("blue lizard tongue grabs", shot && caught, s.describe() + d);
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
+            // a salamander swims across the pool towards the slugcat on the bank
+            auto const pool = make_room(gs, region, box(50, 20, [](int32_t x, int32_t y) { return x >= 40 && y < 9 ? '#' : ' '; }), 8);
+            sim s(gs, pool, feet_at(45, 9));
+            auto const l = lizard::create(gs, pool, world::room_view::middle_of_tile(5, 3), lizard::breed::salamander);
+            float const x0 = gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)).x;
+            bool swam = false;
+            float furthest = x0;
+            s.until(3000, [&] {
+                swam = swam || gs.world.lizard_get_core(l).swim > 0.5f;
+                furthest = std::max(furthest, gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)).x);
+                return swam && furthest > x0 + 400.f;
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " swam=%d moved=%.0fpx", int(swam), furthest - x0);
+            r.check("salamander swims", swam && furthest > x0 + 400.f, s.describe() + d);
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
+            // a red lizard spits at the slugcat on a ledge it can't get to
+            auto const hall = make_room(gs, region, box(50, 24, [](int32_t x, int32_t y) { return y == 12 && x >= 30 ? '#' : ' '; }));
+            sim s(gs, hall, feet_at(31, 13));
+            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(10, 1), lizard::breed::red);
+            bool spat = false, flew = false;
+            s.until(3000, [&] {
+                spat = spat || gs.world.lizard_get_core(l).anim == lizard::animation::spit;
+                gs.world.for_each_lizard_spit([&](dcon::lizard_spit_id) { flew = true; });
+                return spat && flew;
+            });
+            char d[64];
+            std::snprintf(d, sizeof(d), " spat=%d flew=%d", int(spat), int(flew));
+            r.check("red lizard spits", spat && flew, s.describe() + d);
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
+            // a cyan lizard finds a jump on its way to the slugcat
+            auto const hall = make_room(gs, region, box(50, 24, [](int32_t x, int32_t y) { return y <= 4 && x > 12 && x < 36 ? (y == 0 ? '#' : ' ') : (y <= 4 ? '#' : ' '); }));
+            sim s(gs, hall, feet_at(44, 5));
+            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(5, 5), lizard::breed::cyan);
+            bool jumped = false;
+            s.until(4000, [&] {
+                jumped = jumped || gs.world.lizard_get_core(l).anim == lizard::animation::jumping;
+                return jumped;
+            });
+            r.check("cyan lizard jumps", jumped, s.describe() + (jumped ? " jumped=1" : " jumped=0"));
+            lizard::destroy(gs, l);
+            gs.sounds.clear();
+        }
+        {
             // a rot vine across a tall room: dropping onto it holding up grabs
             // it, climbing moves along it, jumping lets go
             auto const room = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
@@ -968,6 +1076,9 @@ namespace selftest {
         rw::rng cicada_rng{0xC1CADAu};
         uint32_t cicadas_sat = 0, cicadas_charged = 0, cicadas_lost = 0, cicadas_held = 0, cicadas_carried = 0;
         bool cicada_sat = false, cicada_charged = false, cicada_held = false;
+        rw::rng lizard_rng{0x112A2Du};
+        uint32_t lizard_breed = 0, lizards = 0, lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
+        bool lizard_hunted = false, lizard_bit = false, lizard_tongued = false, lizard_jumped = false, lizard_spat = false, lizard_swam = false;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -999,6 +1110,16 @@ namespace selftest {
                 if (pathing::accessible(room, t, pathing::cicada))
                     cic = cicada::create(gs, rid, world::room_view::middle_of_tile(t), cicada_rng.value() < 0.5f);
             }
+            // and a lizard standing somewhere, the next breed in every room
+            dcon::lizard_id liz;
+            auto const breed = lizard::breed(lizard_breed++ % lizard::breed_count);
+            for (int k = 0; k < 50 && !liz; ++k) {
+                ivec2 const t{lizard_rng.range(1, std::max(2, room.width - 1)), lizard_rng.range(1, std::max(2, room.height - 1))};
+                if (pathing::accessible(room, t, lizard::params(breed).movement) && !room.get_tile(t).solid())
+                    liz = lizard::create(gs, rid, world::room_view::middle_of_tile(t), breed);
+            }
+            if (liz)
+                ++lizards;
             int32_t ix = 0, iy = 0;
             bool jmp = false;
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
@@ -1039,6 +1160,18 @@ namespace selftest {
                     cicada_sat = cicada_sat || !w.cicada_get_flying(cic);
                     cicada_charged = cicada_charged || cicada::charging(gs, cic);
                     cicada_held = cicada_held || cicada::held_by(gs, p) == cic;
+                }
+                if (liz) {
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        vec2 const q = w.body_chunk_get_pos(lizard::chunk(gs, liz, i));
+                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    }
+                    lizard_hunted = lizard_hunted || w.lizard_get_ai(liz).current == lizard::behavior::hunt;
+                    lizard_bit = lizard_bit || lizard::grasped(gs, liz) == p;
+                    lizard_tongued = lizard_tongued || w.lizard_get_tongue(liz).state == lizard::tongue_state::lashing_out;
+                    lizard_jumped = lizard_jumped || w.lizard_get_core(liz).anim == lizard::animation::jumping;
+                    lizard_spat = lizard_spat || w.lizard_get_core(liz).anim == lizard::animation::spit;
+                    lizard_swam = lizard_swam || w.lizard_get_core(liz).swim > 0.5f;
                 }
                 if (!finite) {
                     std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
@@ -1081,6 +1214,22 @@ namespace selftest {
                 cicada_sat = cicada_charged = cicada_held = false;
                 cicada::destroy(gs, cic);
             }
+            if (liz) {
+                vec2 const hp = w.body_chunk_get_pos(lizard::chunk(gs, liz, 0));
+                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
+                    ++lizards_lost;
+                    if (lizards_lost <= 5)
+                        std::printf("  %s lizard left %s at (%.0f, %.0f)\n", lizard::to_string(breed), std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                }
+                lizards_hunted += lizard_hunted ? 1 : 0;
+                lizards_bit += lizard_bit ? 1 : 0;
+                lizards_tongued += lizard_tongued ? 1 : 0;
+                lizards_jumped += lizard_jumped ? 1 : 0;
+                lizards_spat += lizard_spat ? 1 : 0;
+                lizards_swam += lizard_swam ? 1 : 0;
+                lizard_hunted = lizard_bit = lizard_tongued = lizard_jumped = lizard_spat = lizard_swam = false;
+                lizard::destroy(gs, liz);
+            }
             if (w.player_get_eaten(p))
                 ++eaten;
             else if (w.player_get_dead(p))
@@ -1094,6 +1243,8 @@ namespace selftest {
         std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
         std::printf("squidcadas: one per room, %u sat down, %u bump attacked, %u picked up (%u carried through a pipe), %u fell out of their room\n",
             cicadas_sat, cicadas_charged, cicadas_held, cicadas_carried, cicadas_lost);
+        std::printf("lizards: %u (one per room, every breed in turn), %u hunted, %u bit the slugcat, %u shot a tongue, %u jumped, %u spat, %u swam, %u fell out of their room\n",
+            lizards, lizards_hunted, lizards_bit, lizards_tongued, lizards_jumped, lizards_spat, lizards_swam, lizards_lost);
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
             auto const k = w.rot_tube_get_kind(t);

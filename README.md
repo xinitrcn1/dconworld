@@ -40,7 +40,9 @@ Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
 stand still in a gate's middle zone to cycle it, K spawns a centipede at the
 cursor (Shift+K a big one, Ctrl+K removes them all), V spawns a dropwig on the
 ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada at
-the cursor (Shift+Q a dark one, Ctrl+Q removes them all), R respawn, left click teleports
+the cursor (Shift+Q a dark one, Ctrl+Q removes them all), Y spawns a lizard at the
+cursor, the next breed each time (Shift+Y the same breed again, Ctrl+Y removes them
+all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
@@ -93,6 +95,10 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/dropbug_graphics.*` | `DropBugGraphics`: long legs and knees, mandibles, tail pincers, antennae, ceiling camouflage, `DrawSprites` with the game's elements |
 | `src/cicada.*` | `Cicada`/`CicadaAI`: the squidcada flying, sitting on the terrain, circling, bump attacks and tentacle clinging, being carried by the slugcat and lifting it |
 | `src/cicada_graphics.*` | `CicadaGraphics`: wings, tentacles, the body's turn and the eyes, `DrawSprites` with the game's elements |
+| `src/lizard.*`, `src/lizard_types.hpp` | `Lizard`: every breed's body, legs-driven running, wall climbing, swimming, the jaws (bite, grab, shake, carry), `LizardTongue`, `LizardJumpModule`, `LizardSpit`, `Violence` with the head shield |
+| `src/lizard_ai.*` | `LizardAI`: utility comparison, hunting, idling, lurking, investigating sounds, the spit tracker, the Yellow pack |
+| `src/lizard_breeds.cpp` | `LizardBreeds.BreedTemplate`: every breed's `LizardBreedParams`, template and tongue constants |
+| `src/lizard_graphics.*` | `LizardGraphics`: gripping limbs, tail, head and tongue, head colour flashes, camouflage, `DrawSprites` with the game's elements |
 | `src/body_parts.*`, `src/sprites.hpp` | `BodyPart`/`GenericBodyPart`/`Limb` helpers and the Futile sprite/mesh commands the graphics ports hand the renderer |
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
@@ -199,6 +205,46 @@ shader (the wings are their sprites tinted and faded), dens, swarm rooms
 and rain, flies and leeches to hunt and carry, the social memory beyond
 this cycle, `CreatureLooker`'s interest scores (it looks at the slugcat
 it is busy with or sees), screen shake, mud, Safari control.
+
+Lizards (`--lizard x,y[,breed]`, Y) follow `Lizard`/`LizardAI` for every
+breed: Pink, Green, Blue, Yellow, White, Red, Black, Salamander, Cyan and
+Downpour's and the Watcher's Caramel (`spit`), Eel, Zoop, Train, Blizzard,
+Basilisk, Indigo and Peach, with their `LizardBreedParams` transcribed from
+`LizardBreeds.BreedTemplate` and their TileTypeResistances as the breed's
+path field movement (swimmers path through water at their
+`waterPathingResistance`). Three chunks run where the legs grip: the
+`LizardLimb`s step from grip to grip (`Limb.FindGrip`, walls and ceilings
+for the wall climbers) and `GetFrameSpeed` moves the body only as fast as
+they hold on, by terrain speed, with the body wiggling and pulling harder
+when stuck (`desperationSmoother`), turning around on floors
+(`LizardTurn`), dropping, grabbing poles and swimming. `LizardAI` compares
+its prey, injury, noise and lurk utilities: it spots the slugcat with the
+breed's vision cone (the Black lizard is blind and hears instead), hunts
+it, lunges, shoots its tongue (Blue, White, Salamander, Cyan, Zoop,
+Indigo, Peach) and bites; a bite kills at the breed's chance, otherwise
+the slugcat is grabbed, shaken and carried to the den (a room exit, where
+it is eaten), and a slugcat held in a lizard's jaws for 60 ticks is done
+for (`Player.dangerGrasp`). Idle lizards wander between idle spots by the
+breed's taste, lurkers (White, Salamander, Eel, Peach) wait for prey, Red
+and Caramel spit (`LizardSpit`) at prey out of reach, Cyan finds and makes
+jumps (`LizardJumpModule`, chain jumps included), White camouflages into
+whatever is behind it, the Yellow pack shares what each one sees. Rocks
+turn a lizard around, the head shield deflects what hits it head on (a
+hit in the open mouth hurts more), spears and explosions hurt it, and
+attacking it lowers its like of the slugcat. `LizardGraphics` draws the
+game's own elements in vanilla's order: body circles and mesh, the tail
+mesh (coloured towards the tip), the legs (`LizardArm_NN`, picked by
+reach and depth), the jaw, teeth, head and eyes in four angles (the
+Watcher's heads come from its mod atlas in the install), the tongue, the
+head's colour flashing with the blink, the lunge and the voice. Not
+ported: the `LizardCosmetics` (pass 2, see `lizard_graphics.cpp`), lizards
+fighting and signalling each other (aggression, submission), friendship
+and taming, rain, dens and shortcuts, the threats a lizard would flee,
+reach-over-gap paths, the voices' articulation (a sample plays once, and
+only Pink, Green and Blue have voices without Remix), the Blizzard's beam,
+the Basilisk's poison field, the Indigo's mud, burrowing in the Watcher's
+sand, rot, `LizardBubble`s, light sources and the CyanLizardSmoke,
+drowning, AImap visibility in the idle and lurk scores, Safari control.
 
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
@@ -367,9 +413,10 @@ palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
 anchors, plus the 4 segment tail mesh. Other ported `DrawSprites` (centipedes,
-dropwigs, squidcadas, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
+dropwigs, squidcadas, lizards, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
 `rainworldmsc`, `uiSprites`, `uispritesmsc`) out of `resources.assets` in the
-game's `RainWorld_Data` (`--unity <dir>`; nothing of it is bundled). The level is drawn in two passes split
+game's `RainWorld_Data` (`--unity <dir>`) and the Watcher's
+`mods/watcher/atlases/rainworldwatcher` from the install; nothing of it is bundled. The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,
 rocks, gate doors), then only the foreground depths over them, so pipes and
 foreground plants occlude the slugcat. Slugcats have their hands (`SlugcatHand` limbs: gripping poles, ledges and

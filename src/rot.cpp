@@ -8,6 +8,7 @@
 #include "rot.hpp"
 #include "centipede.hpp"
 #include "dropbug.hpp"
+#include "lizard.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -995,6 +996,7 @@ namespace rot {
                 items::release_all(state, pl);
                 centipede::release_player(state, pl);
                 dropbug::release_player(state, pl);
+                lizard::release_player(state, pl);
                 release_player(state, pl);
                 player::die(state, pl);
                 w.player_set_eaten(pl, 1);

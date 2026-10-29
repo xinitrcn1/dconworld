@@ -34,7 +34,8 @@ namespace body_parts {
     }
 
     // BodyPart.PushOutOfTerrain (tile terrain only)
-    void push_out_of_terrain(player::body_part& bp, room_view const& room, float surface_friction) {
+    bool push_out_of_terrain(player::body_part& bp, room_view const& room, float surface_friction) {
+        bool contact = false;
         for (auto const d : eight_directions_and_zero) {
             ivec2 const t = room_view::get_tile_position(bp.pos) + d;
             auto const tt = room.get_terrain(t.x, t.y);
@@ -61,10 +62,12 @@ namespace body_parts {
                     bp.pos.x = nx;
                     bp.vel.x = nx - bp.pos.x;
                     bp.vel.y *= surface_friction;
+                    contact = true;
                 } else if (ny != 0.f) {
                     bp.pos.y = ny;
                     bp.vel.y = ny - bp.pos.y;
                     bp.vel.x *= surface_friction;
+                    contact = true;
                 } else {
                     vec2 const c{mathf::clamp(bp.pos.x, m.x - 10.f, m.x + 10.f), mathf::clamp(bp.pos.y, m.y - 10.f, m.y + 10.f)};
                     if (custom::dist_less(bp.pos, c, bp.rad)) {
@@ -73,6 +76,7 @@ namespace body_parts {
                         bp.vel *= surface_friction;
                         bp.pos -= a * (bp.rad - dist);
                         bp.vel -= a * (bp.rad - dist);
+                        contact = true;
                     }
                 }
             } else if (d.x == 0 && tt == terrain::slope) {
@@ -98,9 +102,11 @@ namespace body_parts {
                     bp.pos.y = target;
                     bp.vel.y = 0.f;
                     bp.vel.x *= surface_friction;
+                    contact = true;
                 }
             }
         }
+        return contact;
     }
 
     // GenericBodyPart.Update

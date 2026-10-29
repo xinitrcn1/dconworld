@@ -20,6 +20,8 @@
 #include "cicada_graphics.hpp"
 #include "dropbug.hpp"
 #include "dropbug_graphics.hpp"
+#include "lizard.hpp"
+#include "lizard_graphics.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -483,7 +485,7 @@ void main() {
         }
 
         // the game's own Futile atlases out of the Unity data, stacked into one texture
-        void load_game_atlases(state& r) {
+        void load_game_atlases(state& r, layered_fs::filesystem const& fs) {
             if (r.unity_dir.empty())
                 return;
             unity::asset_library lib;
@@ -509,6 +511,35 @@ void main() {
             }
             if (images.empty())
                 return;
+            // the Watcher's own atlas out of the install's mods folder (its
+            // lizards' heads among others), stacked under the Unity ones
+            // (mods/ isn't a layer of the file system: read from the roots)
+            for (auto const& root : fs.roots) {
+                std::string const base = root.root + "/mods/watcher/atlases/rainworldwatcher";
+                std::string js;
+                if (std::FILE* f = std::fopen((base + ".txt").c_str(), "rb")) {
+                    char buf[65536];
+                    for (size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;)
+                        js.append(buf, n);
+                    std::fclose(f);
+                }
+                image png;
+                int n = 0;
+                if (!js.empty())
+                    png.px = stbi_load((base + ".png").c_str(), &png.w, &png.h, &n, 4);
+                if (png.px != nullptr) {
+                    unity::image im;
+                    im.name = "rainworldwatcher";
+                    im.width = png.w;
+                    im.height = png.h;
+                    im.rgba.assign(png.px, png.px + size_t(png.w) * size_t(png.h) * 4);
+                    width = std::max(width, im.width);
+                    height += im.height;
+                    images.push_back(std::move(im));
+                    sheets.push_back(std::move(js));
+                    break;
+                }
+            }
             std::vector<uint8_t> px(size_t(width) * size_t(height) * 4, 0);
             // white 2x2 at the top left
             for (int y = 0; y < 2; ++y)
@@ -548,7 +579,7 @@ void main() {
         load_palettes(r, s);
         load_slugcat_atlas(r, s.fs);
         load_warp_shaders(r, s.fs);
-        load_game_atlases(r);
+        load_game_atlases(r, s.fs);
     }
 
     // Camera images of the room as one texture array, replacing the last one
@@ -1539,6 +1570,147 @@ void main() {
                             tip = root + rw::normalized(perp * side * (1.f + 0.6f * flap) - dir * (j == 0 ? 0.4f : 1.f)) * (j == 0 ? 23.f : 17.f) * iv.wing_length;
                         p.line(root, tip, 6.f * iv.wing_thickness, to_rgba(shield, 0.45f));
                     }
+            });
+        }
+
+        // the room's palette as LizardGraphics.ApplyPalette reads it, and what
+        // the White lizard picks up from behind it (RoomCamera.PixelColorAtCoordinate:
+        // the level image isn't sampled, the palette's colour for the walls
+        // behind the play layer stands in)
+        lizard_graphics::palette lizard_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            lizard_graphics::palette pal;
+            pal.black = palette_black(r, s, room);
+            pal.pick_up = palette_texel(r, s, room, 4, 3);
+            return pal;
+        }
+
+        // LizardSpit.DrawSprites: the gob (JaggedCircle shaded Futile_White
+        // circles, drawn as Circle20) and its strands of slime
+        void spit_cmds(sys::game_state const& s, dcon::lizard_spit_id sp, float alpha, rw::vec3 black, std::vector<sprites::draw_cmd>& out) {
+            namespace custom = rw::custom;
+            auto const& g = s.world.lizard_spit_get_spit(sp);
+            vec2 const pos = rw::lerp(g.last_pos, g.pos, alpha);
+            vec2 const s0 = g.slime_count > 0 ? rw::lerp(g.slime[0].last_pos, g.slime[0].pos, alpha) : pos;
+            float const t = mathf::inverse_lerp(30.f, 6.f, rw::distance(g.last_pos, g.pos));
+            float const t2 = mathf::inverse_lerp(6.f, 30.f, mathf::lerp(rw::distance(g.last_pos, g.pos), rw::distance(pos, s0), t));
+            vec2 const v = rw::slerp(custom::dir_vec(g.last_pos, g.pos), custom::dir_vec(pos, s0), t);
+            // Futile_White is 16 pixels, Circle20 20
+            constexpr float k = 16.f / 20.f;
+            auto const tinted = [&](sprites::sprite const& spr, rw::vec3 c, float a) {
+                rw::vec4 const col{c.x, c.y, c.z, a};
+                rw::vec4 const corners[4] = {col, col, col, col};
+                sprites::add(out, spr, corners);
+            };
+            tinted(sprites::sprite{"Circle20", pos, custom::vec_to_deg(v), vec2{mathf::lerp(0.6f, 0.4f, t2) * g.mass_left * k, mathf::lerp(0.5f, 1.f, t2) * g.mass_left * k}},
+                black, mathf::max(0.5f, g.jagged_alpha + 0.5f));
+            for (int32_t i = 0; i < g.slime_count; ++i) {
+                auto const& sl = g.slime[i];
+                vec2 const a = rw::lerp(sl.last_pos, sl.pos, alpha);
+                vec2 const b = sl.connected < 0 || sl.connected >= g.slime_count ? pos : rw::lerp(g.slime[sl.connected].last_pos, g.slime[sl.connected].pos, alpha);
+                float const sx = custom::lerp_map(rw::distance(a, b), 0.f, sl.length * 3.5f, 6.f, 2.f, 2.f) * g.mass_left;
+                tinted(sprites::sprite{"pixel", a, custom::aim(a, b), vec2{sx, rw::distance(a, b) + 3.f}, vec2{0.5f, 0.05f}}, black, mathf::max(0.5f, g.slime_alpha[i]));
+            }
+            tinted(sprites::sprite{"Circle20", pos, custom::vec_to_deg(v), vec2{mathf::lerp(0.4f, 0.2f, t2) * g.mass_left * k, mathf::lerp(0.3f, 0.7f, t2) * g.mass_left * k}},
+                g.color, mathf::max(0.6f, g.dot_alpha + 0.5f));
+        }
+
+        // RoomCamera.PixelColorAtCoordinate as the White lizard reads it at its
+        // three chunks (LizardGraphics.DrawSprites): two alike win, else the
+        // average. The frame so far (the level, the background) is read back
+        void white_pick_up(state const& r, sys::game_state const& s, dcon::lizard_id l, camera const& cam, lizard_graphics::palette& pal) {
+            rw::vec3 c[3];
+            for (uint32_t i = 0; i < 3; ++i) {
+                vec2 const p = (s.world.body_chunk_get_pos(lizard::chunk(s, l, i)) - cam.pos) * cam.zoom;
+                uint8_t px[4] = {0, 0, 0, 0};
+                int const x = std::clamp(int(p.x), 0, r.width - 1), y = std::clamp(int(p.y), 0, r.height - 1);
+                glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+                c[i] = rw::vec3{float(px[0]) / 255.f, float(px[1]) / 255.f, float(px[2]) / 255.f};
+            }
+            if (c[0] == c[1])
+                pal.pick_up = c[0];
+            else if (c[1] == c[2])
+                pal.pick_up = c[1];
+            else if (c[2] == c[0])
+                pal.pick_up = c[2];
+            else
+                pal.pick_up = (c[0] + c[1] + c[2]) / 3.f;
+        }
+
+        // Lizards through LizardGraphics and the game's atlases, then their spit
+        void build_lizard_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            auto const pal = lizard_palette(r, s, room.id);
+            cmds.clear();
+            w.for_each_lizard([&](dcon::lizard_id l) {
+                if (w.physical_object_get_room_from_object_location(lizard::body(s, l)) != room.id)
+                    return;
+                auto lp = pal;
+                if (w.lizard_get_breed(l) == lizard::breed::white)
+                    white_pick_up(r, s, l, cam, lp);
+                lizard_graphics::build(s, l, alpha, lp, cmds);
+            });
+            w.for_each_lizard_spit([&](dcon::lizard_spit_id sp) {
+                if (w.lizard_spit_get_room(sp) == uint32_t(room.id.index()))
+                    spit_cmds(s, sp, alpha, pal.black, cmds);
+            });
+            emit_game_cmds(r, cmds);
+        }
+
+        // Without the game's atlases: lizards with shapes of our own over the
+        // simulated LizardGraphics parts: legs as lines to the feet, the body
+        // as overlapping circles in the body colour, the tail tapering to its
+        // tip, the head in the flashing head colour with the jaw opening, the
+        // tongue as a line, and the spit as dots
+        void build_lizards(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            auto const pal = lizard_palette(r, s, room.id);
+            w.for_each_lizard([&](dcon::lizard_id l) {
+                if (w.physical_object_get_room_from_object_location(lizard::body(s, l)) != room.id)
+                    return;
+                auto const& g = w.lizard_get_graphics(l);
+                auto const& par = lizard::params(w.lizard_get_breed(l));
+                auto const dp = [&](int i) { return rw::lerp(g.draw_positions[i][1], g.draw_positions[i][0], alpha); };
+                uint32_t const body = to_rgba(lizard_graphics::body_color(s, l, 0.f, pal));
+                uint32_t const head = to_rgba(lizard_graphics::head_color(s, l, alpha, pal));
+                float const rad = 8.f * par.body_size_fac * g.ivars.fatness;
+                for (int32_t k = 0; k < g.limb_count; ++k) {
+                    int const ci = g.limb_count > 4 ? std::min(k / 2, 2) : (k < 2 ? 0 : 2);
+                    p.line(dp(ci), rw::lerp(g.limbs[k].h.last_pos, g.limbs[k].h.pos, alpha), 3.f * par.limb_size, body);
+                }
+                vec2 prev = dp(2);
+                int32_t const tn = std::min(par.tail_segments, lizard::max_tail);
+                for (int32_t i = 0; i < tn; ++i) {
+                    vec2 const t = rw::lerp(g.tail[i].bp.last_pos, g.tail[i].bp.pos, alpha);
+                    float const f = g.body_length / (g.body_length + g.tail_length) + (1.f - g.body_length / (g.body_length + g.tail_length)) * float(i + 1) / float(tn);
+                    p.line(prev, t, mathf::max(1.f, g.tail[i].bp.rad * 2.f * g.ivars.tail_fatness), to_rgba(lizard_graphics::body_color(s, l, f, pal)));
+                    prev = t;
+                }
+                for (int i = 2; i >= 0; --i)
+                    p.circle(dp(i), rad, body);
+                p.line(dp(0), dp(1), rad * 1.6f, body);
+                p.line(dp(1), dp(2), rad * 1.6f, body);
+                if (lizard::params(w.lizard_get_breed(l)).tongue && w.lizard_get_tongue(l).state != lizard::tongue_state::hidden) {
+                    auto const& tg = w.lizard_get_tongue(l);
+                    p.line(dp(0), rw::lerp(tg.graph_pos[1], tg.graph_pos[0], alpha), 2.f, to_rgba(pal.black + rw::vec3{0.3f, 0.1f, 0.15f}));
+                }
+                vec2 const hp = rw::lerp(rw::lerp(g.head.last_pos, g.head.pos, alpha), dp(0), 0.2f);
+                vec2 const dir = rw::custom::dir_vec(dp(0), hp);
+                float const jaw = lizard::jaw_open(s, l);
+                vec2 const perp = rw::custom::perpendicular_vector(dir);
+                float const hs = 7.f * par.head_size * g.ivars.head_size;
+                p.line(hp, hp + rw::normalized(dir + perp * jaw * 0.8f) * hs * 1.8f, hs * 0.9f, head);
+                p.line(hp, hp + rw::normalized(dir - perp * jaw * 0.8f) * hs * 1.8f, hs * 0.9f, head);
+                p.circle(hp, hs, head);
+            });
+            w.for_each_lizard_spit([&](dcon::lizard_spit_id sp) {
+                if (w.lizard_spit_get_room(sp) != uint32_t(room.id.index()))
+                    return;
+                auto const& g = w.lizard_spit_get_spit(sp);
+                vec2 const pos = rw::lerp(g.last_pos, g.pos, alpha);
+                p.circle(pos, 5.f * g.mass_left, to_rgba(pal.black));
+                p.circle(pos, 3.f * g.mass_left, to_rgba(g.color));
             });
         }
 
@@ -2603,11 +2775,13 @@ void main() {
             build_centipede_sprites(r, s, room, alpha);
             build_dropbug_sprites(r, s, room, alpha);
             build_cicada_sprites(r, s, room, alpha);
+            build_lizard_sprites(r, s, room, alpha, cam);
             build_seed_cobs(r, s, room, alpha);
         } else {
             build_centipedes(r, s, room, alpha);
             build_dropbugs(r, s, room, alpha);
             build_cicadas(r, s, room, alpha);
+            build_lizards(r, s, room, alpha);
         }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);

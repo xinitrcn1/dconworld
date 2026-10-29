@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include <SDL3/SDL.h>
@@ -14,6 +15,7 @@
 #include "audio.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
+#include "lizard.hpp"
 #include "dropbug.hpp"
 #include "config.h"
 #include "gamestate.hpp"
@@ -66,6 +68,9 @@ namespace {
             "  --centipede <x,y[,size]>  spawn a centipede (repeatable)\n"
             "  --dropbug <x,y>     spawn a dropwig, on the ceiling above if there is one (repeatable)\n"
             "  --cicada <x,y[,b]>  spawn a squidcada, white (CicadaA) or with b dark (CicadaB) (repeatable)\n"
+            "  --lizard <x,y[,breed]>  spawn a lizard (default green): pink green blue yellow white\n"
+            "                      red black salamander cyan caramel (spit) eel zoop train\n"
+            "                      blizzard basilisk indigo peach (repeatable)\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -77,6 +82,8 @@ namespace {
             "          (Shift+K a big one, Ctrl+K removes them all), V a dropwig on the\n"
             "          ceiling above the cursor (Ctrl+V removes them all), Q a white\n"
             "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
+            "          Y a lizard at the cursor, the next breed each time (Shift+Y the same\n"
+            "          breed again, Ctrl+Y removes them all),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
@@ -312,6 +319,7 @@ int main(int argc, char* argv[]) {
     std::vector<rw::vec3> spawn_centipedes; // x, y, size
     std::vector<vec2> spawn_dropbugs;
     std::vector<rw::vec3> spawn_cicadas; // x, y, 1 for a CicadaA
+    std::vector<std::pair<vec2, lizard::breed>> spawn_lizards;
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
@@ -359,6 +367,15 @@ int main(int argc, char* argv[]) {
             char kind = 'a';
             if (std::sscanf(next().c_str(), "%f,%f,%c", &x, &y, &kind) >= 2)
                 spawn_cicadas.push_back(rw::vec3{x, y, kind == 'b' ? 0.f : 1.f});
+        } else if (a == "--lizard") {
+            float x = 0.f, y = 0.f;
+            char name[32] = "green";
+            auto b = lizard::breed::green;
+            if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
+                if (!lizard::parse_breed(name, b))
+                    std::fprintf(stderr, "unknown lizard breed %s, a green one instead\n", name);
+                spawn_lizards.push_back({vec2{x, y}, b});
+            }
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
         } else {
@@ -424,6 +441,8 @@ int main(int argc, char* argv[]) {
         dropbug::create(gs, start, d);
     for (auto const& c : spawn_cicadas)
         cicada::create(gs, start, vec2{c.x, c.y}, c.z != 0.f);
+    for (auto const& [at, b] : spawn_lizards)
+        lizard::create(gs, start, at, b);
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);
@@ -491,6 +510,15 @@ int main(int argc, char* argv[]) {
             reports::add_log(std::string{gs.world.cicada_get_gender(c) ? "white" : "dark"} + " squidcada at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y))
                 + " behavior " + std::to_string(int(gs.world.cicada_get_behavior(c))) + (gs.world.cicada_get_flying(c) ? " flying" : " sitting")
                 + " stamina " + std::to_string(gs.world.cicada_get_stamina(c)) + (gs.world.cicada_get_dead(c) ? " dead" : ""));
+        });
+        gs.world.for_each_lizard([&](dcon::lizard_id l) {
+            auto const& w = gs.world;
+            vec2 const hp = w.body_chunk_get_pos(lizard::chunk(gs, l, 0));
+            reports::add_log(std::string{lizard::to_string(w.lizard_get_breed(l))} + " lizard at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y))
+                + " behavior " + std::to_string(int(w.lizard_get_ai(l).current)) + " animation " + std::to_string(int(w.lizard_get_core(l).anim))
+                + " legs " + std::to_string(w.lizard_get_graphics(l).legs_grabbing) + (lizard::grasped(gs, l) ? " holding the slugcat" : "")
+                + (w.lizard_get_tongue(l).state != lizard::tongue_state::hidden ? " tongue out" : "")
+                + (w.lizard_get_dead(l) ? " dead" : ""));
         });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
@@ -665,6 +693,26 @@ int main(int argc, char* argv[]) {
                     bool const white = (e.key.mod & SDL_KMOD_SHIFT) == 0;
                     cicada::create(gs, a.room, at, white);
                     reports::add_log(white ? "white squidcada" : "dark squidcada");
+                    break;
+                }
+                case SDLK_Y: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        std::vector<dcon::lizard_id> all;
+                        w.for_each_lizard([&](dcon::lizard_id l) { all.push_back(l); });
+                        for (auto const l : all)
+                            lizard::destroy(gs, l);
+                        break;
+                    }
+                    // the next breed each time (Shift: the last one again)
+                    static uint32_t next_breed = 0;
+                    if ((e.key.mod & SDL_KMOD_SHIFT) != 0 && next_breed > 0)
+                        --next_breed;
+                    auto const b = lizard::breed(next_breed % lizard::breed_count);
+                    next_breed = next_breed % lizard::breed_count + 1;
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    lizard::create(gs, a.room, render::screen_to_room(r, a.cam, mx, my), b);
+                    reports::add_log(std::string{lizard::to_string(b)} + " lizard");
                     break;
                 }
                 case SDLK_I: {

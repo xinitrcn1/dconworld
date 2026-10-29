@@ -19,8 +19,9 @@ namespace body_parts {
 
     // BodyPart.ConnectToPoint
     void connect_to_point(player::body_part& bp, rw::vec2 pnt, float connection_rad, bool push, float elastic, rw::vec2 host_vel, float adapt, float exaggerate);
-    // BodyPart.PushOutOfTerrain (tile terrain only)
-    void push_out_of_terrain(player::body_part& bp, world::room_view const& room, float surface_friction);
+    // BodyPart.PushOutOfTerrain (tile terrain only): whether it touched the
+    // terrain (BodyPart.terrainContact)
+    bool push_out_of_terrain(player::body_part& bp, world::room_view const& room, float surface_friction);
     // GenericBodyPart.Update
     void generic_update(player::body_part& bp, world::room_view const& room, float air_friction, float surface_friction);
     // Custom.RotateAroundOrigo (clockwise degrees)

@@ -13,7 +13,8 @@ namespace pathing {
 
     // What a creature template may walk on: CreatureTemplate's
     // TileTypeResistances, in tenths (10 is a resistance of 1, 0 forbidden),
-    // per accessibility, and whether deep water is open to it (swimmers).
+    // per accessibility, and whether deep water is open to it (swimmers:
+    // `swim` is then the template's waterPathingResistance in tenths).
     // `open_air` is CicadaPather's preference for open space: tenths added
     // to a step per tile its destination is closer than 10 to the terrain
     // (AImap.terrainProximity), away from the goal

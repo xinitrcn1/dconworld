@@ -87,8 +87,10 @@ namespace pathing {
                 for (int32_t x = 0; x < w; ++x) {
                     access const a = tile_access(room, ivec2{x, y});
                     size_t const i = size_t(y) * size_t(w) + size_t(x);
-                    walkable[i] = a != access::solid && (m.allows(a) || (m.swim && room.get_tile(x, y).water != 0));
-                    resistance[i] = m.resistance[uint32_t(a)];
+                    bool const wet = m.swim && room.get_tile(x, y).water != 0;
+                    walkable[i] = a != access::solid && (m.allows(a) || wet);
+                    // a swimmer's waterPathingResistance under the surface
+                    resistance[i] = wet ? m.swim : m.resistance[uint32_t(a)];
                 }
             auto const walkable_at = [&](ivec2 t) { return walkable[index(t)] != 0; };
             auto const seed = [&](ivec2 t, uint32_t c) {

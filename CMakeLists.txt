@@ -75,6 +75,10 @@ add_executable(rwcpp
     src/dropbug_graphics.cpp
     src/cicada.cpp
     src/cicada_graphics.cpp
+    src/lizard.cpp
+    src/lizard_ai.cpp
+    src/lizard_breeds.cpp
+    src/lizard_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

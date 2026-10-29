@@ -24,6 +24,8 @@
 //   dropbugs: a few per realised room -> 64 (3 chunks, 3 connections each)
 //   cicadas: a few per realised room, swarms in some -> 64 (2 chunks, 1
 //     connection each)
+//   lizards: a few per realised room, packs of yellows -> 128 (3 chunks, 3
+//     connections each); their spit in flight -> 256
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
@@ -45,6 +47,7 @@ include{"player_types.hpp"}
 include{"centipede_types.hpp"}
 include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
+include{"lizard_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -980,6 +983,59 @@ relationship{
 	link{ object{cicada} name{cicada} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{cicada}
+}
+
+//
+// Creatures: Lizards (Lizard.cs + LizardAI + LizardGraphics), every breed;
+// the body is a physical_object with three chunks: head (mainBodyChunk),
+// middle and hips
+//
+object{
+	name{lizard}
+	storage_type{erasable}
+	size{128}
+	tag{save}
+	property{ name{breed} type{::lizard::breed} }
+	property{ name{random} type{rw::rng} }
+	// Lizard.effectColor
+	property{ name{effect_color} type{rw::vec3} }
+	// AbstractCreature.personality
+	property{ name{dominance} type{float} }
+	property{ name{energy} type{float} }
+	// Creature / LizardState
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{health} type{float} }
+	property{ name{throat_health} type{float} }
+	property{ name{limb_health} type{::lizard::limb_health} }
+	// Lizard.cs's movement, jaws, grasp and voice
+	property{ name{core} type{::lizard::body_state} }
+	// LizardAI and its modules
+	property{ name{ai} type{::lizard::ai_state} }
+	property{ name{tongue} type{::lizard::tongue} }
+	property{ name{jump} type{::lizard::jump_module} }
+	// LizardGraphics: limbs, tail, head, tongue, colours (the legs' grip
+	// drives the body's speed, so it is simulation state)
+	property{ name{graphics} type{::lizard::graphics_state} }
+}
+relationship{
+	name{lizard_body}
+	tag{save}
+	link{ object{lizard} name{lizard} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{lizard}
+}
+
+// LizardSpit: Red's and Caramel's gobs, in flight or stuck to something;
+// `room` is the room's index, `owner` the spitting lizard's index + 1
+object{
+	name{lizard_spit}
+	storage_type{erasable}
+	size{256}
+	tag{save}
+	property{ name{room} type{uint32_t} }
+	property{ name{owner} type{uint32_t} }
+	property{ name{spit} type{::lizard::spit_state} }
 }
 
 //
