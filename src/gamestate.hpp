@@ -94,6 +94,13 @@ namespace sys {
         float size = 1.f;
         rw::vec3 color{1.f, 1.f, 1.f};
         float alpha = 1.f;
+        // a CentipedeShell: its spin in the picture plane and around its
+        // length, its scale, hue and saturation, and its counters
+        float rotation = 0.f, last_rotation = 0.f, rot_vel = 0.f;
+        float z_rotation = 0.f, last_z_rotation = 0.f, z_rot_vel = 0.f;
+        rw::vec2 scale{1.f, 1.f};
+        float hue = 0.f, saturation = 0.f;
+        int32_t counter = 0, disappear = 0;
     };
     // a room's water surface: a height field over x and depth (z, 0 at
     // the front), its waves, and the walls it reflects off

@@ -17,6 +17,8 @@
 #include "unity_assets.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
+#include "leech.hpp"
+#include "leech_graphics.hpp"
 #include "cicada.hpp"
 #include "cicada_graphics.hpp"
 #include "dropbug.hpp"
@@ -763,6 +765,19 @@ void main() {
                 game_frame const* f = frame(c.spr.element);
                 if (f == nullptr)
                     continue;
+                if (c.is_quad) {
+                    // CustomFSprite: triangles (0, 1, 2) and (0, 2, 3) over the
+                    // element's top left, top right, bottom right, bottom left
+                    float const u0 = f->x / tw, u1 = (f->x + f->w) / tw;
+                    float const v_top = f->y / th, v_bottom = (f->y + f->h) / th;
+                    vec2 const uv[4] = {{u0, v_top}, {u1, v_top}, {u1, v_bottom}, {u0, v_bottom}};
+                    auto const corner = [&](int k) {
+                        uint32_t const col = to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis);
+                        return vertex{c.quad[k].x, c.quad[k].y, col, uv[k].x, uv[k].y};
+                    };
+                    r.batch.insert(r.batch.end(), {corner(0), corner(1), corner(2), corner(0), corner(2), corner(3)});
+                    continue;
+                }
                 // FSprite.UpdateLocalVertices: the element's source rect around
                 // the anchor, the packed (trimmed) part placed inside it
                 float const x0 = -c.spr.anchor.x * f->source_w + f->trim_x;
@@ -1511,9 +1526,23 @@ void main() {
             emit_game_cmds(r, cmds);
         }
 
+        // a centipede's lights: the LightSource of a shock, the aquapede's Glower
+        void centipede_lights(painter& p, sys::game_state const& s, dcon::creature_id c, float alpha) {
+            auto const& w = s.world;
+            auto const d = creature::centipede_data(w, c);
+            auto const k = centipede::chunk(s, c, centipede::head_index(s, c));
+            vec2 const head = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
+            float const flash = w.centipede_data_get_light_flash(d);
+            if (flash > 0.f)
+                p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
+            // (a LightSource of radius 300 at alpha 0.5: a soft glow here)
+            float const glow = w.centipede_data_get_glow(d);
+            if (glow > 0.f)
+                p.glow(head, 120.f * glow + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.35f * glow), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
+        }
+
         // Centipedes through CentipedeGraphics and the game's atlases
         void build_centipede_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
-            auto const& w = s.world;
             static std::vector<sprites::draw_cmd> cmds;
             rw::vec3 const black = palette_black(r, s, room.id);
             float const darkness = palette_darkness(r, s, room.id);
@@ -1522,13 +1551,31 @@ void main() {
                 cmds.clear();
                 centipede_graphics::build(s, c, alpha, black, darkness, cmds);
                 emit_game_cmds(r, cmds);
-                // the LightSource of a shock
-                float const flash = w.centipede_data_get_light_flash(creature::centipede_data(w, c));
-                if (flash > 0.f) {
-                    auto const k = centipede::chunk(s, c, centipede::head_index(s, c));
-                    vec2 const head = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
-                    p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
+                centipede_lights(p, s, c, alpha);
+            });
+            // the shells knocked off them (CentipedeShell)
+            cmds.clear();
+            rw::vec3 const earth = palette_texel(r, s, room.id, 1, 7) + (black - palette_texel(r, s, room.id, 1, 7)) * 0.5f;
+            for (auto const& pt : s.particles)
+                if (pt.room == room.id && particles::kind(pt.kind) == particles::kind::centipede_shell)
+                    centipede_graphics::build_shell(pt, alpha, black, earth, darkness, cmds);
+            emit_game_cmds(r, cmds);
+        }
+
+        // Leeches through LeechGraphics (one flat coloured TriangleMesh)
+        void build_leech_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool atlas) {
+            static std::vector<sprites::draw_cmd> cmds;
+            rw::vec3 const black = palette_black(r, s, room.id);
+            painter p{r.batch};
+            rooms::for_each_creature(s, room.id, creature::type::leech, [&](dcon::creature_id c) {
+                cmds.clear();
+                leech_graphics::build(s, c, alpha, black, cmds);
+                if (atlas) {
+                    emit_game_cmds(r, cmds);
+                    return;
                 }
+                for (auto const& cmd : cmds)
+                    p.tri(cmd.tri[0], cmd.tri[1], cmd.tri[2], to_rgba(cmd.color));
             });
         }
 
@@ -1994,17 +2041,27 @@ void main() {
                 auto const dir_at = [&](uint32_t i) {
                     return rw::normalized(at(std::min(i + 1, n - 1)) - at(i > 0 ? i - 1 : 0));
                 };
-                float const hue = w.centipede_data_get_hue(creature::centipede_data(w, c));
-                float const sat = dead ? 0.25f : mathf::lerp(0.6f, 0.95f, size);
-                // earthy: the centipede's hue pulled well towards brown
+                auto const d = creature::centipede_data(w, c);
+                auto const variant = centipede::variant_of(w, c);
+                auto const& g = w.centipede_data_get_graphics(d);
+                float const hue = w.centipede_data_get_hue(d);
+                float const sat = dead ? 0.25f : mathf::lerp(0.6f, 0.95f, mathf::clamp01(size)) * (variant == centipede::variant::wing ? 0.6f : 1.f);
+                // earthy: the centipede's hue pulled well towards brown (a
+                // red centipede, a centiwing and an aquapede keep more of their colour)
                 rw::vec3 const brown{0.42f, 0.27f, 0.15f};
-                auto const earthy = [&](rw::vec3 c, float k) { return c + (brown * (0.6f + 0.8f * (c.x + c.y + c.z) / 3.f) - c) * k; };
+                float const earth = variant == centipede::variant::centipede || variant == centipede::variant::small ? 1.f : 0.35f;
+                auto const earthy = [&](rw::vec3 c, float k) { return c + (brown * (0.6f + 0.8f * (c.x + c.y + c.z) / 3.f) - c) * (k * earth); };
+                uint32_t const bites = w.centipede_data_get_bites(d);
+                auto const plated = [&](uint32_t i) {
+                    return variant == centipede::variant::small ? bites > i : centipede::has_shell(s, c, i);
+                };
                 rw::vec3 const chitin{0.09f, 0.065f, 0.05f};
                 rw::vec3 const plate = earthy(rw::custom::hsl2rgb(hue, sat, dead ? 0.28f : 0.42f), 0.5f);
                 rw::vec3 const ridge = earthy(rw::custom::hsl2rgb(hue, sat * 0.8f, dead ? 0.38f : 0.62f), 0.4f);
                 rw::vec3 const belly = earthy(rw::custom::hsl2rgb(hue + 0.05f, sat * 0.4f, 0.2f), 0.6f);
-                float const cycle = w.centipede_data_get_walk_cycle(creature::centipede_data(w, c));
-                float const scale = mathf::lerp(0.75f, 1.35f, size);
+                float const cycle = w.centipede_data_get_walk_cycle(d);
+                float const scale = mathf::lerp(0.75f, 1.35f, mathf::clamp01(size)) * (variant == centipede::variant::small ? 0.7f : 1.f);
+                bool const winged = variant == centipede::variant::wing || variant == centipede::variant::aqua;
                 auto const oval = [&](vec2 ctr, vec2 d, vec2 sd, float a, float b, uint32_t col) {
                     constexpr int segs = 12;
                     for (int k = 0; k < segs; ++k) {
@@ -2013,8 +2070,30 @@ void main() {
                     }
                 };
 
-                // legs under everything
-                for (uint32_t i = 0; i < n; ++i) {
+                // wings (or the aquapede's fins) behind everything: translucent
+                // blades flapping out from the sides, folded back along the body
+                if (winged) {
+                    float const fold = mathf::lerp(g.last_wings_folded, g.wings_folded, alpha);
+                    float const flap = mathf::lerp(g.last_wing_flap_cycle, g.wing_flap_cycle, alpha);
+                    rw::vec3 const film = rw::custom::hsl2rgb(hue + 0.05f, 0.5f, 0.75f);
+                    for (uint32_t i = 0; i < n && i < centipede::max_segments; ++i) {
+                        vec2 const pos = at(i);
+                        vec2 const dir = dir_at(i);
+                        vec2 const side = rw::custom::perpendicular_vector(dir);
+                        float const len = g.wing_lengths[i] * 0.8f;
+                        for (int l = -1; l <= 1; l += 2) {
+                            float const beat = std::sin((flap + float(i) * 1.8f) * mathf::pi * 0.3f);
+                            vec2 const open = rw::normalized(side * float(l) + dir * (0.3f * beat));
+                            vec2 const out = rw::normalized(rw::lerp(open, dir * -1.f + side * (0.15f * float(l)), fold));
+                            vec2 const tip = pos + out * len;
+                            vec2 const base0 = pos + dir * 2.f, base1 = pos - dir * 2.f;
+                            p.tri(base0, base1, tip, to_rgba(film, 0.35f));
+                            p.line(pos, tip, 0.8f, to_rgba(film * 0.6f, 0.6f));
+                        }
+                    }
+                }
+                // legs under everything (fins only on an aquapede)
+                for (uint32_t i = 0; i < n && variant != centipede::variant::aqua; ++i) {
                     vec2 const pos = at(i);
                     vec2 const dir = dir_at(i);
                     vec2 const side = rw::custom::perpendicular_vector(dir);
@@ -2067,11 +2146,20 @@ void main() {
                         p.line(base + dir * (3.f * scale) + side * (float(l) * 1.5f * scale), tip, 1.2f * scale, to_rgba(chitin));
                     }
                 }
-                // the belly line, then the plates from tail to head so they overlap
+                // the belly line, then the plates from tail to head so they
+                // overlap (a bitten baby is shorter, a shell knocked off
+                // leaves the dark body showing)
                 for (uint32_t i = 0; i + 1 < n; ++i)
-                    p.line(at(i), at(i + 1), mathf::max(1.5f, w.body_chunk_get_rad(centipede::chunk(s, c, i)) * 0.9f), to_rgba(belly));
+                    if (variant != centipede::variant::small || bites > i + 1)
+                        p.line(at(i), at(i + 1), mathf::max(1.5f, w.body_chunk_get_rad(centipede::chunk(s, c, i)) * 0.9f), to_rgba(belly));
                 for (uint32_t q = 0; q < n; ++q) {
                     uint32_t const i = n - 1 - q;
+                    if (!plated(i)) {
+                        if (variant != centipede::variant::small)
+                            oval(at(i), dir_at(i), rw::custom::perpendicular_vector(dir_at(i)), w.body_chunk_get_rad(centipede::chunk(s, c, i)) * 1.1f,
+                                w.body_chunk_get_rad(centipede::chunk(s, c, i)) * 0.9f, to_rgba(belly));
+                        continue;
+                    }
                     vec2 const pos = at(i);
                     vec2 const dir = dir_at(i);
                     vec2 const side = rw::custom::perpendicular_vector(dir);
@@ -2084,13 +2172,34 @@ void main() {
                     oval(pos + up * (rad * 0.4f), dir, side, rad * 0.9f, rad * 0.35f, to_rgba(ridge * (1.f + shimmer)));
                     // the seam to the next plate
                     p.line(pos - dir * (rad * 1.1f) + side * (rad * 0.9f), pos - dir * (rad * 1.1f) - side * (rad * 0.9f), 0.8f, to_rgba(chitin));
+                    // the red centipede's armour: spikes off the plate's sides
+                    if (variant == centipede::variant::red) {
+                        float const t = float(i) / float(std::max<uint32_t>(n - 1, 1));
+                        for (int l = -1; l <= 1; l += 2)
+                            p.tri(pos + dir * (rad * 0.5f) + side * (float(l) * rad), pos - dir * (rad * 0.5f) + side * (float(l) * rad),
+                                pos + side * (float(l) * rad * (1.6f + 0.5f * std::sin(t * mathf::pi))) - dir * (rad * 0.4f), to_rgba(ridge));
+                    }
                 }
-                float const flash = w.centipede_data_get_light_flash(creature::centipede_data(w, c));
-                if (flash > 0.f) {
-                    vec2 const head = at(centipede::head_index(s, c));
-                    p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
-                }
+                centipede_lights(p, s, c, alpha);
             });
+            // the shells knocked off them, tumbling plates
+            for (auto const& pt : s.particles) {
+                if (pt.room != room.id || particles::kind(pt.kind) != particles::kind::centipede_shell)
+                    continue;
+                vec2 const pos = rw::lerp(pt.last_pos, pt.pos, alpha);
+                float const rot = mathf::lerp(pt.last_rotation, pt.rotation, alpha) * mathf::deg2rad;
+                float const z = std::cos(mathf::lerp(pt.last_z_rotation, pt.z_rotation, alpha) * mathf::deg2rad);
+                vec2 const dir{std::sin(rot), std::cos(rot)};
+                vec2 const side = rw::custom::perpendicular_vector(dir);
+                float const fade = 1.f - mathf::inverse_lerp(305.f, 380.f, float(pt.counter));
+                float const a = 6.f * pt.scale.y * 11.f / 1.2f * 0.5f, b = mathf::max(0.6f, std::fabs(z) * pt.scale.x * 14.f * 0.5f);
+                rw::vec3 const col = rw::custom::hsl2rgb(pt.hue, pt.saturation * 0.8f, z > 0.f ? 0.45f : 0.3f);
+                constexpr int segs = 10;
+                for (int k = 0; k < segs; ++k) {
+                    float const a0 = float(k) / segs * 6.2831853f, a1 = float(k + 1) / segs * 6.2831853f;
+                    p.tri(pos, pos + dir * (std::cos(a0) * a) + side * (std::sin(a0) * b), pos + dir * (std::cos(a1) * a) + side * (std::sin(a1) * b), to_rgba(col, fade));
+                }
+            }
         }
 
         // the room's creatures kind by kind (creature::type order), each
@@ -2113,6 +2222,9 @@ void main() {
                     break;
                 case creature::type::daddy:
                     atlas ? build_daddy_sprites(r, s, room, alpha) : build_daddies(r, s, room, alpha);
+                    break;
+                case creature::type::leech:
+                    build_leech_sprites(r, s, room, alpha, atlas);
                     break;
                 case creature::type::count:
                     break;
@@ -2691,6 +2803,9 @@ void main() {
                 }
                 case particles::kind::flash:
                     p.glow(pos, pt.size, to_rgba(pt.color, pt.alpha * fade), to_rgba(pt.color, 0.f));
+                    break;
+                case particles::kind::centipede_shell:
+                    // (drawn with the creatures, where vanilla's CosmeticSprites go)
                     break;
                 }
             }

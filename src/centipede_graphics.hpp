@@ -1,10 +1,13 @@
 #pragma once
 
-// Port of CentipedeGraphics (plain centipedes: no wings, no aquapede or red
-// centipede parts): the legs gripping the terrain, the feelers at both ends,
-// the body rolling towards the surface it crawls on, and DrawSprites with the
-// game's own elements (CentipedeSegment, CentipedeBackShell/BellyShell,
-// CentipedeLegA/B) in vanilla sprite order.
+// Port of CentipedeGraphics for every variant: the legs gripping the terrain
+// (dangling in flight), the feelers at both ends, the body rolling towards
+// the surface it crawls on (back up in flight), the centiwing's and the
+// aquapede's flapping wings, and DrawSprites with the game's own elements
+// (CentipedeSegment, CentipedeBackShell/BellyShell, CentipedeLegA/B,
+// CentipedeWing, AquapedeWing1-4, the red centipede's Cicada8body spikes
+// and side plates) in vanilla sprite order; the shells knocked off
+// (CentipedeShell.DrawSprites).
 
 #include <vector>
 
@@ -24,4 +27,7 @@ namespace centipede_graphics {
     // CentipedeGraphics.DrawSprites (+ ApplyPalette); `alpha` interpolates
     // between ticks, `black` is the palette's blackColor, `darkness` its darkness
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, rw::vec3 black, float darkness, std::vector<sprites::draw_cmd>& out);
+    // CentipedeShell.DrawSprites for a shell particle; `earth` is the
+    // palette's fog and black mixed (ApplyPalette's earthColor)
+    void build_shell(sys::particle const& p, float alpha, rw::vec3 black, rw::vec3 earth, float darkness, std::vector<sprites::draw_cmd>& out);
 }

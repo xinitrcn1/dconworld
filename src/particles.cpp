@@ -9,6 +9,7 @@
 #include "rooms.hpp"
 
 namespace particles {
+    using rw::ivec2;
     using rw::vec2;
     using rw::vec3;
     using world::room_view;
@@ -93,6 +94,30 @@ namespace particles {
         auto& r = random(state, room);
         for (int i = 0; i < count; ++i)
             spawn(state, room, kind::bubble, pos + rnv(r) * spread * r.value(), rnv(r) * 0.6f, range(r, 1.2f, 3.2f), range(r, 1.5f, 3.f), water_color, 0.8f);
+    }
+
+    void centipede_shell(sys::game_state& state, dcon::room_id room, vec2 pos, vec2 vel, float hue, float saturation, float scale_x, float scale_y) {
+        if (!state.viewed(room))
+            return;
+        size_t const before = (state.parallel ? state.runtime(room).particles : state.particles).size();
+        spawn(state, room, kind::centipede_shell, pos + vel, vel, 1.f, 1.f, vec3{1.f, 1.f, 1.f});
+        auto& out = state.parallel ? state.runtime(room).particles : state.particles;
+        if (out.size() == before)
+            return;
+        auto& r = random(state, room);
+        auto& p = out.back();
+        // CentipedeShell's constructor; it goes when its counters say so
+        p.last_pos = pos;
+        p.decay = 0.f;
+        p.hue = hue;
+        p.saturation = saturation;
+        p.scale = vec2{scale_x, scale_y};
+        p.rotation = r.value() * 360.f;
+        p.last_rotation = p.rotation;
+        p.rot_vel = mathf::lerp(-1.f, 1.f, r.value()) * rw::custom::lerp_map(rw::magnitude(vel), 0.f, 18.f, 5.f, 26.f);
+        p.z_rotation = r.value() * 360.f;
+        p.last_z_rotation = p.rotation;
+        p.z_rot_vel = mathf::lerp(-1.f, 1.f, r.value()) * rw::custom::lerp_map(rw::magnitude(vel), 0.f, 18.f, 2.f, 16.f);
     }
 
     void from_sounds(sys::game_state& state, size_t first_sound) {
@@ -286,6 +311,60 @@ namespace particles {
             case kind::flash:
                 p.size *= 1.12f;
                 break;
+            case kind::centipede_shell: {
+                // CentipedeShell.Update: tumbling, sinking slowly in water,
+                // bouncing off the terrain, then lying still until it fades
+                ++p.counter;
+                if (wet) {
+                    p.vel *= 0.92f;
+                    p.vel.y -= view.gravity * 0.1f;
+                    p.rot_vel *= 0.965f;
+                    p.z_rot_vel *= 0.965f;
+                } else {
+                    p.vel *= 0.999f;
+                    p.vel.y -= view.gravity * 0.9f;
+                }
+                float const moved = rw::distance(p.last_pos, p.pos);
+                p.last_rotation = p.rotation;
+                p.rotation += p.rot_vel * moved;
+                p.last_z_rotation = p.z_rotation;
+                p.z_rotation += p.z_rot_vel * moved;
+                vec2 next = p.pos + p.vel;
+                // (SharedPhysics' terrain collision as two axis checks)
+                ivec2 contact{0, 0};
+                if (view.get_tile(vec2{next.x, p.pos.y}).solid()) {
+                    contact.x = p.vel.x > 0.f ? 1 : -1;
+                    next.x = p.pos.x;
+                    p.vel.x = -p.vel.x * 0.15f;
+                }
+                if (view.get_tile(vec2{next.x, next.y - 3.f}).solid() && p.vel.y <= 0.f) {
+                    contact.y = -1;
+                    next.y = room_view::middle_of_tile(vec2{next.x, next.y - 3.f}).y + 13.f;
+                    p.vel.y = std::fabs(p.vel.y) * 0.15f;
+                } else if (view.get_tile(vec2{next.x, next.y + 3.f}).solid() && p.vel.y > 0.f) {
+                    contact.y = 1;
+                    p.vel.y = -std::fabs(p.vel.y) * 0.15f;
+                    next.y = p.pos.y;
+                }
+                if (contact != ivec2{0, 0}) {
+                    p.rot_vel *= 0.8f;
+                    p.z_rot_vel *= 0.8f;
+                }
+                p.pos = next;
+                if (contact.x != 0)
+                    p.vel.y *= 0.6f;
+                if (contact.y != 0)
+                    p.vel.x *= 0.6f;
+                if (contact.y < 0) {
+                    p.rot_vel *= 0.7f;
+                    p.z_rot_vel *= 0.7f;
+                    if (rw::magnitude(p.vel) < 1.f && ++p.disappear > 30)
+                        p.counter = std::max(p.counter, 300);
+                }
+                if (p.disappear > 390 || p.counter > 380 || p.pos.x < -100.f || p.pos.y < -100.f)
+                    p.life = 1.f;
+                break;
+            }
             }
         }
         ps.erase(std::remove_if(ps.begin(), ps.end(), [](auto const& p) { return p.life >= 1.f; }), ps.end());

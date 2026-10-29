@@ -360,18 +360,19 @@ namespace rot {
                 for (uint8_t i = 0; i < 2 && !stop; ++i)
                     stop = f(rot_prey{prey_kind::player, i, base.id}, player::body_chunk(state, p, i));
             });
-            // (of the creatures only the centipedes for now: the rot came
-            // before the other kinds were ported)
-            rooms::for_each_creature(state, room, creature::type::centipede, [&](dcon::creature_id c) {
-                if (stop)
-                    return;
-                rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
-                if (!prey_in_room(state, base, room))
-                    return;
-                uint32_t const n = creature::chunk_count(state, c);
-                for (uint32_t i = 0; i < n && !stop; ++i)
-                    stop = f(rot_prey{prey_kind::creature, uint8_t(i), base.id}, creature::chunk(state, c, i));
-            });
+            // (of the creatures only the centipedes and the leeches for now:
+            // the rot came before the other kinds were ported)
+            for (auto const t : {creature::type::centipede, creature::type::leech})
+                rooms::for_each_creature(state, room, t, [&](dcon::creature_id c) {
+                    if (stop)
+                        return;
+                    rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
+                    if (!prey_in_room(state, base, room))
+                        return;
+                    uint32_t const n = creature::chunk_count(state, c);
+                    for (uint32_t i = 0; i < n && !stop; ++i)
+                        stop = f(rot_prey{prey_kind::creature, uint8_t(i), base.id}, creature::chunk(state, c, i));
+                });
         }
 
         //

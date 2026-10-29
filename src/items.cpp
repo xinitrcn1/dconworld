@@ -2,6 +2,7 @@
 
 #include "items.hpp"
 #include "outposts.hpp"
+#include "centipede.hpp"
 #include "cicada.hpp"
 #include "creature.hpp"
 #include "explosions.hpp"
@@ -208,6 +209,10 @@ namespace items {
             auto const it = hand == 0 ? state.world.player_get_grasp0(p) : state.world.player_get_grasp1(p);
             return grasp{it, hand};
         }
+        // the hand holds something: an item or a baby centipede
+        bool hand_busy(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
+            return grasp_in_hand(state, p, hand) || centipede::held_in_hand(state, p, hand);
+        }
 
         // Creature.ReleaseGrasp
         void release_grasp(sys::game_state& state, dcon::player_id p, grasp g) {
@@ -334,21 +339,22 @@ namespace items {
             release_grasp(state, p, g);
         }
 
-        // Player.ThrowObject for a carried cicada: Player.TossObject, the
-        // creature lobbed in the throw direction, then let go
-        void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::creature_id cc) {
+        // Player.ThrowObject for a held creature: Player.TossObject, the
+        // creature lobbed in the throw direction (the caller lets go of it)
+        void toss_creature(sys::game_state& state, dcon::player_id p, dcon::creature_id cc) {
             auto& w = state.world;
             auto const& in = w.player_get_input(p)[0];
-            auto const o = cicada::body(state, cc);
+            auto const o = creature::body(state, cc);
             auto const room = room_of(state, o);
+            uint32_t const n = creature::chunk_count(state, cc);
             // AerobicIncrease(0.75f)
             w.player_set_aerobic_level(p, mathf::min(1.f, w.player_get_aerobic_level(p) + 0.75f / 9.f));
-            state.play_sound(sound::sound_id::slugcat_throw_creature, room, w.body_chunk_get_pos(cicada::chunk(state, cc, 0)));
+            state.play_sound(sound::sound_id::slugcat_throw_creature, room, w.body_chunk_get_pos(creature::chunk(state, cc, 0)));
             float mass = 0.f, own = 0.f;
-            for (uint32_t i = 0; i < 2; ++i) {
-                mass += w.body_chunk_get_mass(cicada::chunk(state, cc, i));
+            for (uint32_t i = 0; i < n; ++i)
+                mass += w.body_chunk_get_mass(creature::chunk(state, cc, i));
+            for (uint32_t i = 0; i < 2; ++i)
                 own += w.body_chunk_get_mass(player::body_chunk(state, p, i));
-            }
             float ang = 45.f, force = 4.f;
             if (in.x != 0 && in.y == 0) {
                 ang = custom::lerp_map(mass, 0.2f, 0.3f, 60.f, 50.f);
@@ -370,8 +376,8 @@ namespace items {
             vec2 const p1 = w.body_chunk_get_pos(player::body_chunk(state, p, 1));
             float const edge = dir < 0 ? mathf::min(p0.x, p1.x) : mathf::max(p0.x, p1.x);
             vec2 const main_vel = w.body_chunk_get_vel(player::body_chunk(state, p, 0));
-            for (uint32_t i = 0; i < 2; ++i) {
-                auto const c = cicada::chunk(state, cc, i);
+            for (uint32_t i = 0; i < n; ++i) {
+                auto const c = creature::chunk(state, cc, i);
                 vec2& cp = w.body_chunk_get_pos(c);
                 vec2& cv = w.body_chunk_get_vel(c);
                 // out in front of the slugcat
@@ -390,7 +396,72 @@ namespace items {
                 cv += custom::deg_to_vec(ang * float(dir)) * mathf::clamp(force / (mathf::lerp(mass, 0.4f, 0.2f) * 2.f), 4.f, 14.f);
             }
             w.player_set_dont_grab_stuff(p, 15);
+        }
+        void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::creature_id cc) {
+            toss_creature(state, p, cc);
             cicada::release(state, cc);
+        }
+
+        // SlugcatStats.SlugcatFoodMeter: the food pips
+        int32_t max_food(::player::slugcat_name n) {
+            using ::player::slugcat_name;
+            switch (n) {
+            case slugcat_name::yellow: return 5;
+            case slugcat_name::red: return 9;
+            case slugcat_name::gourmand: return 11;
+            case slugcat_name::artificer: return 9;
+            case slugcat_name::rivulet: return 6;
+            case slugcat_name::spear: return 10;
+            case slugcat_name::saint: return 5;
+            case slugcat_name::inv: return 12;
+            default: return 7;
+            }
+        }
+
+        // Player.AddFood / AddQuarterFood
+        void add_food(sys::game_state& state, dcon::player_id p, int32_t add) {
+            auto& w = state.world;
+            int32_t const most = max_food(w.player_get_stats(p).name);
+            int32_t& food = w.player_get_food(p);
+            food += std::min(add, most - food);
+            if (food >= most)
+                w.player_set_quarter_food(p, 0);
+        }
+        void add_quarter_food(sys::game_state& state, dcon::player_id p) {
+            auto& w = state.world;
+            if (w.player_get_food(p) >= max_food(w.player_get_stats(p).name))
+                return;
+            int32_t& q = w.player_get_quarter_food(p);
+            if (++q > 3) {
+                q -= 4;
+                add_food(state, p, 1);
+            }
+        }
+
+        // Player.BiteEdibleObject + Centipede.BitByPlayer + Player.ObjectEaten:
+        // a bite of the baby centipede in `hand`
+        void bite(sys::game_state& state, dcon::player_id p, dcon::creature_id c) {
+            auto& w = state.world;
+            using ::player::slugcat_name;
+            if (!centipede::bit_by_player(state, c, p))
+                return;
+            centipede::release(state, c);
+            auto const name = w.player_get_stats(p).name;
+            // SlugcatStats.NourishmentOfObjectEaten: the Saint can't stomach it
+            if (name == slugcat_name::saint) {
+                ::player::stun(state, p, 60);
+            } else {
+                int32_t i = 4 * centipede::food_points;
+                for (; i >= 4; i -= 4)
+                    add_food(state, p, 1);
+                for (; i > 0; --i)
+                    add_quarter_food(state, p);
+            }
+            auto const room = creature::room_of(state, c);
+            state.defer(room, [c](sys::game_state& s) {
+                if (creature::is(s.world, c, creature::type::centipede))
+                    creature::destroy(s, c);
+            });
         }
 
         // Player.CanIPickThisUp, weapons: spears stuck in walls stay there,
@@ -437,7 +508,7 @@ namespace items {
         // Player.SlugcatGrab / Creature.Grab + Weapon.Grabbed
         void grab(sys::game_state& state, dcon::player_id p, dcon::item_id it, uint32_t hand) {
             auto& w = state.world;
-            if (w.item_get_grabbed_by(it) || grasp_in_hand(state, p, hand))
+            if (w.item_get_grabbed_by(it) || hand_busy(state, p, hand))
                 return;
             set_hand(state, p, hand, it);
             w.item_set_grabbed_by(it, p);
@@ -880,7 +951,7 @@ namespace items {
                                 detonate(state, it, pos);
                             } else if (type == world::item_type::electric_spear && w.item_get_charge(it) > 0) {
                                 // ElectricSpear: the charge goes into what it hit
-                                violence(vec2{0.f, 0.f}, 0.3f, 140.f);
+                                violence(vec2{0.f, 0.f}, 0.3f, 140.f, true);
                                 w.item_set_charge(it, int8_t(w.item_get_charge(it) - 1));
                                 state.play_sound(sound::sound_id::centipede_shock, room.id, pos, 0.7f, 1.3f);
                             }
@@ -901,7 +972,9 @@ namespace items {
                         // around (Lizard.Violence)
                         bool const rock = w.item_get_type(it) == world::item_type::rock;
                         auto const type = is_spear(state, it) ? creature::damage_type::stab : creature::damage_type::blunt;
-                        hit_creature([&](vec2 m, float dmg, float st) { creature::violence(state, hit, hit_part, m, dmg, st, type, rock); });
+                        hit_creature([&](vec2 m, float dmg, float st, bool electric = false) {
+                            creature::violence(state, hit, hit_part, m, dmg, st, electric ? creature::damage_type::electric : type, rock);
+                        });
                     }
                 }
                 break;
@@ -1369,8 +1442,10 @@ namespace items {
                 dir = custom::deg_to_vec(80.f * flip);
             w.item_set_rotation(it, dir);
         }
-        // a carried cicada (HeavyCarry)
+        // a carried cicada (HeavyCarry), a baby centipede in a hand
         cicada::carry_update(state, p);
+        for (uint32_t hand = 0; hand < 2; ++hand)
+            centipede::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
     }
 
     void release_all(sys::game_state& state, dcon::player_id p) {
@@ -1378,6 +1453,7 @@ namespace items {
             if (auto const g = grasp_in_hand(state, p, hand))
                 release_grasp(state, p, g);
         cicada::release_player(state, p);
+        centipede::release_player(state, p);
     }
 
 
@@ -1421,7 +1497,7 @@ namespace items {
             if (!spear)
                 return;
             for (uint32_t hand = 0; hand < 2; ++hand) {
-                if (grasp_in_hand(state, p, hand))
+                if (hand_busy(state, p, hand))
                     continue;
                 physics::hard_set_position(state, chunk(state, spear), player_graphics::hand_position(state, p, hand));
                 w.player_set_back_spear(p, dcon::item_id{});
@@ -1449,7 +1525,7 @@ namespace items {
             auto const& in = w.player_get_input(p)[0];
             bool const locked = w.player_get_back_locked(p);
             bool const has = bool(back_spear(state, p));
-            bool const hands_full = grasp_in_hand(state, p, 0) && grasp_in_hand(state, p, 1);
+            bool const hands_full = hand_busy(state, p, 0) && hand_busy(state, p, 1);
             dcon::item_id held_spear;
             for (uint32_t hand = 0; hand < 2; ++hand)
                 if (auto const it = held(state, p, hand); it && is_spear(state, it))
@@ -1494,7 +1570,7 @@ namespace items {
                 }
                 return;
             }
-            bool const free_hand = !grasp_in_hand(state, p, 0) || !grasp_in_hand(state, p, 1);
+            bool const free_hand = !hand_busy(state, p, 0) || !hand_busy(state, p, 1);
             if (!free_hand || in.y != 0)
                 return;
             auto const c0 = player::body_chunk(state, p, 0);
@@ -1547,7 +1623,7 @@ namespace items {
                 sw.body_chunk_set_vel(sc, rw::clamp_magnitude(push / sw.body_chunk_get_mass(sc), 6.f));
                 sw.item_set_needle(spear, 1);
                 for (uint32_t hand = 0; hand < 2; ++hand)
-                    if (!grasp_in_hand(s, p, hand)) {
+                    if (!hand_busy(s, p, hand)) {
                         grab(s, p, spear, hand);
                         break;
                     }
@@ -1558,9 +1634,24 @@ namespace items {
     void grab_update(sys::game_state& state, dcon::player_id p, room_view const& room) {
         auto& w = state.world;
         auto const& input = w.player_get_input(p);
-        // Player.checkInput: PickupPressed
-        if (input[0].pckp && !input[1].pckp)
+        // an edible baby centipede in a hand (not for Spearmaster)
+        dcon::creature_id edible;
+        if (w.player_get_stats(p).name != ::player::slugcat_name::spear)
+            for (uint32_t hand = 0; hand < 2 && !edible; ++hand)
+                edible = centipede::held_in_hand(state, p, hand);
+        // Player.checkInput: PickupPressed; holding something edible, only a
+        // short tap of pick up counts (holding it down eats)
+        if (edible) {
+            if (!input[0].pckp) {
+                int n = 1;
+                while (n < 10 && input[n].pckp)
+                    ++n;
+                if (n > 1 && n < 10)
+                    w.player_set_want_to_pick_up(p, 5);
+            }
+        } else if (input[0].pckp && !input[1].pckp) {
             w.player_set_want_to_pick_up(p, 5);
+        }
         int32_t& dont_grab = w.player_get_dont_grab_stuff(p);
         if (dont_grab > 0)
             --dont_grab;
@@ -1568,15 +1659,23 @@ namespace items {
         spearmaster_update(state, p, room);
         if (hunter(state, p))
             back_spear_logic(state, p);
-        float item_score = 0.f, cicada_score = 0.f;
+        float item_score = 0.f, cicada_score = 0.f, centipede_score = 0.f;
         auto candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f, item_score) : dcon::item_id{};
-        // the creatures PickupCandidate looks at too: cicadas
+        // the creatures PickupCandidate looks at too: cicadas, baby centipedes
         auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::creature_id{};
+        auto baby_candidate = dont_grab < 1 && (!hand_busy(state, p, 0) || !hand_busy(state, p, 1))
+            ? centipede::pickup_candidate(state, p, room, centipede_score) : dcon::creature_id{};
         if (candidate && cicada_candidate) {
             if (cicada_score < item_score)
                 candidate = dcon::item_id{};
             else
                 cicada_candidate = dcon::creature_id{};
+        }
+        if (baby_candidate && ((candidate && item_score <= centipede_score) || (cicada_candidate && cicada_score <= centipede_score)))
+            baby_candidate = dcon::creature_id{};
+        if (baby_candidate) {
+            candidate = dcon::item_id{};
+            cicada_candidate = dcon::creature_id{};
         }
         // a carried cicada takes both hands (grasps[0], HeavyCarry)
         auto const carried = cicada::held_by(state, p);
@@ -1593,20 +1692,47 @@ namespace items {
             want_throw = 0;
         }
         if (want_throw > 0) {
-            for (uint32_t hand = 0; hand < 2; ++hand)
+            for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (auto const g = grasp_in_hand(state, p, hand)) {
                     throw_object(state, p, g, room);
                     want_throw = 0;
                     break;
                 }
+                if (auto const c = centipede::held_in_hand(state, p, hand)) {
+                    toss_creature(state, p, c);
+                    centipede::release(state, c);
+                    want_throw = 0;
+                    break;
+                }
+            }
         }
+
+        // Player.GrabUpdate's eating: pick up held down, standing still,
+        // bites every 15 ticks (eatCounter)
+        bool eating = false;
+        int32_t& eat_counter = w.player_get_eat_counter(p);
+        if (edible && want_pick < 1 && (input[0].pckp || eat_counter <= 15) && w.player_get_stun(p) <= 0 && !w.player_get_dead(p)) {
+            auto const main = player::body_chunk(state, p, 0);
+            if (custom::dist_less(w.body_chunk_get_pos(main), w.body_chunk_get_last_pos(main), 3.6f)) {
+                eating = true;
+                if (w.player_get_food(p) < max_food(w.player_get_stats(p).name) && eat_counter < 1) {
+                    eat_counter = 15;
+                    bite(state, p, edible);
+                }
+            }
+        }
+        if (eating && eat_counter > 0)
+            --eat_counter;
+        else if (!eating && eat_counter < 40)
+            ++eat_counter;
+
         if (want_pick <= 0)
             return;
 
         // holding down while pressing pick up drops the held item
         bool drop = true;
         if (w.player_get_animation(p) == ::player::animation_index::deep_swim) {
-            if (!grasp_in_hand(state, p, 0) && !grasp_in_hand(state, p, 1)) {
+            if (!hand_busy(state, p, 0) && !hand_busy(state, p, 1)) {
                 drop = false;
             } else {
                 for (int i = 0; i < 10; ++i)
@@ -1631,12 +1757,12 @@ namespace items {
             return;
         }
         if (drop) {
-            if (!grasp_in_hand(state, p, 0) && !grasp_in_hand(state, p, 1) && back_spear(state, p)
+            if (!hand_busy(state, p, 0) && !hand_busy(state, p, 1) && back_spear(state, p)
             && w.body_chunk_get_contact_point(player::body_chunk(state, p, 0)).y < 0) {
                 drop_back_spear(state, p);
                 return;
             }
-            for (uint32_t hand = 0; hand < 2; ++hand)
+            for (uint32_t hand = 0; hand < 2; ++hand) {
                 if (auto const g = grasp_in_hand(state, p, hand)) {
                     want_pick = 0;
                     // Player.ReleaseObject
@@ -1645,22 +1771,38 @@ namespace items {
                     release_grasp(state, p, g);
                     return;
                 }
+                if (auto const c = centipede::held_in_hand(state, p, hand)) {
+                    want_pick = 0;
+                    state.play_sound(sound::sound_id::slugcat_lay_down_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, c, 0)));
+                    centipede::release(state, c);
+                    return;
+                }
+            }
         } else if (cicada_candidate) {
             // TwoHands: whatever the hands hold is let go of first
             release_all(state, p);
             state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(cicada::chunk(state, cicada_candidate, 0)));
             cicada::grab(state, p, cicada_candidate);
             want_pick = 0;
+        } else if (baby_candidate) {
+            // OneHand: into a free hand
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (!hand_busy(state, p, hand)) {
+                    state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, baby_candidate, 0)));
+                    centipede::grab(state, p, baby_candidate, hand);
+                    break;
+                }
+            want_pick = 0;
         } else if (candidate) {
             // a spear goes straight to the back when the hands are full
             if (hunter(state, p) && is_spear(state, candidate) && !w.player_get_back_locked(p) && !back_spear(state, p)
-            && grasp_in_hand(state, p, 0) && grasp_in_hand(state, p, 1)) {
+            && hand_busy(state, p, 0) && hand_busy(state, p, 1)) {
                 spear_to_back(state, p, candidate);
                 want_pick = 0;
                 return;
             }
             for (uint32_t hand = 0; hand < 2; ++hand)
-                if (!grasp_in_hand(state, p, hand)) {
+                if (!hand_busy(state, p, hand)) {
                     grab(state, p, candidate, hand);
                     break;
                 }

@@ -31,6 +31,10 @@ namespace sprites {
         // VertexColorSprite's top left, top right, bottom right, bottom left
         bool vertex_colors = false;
         rw::vec4 vcol[4];
+        // a CustomFSprite: the sprite's element stretched over four free
+        // corners in the same order (spr's position, rotation and scale unused)
+        bool is_quad = false;
+        rw::vec2 quad[4];
     };
 
     inline void add(std::vector<draw_cmd>& out, sprite const& s) {
@@ -45,6 +49,18 @@ namespace sprites {
         c.vertex_colors = true;
         for (int i = 0; i < 4; ++i)
             c.vcol[i] = corners[i];
+        out.push_back(c);
+    }
+    // CustomFSprite (MoveVertice 0..3, verticeColors)
+    inline void add_quad(std::vector<draw_cmd>& out, std::string_view element, rw::vec2 const (&corners)[4], rw::vec4 const (&colors)[4]) {
+        draw_cmd c;
+        c.spr.element = element;
+        c.is_quad = true;
+        c.vertex_colors = true;
+        for (int i = 0; i < 4; ++i) {
+            c.quad[i] = corners[i];
+            c.vcol[i] = colors[i];
+        }
         out.push_back(c);
     }
     // TriangleMesh.MakeLongMesh: triangles (k, k + 1, k + 2) over the vertices

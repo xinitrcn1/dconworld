@@ -39,9 +39,12 @@ pass several `--root`s and earlier ones take priority (mergedmods over base).
 `RW_ROOT` can also point at `StreamingAssets`.
 
 Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
-(hold down while pressing it to drop), push into a pipe entrance to travel it,
+(hold down while pressing it to drop; hold it with a baby centipede in hand to
+eat it), push into a pipe entrance to travel it,
 stand still in a gate's middle zone to cycle it, K spawns a centipede at the
-cursor (Shift+K a big one, Ctrl+K removes them all), V spawns a dropwig on the
+cursor (Shift+K the next variant: centipede, baby, centiwing, red, aquapede;
+Ctrl+K removes them all), O spawns three leeches at the cursor (Shift+O the next
+variant: leech, sea leech, jungle leech; Ctrl+O removes them all), V spawns a dropwig on the
 ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada at
 the cursor (Shift+Q a dark one, Ctrl+Q removes them all), Y spawns a lizard at the
 cursor, the next breed each time (Shift+Y the same breed again, Ctrl+Y removes them
@@ -75,21 +78,26 @@ update in parallel are bytes, not bitfields (a bitfield shares its byte with
 seven other objects).
 
 Every creature, whatever its kind, is one `creature` object with a `type`
-tag (`src/creature_types.hpp`). What at least half of the five kinds have is
+tag (`src/creature_types.hpp`). What at least half of the six kinds have is
 a property of its own, stored SoA like everything else: the generator,
 stun, death and health (every kind), the AI's behaviour and destination
-(every kind), the current utility (four), the tracked slugcat, whether it is
-seen, for how long it hasn't been and where it was last (every kind; the
-centipede has no visual contact flag), the grasps on a slugcat (centipede,
-dropwig, lizard), the forbidden idle spot (centipede, squidcada, lizard) and
-the graphics module's generator (every kind); the body is a `physical_object`
-(`creature_body`). What only one kind has is its `payload`, a union of one
-struct per kind of at most 64 bytes (one cache line, `static_assert`ed:
-centipede 64, dropwig 60, squidcada 56, lizard 52, daddy 40 bytes): its
-hottest state and the index of its kind's data object (`centipede_data`,
-`dropbug_data`, `cicada_data`, `lizard_data`, `daddy_data`), which holds the
-rest SoA: AI modules, Lizard.cs' movement, the tongue, the graphics
-modules with the lizard cosmetics. An index in the payload rather than a
+(every kind with an AI: not the leech), the current utility (four), the
+tracked slugcat, whether it is seen, for how long it hasn't been and where it
+was last (every AI; the centipede has no visual contact flag), the grasps on
+a slugcat (centipede, dropwig, lizard, leech), the forbidden idle spot
+(centipede, squidcada, lizard) and the graphics module's generator (every
+kind); the body is a `physical_object` (`creature_body`). What only one kind
+has is its `payload`, a union of one struct per kind of at most 64 bytes (one
+cache line, `static_assert`ed: centipede 64, dropwig 60, squidcada 56,
+lizard 52, leech 48, daddy 40 bytes): its hottest state and the index of its
+kind's data object (`centipede_data`, `dropbug_data`, `cicada_data`,
+`lizard_data`, `daddy_data`, `leech_data`), which holds the rest SoA: AI
+modules, Lizard.cs' movement, the tongue, the centiwing's flight and the
+shells, a leech school's prey, the graphics modules with the lizard
+cosmetics. A kind's variants (the templates one vanilla class runs: the
+centipede's baby, centiwing, red and aquapede, the lizard breeds, the daddy
+long legs, the sea and jungle leeches) are a tag in its payload and
+branches in its code, like vanilla's `if (Centiwing)`. An index in the payload rather than a
 relationship: one load, no link arrays, and the data object is made and
 deleted with its creature anyway.
 
@@ -157,7 +165,7 @@ compares a hash of every body chunk; `--bench` does the same for the whole
 world.
 
 Graphics modules (centipede, dropwig, squidcada, lizard with its
-cosmetics, daddy long legs) only update in viewed rooms, like vanilla where a
+cosmetics, daddy long legs, leech) only update in viewed rooms, like vanilla where a
 creature off screen has no `graphicsModule`. Where the simulation reads the
 graphics module, the off screen path is vanilla's `graphicsModule == null`
 one: `Lizard.LegsGripping` is 2 and `NoGripCounter` 0, the Caramel doesn't
@@ -174,7 +182,7 @@ the whole world on one thread and on every thread. On a 6 core Xeon
 | world | creatures | 1 thread | 6 threads | ticks/s |
 | --- | --- | --- | --- | --- |
 | vanilla, 760 rooms | none (no den spawns yet) | 3.8 ms | 0.87 ms | 1150 |
-| vanilla, 760 rooms | 3525, one of each per room | 53 ms | 9.5 ms | 106 |
+| vanilla, 760 rooms | 4413, one of each per room (every centipede variant in turn) and a leech school in the rooms with water | 59 ms | 10.5 ms | 96 |
 | + Watcher, 2074 rooms | none | 12.8 ms | 2.6 ms | 381 |
 | + Watcher, 2074 rooms | 9705, one of each per room | 175 ms | 29 ms | 34 |
 
@@ -232,8 +240,10 @@ slugcat letting go, the fuzz and the bench then take it as they come.
 | `src/simulation.*` | one tick of the whole world: every room in parallel (TBB), the deferred transactions, vessels and warps; startup population of every room |
 | `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures (by room and kind), items and spit by room, for the parallel room updates |
 | `src/creature.*`, `src/creature_types.hpp` | the `creature` object's type tag and payloads, `creature_part`'s; what every kind shares (body, chunks, Creature.Update's stun countdown, consciousness, collisions with the slugcats and kin, the projectile trace, explosions and flashes, letting go) and the dispatch to the kinds |
-| `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
-| `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
+| `src/centipede.*` | `Centipede`/`CentipedeAI` for every variant (centipede, baby, centiwing, red, aquapede): crawling on any surface, swimming, flying, grabbing, shocking, shells, utility AI, the baby in the slugcat's hand |
+| `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, wings, `DrawSprites` with the game's centipede elements; `CentipedeShell` |
+| `src/leech.*`, `src/leech_types.hpp` | `Leech` (Leech, SeaLeech, JungleLeech): schools (`LeechSchool`), swimming, charging, latching on and dragging down, crawling and drowning on land |
+| `src/leech_graphics.*` | `LeechGraphics`: the wiggling tail and its `TriangleMesh` |
 | `src/dropbug.*` | `DropBug`/`DropBugAI`: the dropwig sitting in the ceiling, dropping on prey, pouncing, biting and carrying, its `CeilingSitModule` |
 | `src/dropbug_graphics.*` | `DropBugGraphics`: long legs and knees, mandibles, tail pincers, antennae, ceiling camouflage, `DrawSprites` with the game's elements |
 | `src/cicada.*` | `Cicada`/`CicadaAI`: the squidcada flying, sitting on the terrain, circling, bump attacks and tentacle clinging, being carried by the slugcat and lifting it |
@@ -301,15 +311,78 @@ system (needed for Downpour/Watcher regions).
 
 ### Creatures
 
-The centipede is the first creature: a chain of body chunks (7 to 17 by
-size) held by push connections and ropes, crawling along floors, walls,
-ceilings and poles with either end leading, turning around when its tail is
-closer to the goal. Its ends grab the slugcat on contact and once the other
-end reaches it too, the shock kills a lighter slugcat or stuns a heavier one
-(big centipedes hunt, small ones flee). Rocks and spears hurt and stun it
-like `Centipede.Violence` (shell breaking and spears lodging aren't
-ported). The AI follows `CentipedeAI`: idle wandering by idle score, fleeing
-and hunting from a simplified tracker (sight and contact).
+The centipede (`--centipede x,y[,size|variant]`, K) is the first creature: a
+chain of body chunks (7 to 17 by size) held by push connections and ropes,
+crawling along floors, walls, ceilings and poles with either end leading,
+turning around when its tail is closer to the goal, and paddling along the
+surface in water (`Centipede.Swim`). Its ends grab the slugcat on contact and
+once the other end reaches it too, the shock kills a lighter slugcat or stuns
+a heavier one (big centipedes hunt, small ones flee). Rocks and spears hurt
+and stun it like `Centipede.Violence`: a hard enough directed blow knocks a
+shell off (`CentipedeState.shells`, a bit per chunk; the `CentipedeShell`
+tumbles away, a cosmetic particle) and a chunk without its shell is hurt
+more (spears lodging isn't ported). The AI follows `CentipedeAI`: idle
+wandering by idle score (fall risk included), fleeing and hunting from a
+simplified tracker (sight and contact), a bigger centipede bumped into
+sending a smaller one elsewhere (`CheckRandomIdlePos`). Every template
+running Centipede.cs is a variant of it, with vanilla's branches and its own
+path field movement from its TileTypeResistances, and the sizes and colours
+rolled from its ID seed (`GenerateSize`, the CentipedeGraphics layout,
+`rw::unity_random`):
+
+- the baby centipede (`small`, SmallCentipede): five tiny chunks, no shells,
+  afraid of everything, a slugcat picks it up with one hand. Held, it charges
+  up and after a second shocks the slugcat (stunned, it drops it); holding
+  pick up while standing still eats it instead (`eatCounter`, a bite every 15
+  ticks, `BitByPlayer`: dead on the first, gone after five, two food pips
+  through `ObjectEaten`; the slugcat's food is a new player property). A
+  spear kills it outright (instantDeathDamageLimit 1).
+- the centiwing (`wing`): lighter, thinner, a third of its idle spots
+  anywhere in the room. It walks where it would rather climb than fly
+  (beams, next to the terrain) and takes off when its path leads over open
+  air or nothing holds it (`wantToFly`, `flyModeCounter`, `wingsStartedUp`),
+  then flies (`Centipede.Fly`: the body waving, the head pulled towards the
+  furthest path tile it can see) and lands on the perch it was heading for.
+  Its path field: crawling, air tiles at the highest resistance (vanilla's
+  +1000); flying, every open tile plus `TravelPreference`'s cost away from
+  the walls. It never rests, sees keenly, is wary of a new slugcat for a
+  while (afraid until the tracker's age reaches 300, prey from 300 to 800),
+  doesn't grab over a pit, always lets go when stunned and stays stunned
+  twice as long. Its wings flap (`CentipedeWing`) and Centiwing_Fly_LOOP
+  buzzes while it flies.
+- the red centipede (`red`): 18 heavy chunks with armour. A hit on a shell
+  glances off in sparks (`Lizard_Head_Shield_Deflect`, 5% of the damage), a
+  heavy one (0.95 and up) knocks it off (three pieces,
+  Red_Centipede_Shield_Falloff); its ends take half. It hunts relentlessly
+  (no rests), sees far and keenly, wants the heavy prey most, and its shock
+  kills. Spikes (`Cicada8body`) and side plates stand on its shells.
+- the aquapede (`aqua`, Downpour's AquaCenti): swims through the water
+  (`AquacentiSwim`: Fly's waving with its own strengths), floats or sinks
+  with what it holds (buoyancy 0.78 and 0.15), keeps to submerged idle spots,
+  glows while calm (its `Glower`, a soft light here) and its shock kills
+  outright (Violence Electric 2, 200). It has fins (`AquapedeWing1-4`) and no
+  legs.
+
+The leeches (`--leech x,y[,sea|jungle]`, O) follow `Leech` and
+`LeechGraphics` (Leech has no AI and no pathfinding). One small chunk that
+swims in schools (`LeechSchool`: joined when two meet, left when a member is
+out of sight or the leech has been alone too long; kept in one member's
+`leech_data`, the members ordered like `LeechSchool.leeches`): the school
+learns of the slugcats around (`ConsiderOtherCreature`, a random creature of
+the room each tick), each leech goes for the closest one it sees (closer
+under water), following the leech ahead of it after the same prey, charges
+and latches on with a little bite. Latched on, it pulls the slugcat down
+(more the deeper it is), so a slugcat with leeches on can't swim up and
+drowns through its own `LungUpdate`; a leech lets go now and then, out of
+the water and when drowning. Out of the water it inches along the ground and
+drowns in about 20 seconds. The sea leech is heavier, pulls harder, keeps to
+a territory column and has a longer body; the jungle leech lives on dry
+land, wanders between floor spots, latches on to a slugcat it bumps into and
+drains its food, then its strength. Rocks stun and spears kill them
+(instantDeathDamageLimit 1). Not ported: snails' clicks scaring them
+(`HeardSnailClick`), fleeing the rain (no rain cycle), going through pipes,
+prey other than slugcats, Remix's grasp wiggling (shaking one off), Safari
+control. Leeches and centipedes are the rot's prey.
 
 The dropwig (`--dropbug x,y`, V) follows `DropBug`/`DropBugAI`: three
 chunks that cling to floors, walls and ceilings (its StaticWorld tile
@@ -535,13 +608,18 @@ zappers flicker) and pearls are drawn with the game's sprites
 (`Rock`/`Spear`/`ExplosiveSpear`/`ElectricSpear`/`DataPearl` DrawSprites);
 the rag's and the pole's JaggedSquare edges, the antlers' OutPostAntler
 paint (approximated from its formula with hashed noise) and the pearls'
-FlatLightBehindTerrain glow (a plain soft disc) are approximations. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand at
+FlatLightBehindTerrain glow (a plain soft disc) are approximations, as are
+the centiwing's and the aquapede's wings (the CicadaWing shader: a pale film
+of the body's hue taking the sheen's colour where it catches the light), the
+aquapede's second shell (the AquapedeBody shader: translucent) and the
+centipedes' LightSources (the shock's flash, the aquapede's Glower: soft
+glows). Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand at
 rest. Dangle fruit (with its stalk), corn plants and centipedes are drawn
 like vanilla (`DangleFruit`, `SeedCob` and `CentipedeGraphics` DrawSprites)
 with the game's own sprites, read from its Unity data at startup; the corn
 plants' layout is rolled with UnityEngine.Random's own generator and seed.
 Without the Unity data they, like the other items, fall back to simple
-shapes of our own. Eating isn't ported.
+shapes of our own. Eating isn't ported but for the baby centipede.
 
 The Watcher's sand is a 1D height map built from the room's TerrainHandles
 (a spline through them) at startup, kept for the session only. Bodies stand on it; their weight slowly presses marks into
@@ -596,7 +674,7 @@ frame; 24 at most.
 
 What loops: the squidcada's wing hum and its bump attack prepare/charge
 variants (CicadaGraphics), the centipede's crawl and its charge's crackle
-(CentipedeGraphics; Centiwing_Fly_LOOP comes with centiwings), the
+and the centiwing's buzz in flight (CentipedeGraphics), the
 lizards' lunge and belly drag (LizardGraphics; neither is in sounds.txt, so
 silent unless a mod adds them, like vanilla), the daddy long legs' and
 brother's digestion (DaddyGraphics), the slugcat's slide loops (belly slide,

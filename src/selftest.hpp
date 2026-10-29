@@ -9,11 +9,14 @@
 #include "world.hpp"
 #include "lizard_types.hpp"
 #include "daddy_types.hpp"
+#include "centipede_types.hpp"
+#include "leech_types.hpp"
 
 namespace selftest {
     // Scripted movement scenarios in synthetic rooms; returns process exit code
     int run();
-    // Random input soak test: a creature of each kind in every room, then
+    // Random input soak test: a creature of each kind in every room (the
+    // centipede and leech variants in turn), then
     // slugcats in every room (a batch of rooms at a time, the whole world
     // ticking), then every room exit pipe
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room);
@@ -24,12 +27,18 @@ namespace selftest {
     // the creatures spawn_creatures put in a room (invalid: no spot found)
     struct world_creatures {
         dcon::creature_id centipede;
+        centipede::variant centipede_variant{};
         dcon::creature_id dropbug;
         dcon::creature_id cicada;
         dcon::creature_id lizard;
         lizard::breed breed{};
         dcon::creature_id daddy;
         daddy::variant variant{};
+        // a little school in the rooms with water (a jungle leech's on dry land)
+        static constexpr uint32_t school = 3;
+        dcon::creature_id leeches[school];
+        leech::variant leech_variant{};
+        // (a leech: the school's first)
         dcon::creature_id& of(creature::type t) noexcept;
     };
     // one creature of each kind in the room, placed with rolls seeded by the

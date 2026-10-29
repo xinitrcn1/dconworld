@@ -4,7 +4,7 @@
 //
 // A creature is one `creature` object (creature_types.hpp, the definitions'
 // comments in dcon_generated.txt) whose `type` says which kind's code runs
-// it: centipede.*, dropbug.*, cicada.*, lizard.*, daddy.*. Whatever doesn't
+// it: centipede.*, dropbug.*, cicada.*, lizard.*, daddy.*, leech.*. Whatever doesn't
 // depend on the kind is here and runs the same for all of them: the body
 // and its chunks, Creature.Update's stun countdown, being conscious, the
 // slugcat references, the projectile trace and Violence's dispatch, letting
@@ -55,6 +55,9 @@ namespace creature {
     }
     inline dcon::daddy_data_id daddy_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::daddy_data_id{dcon::daddy_data_id::value_base_t(w.creature_get_payload(c).daddy.data)};
+    }
+    inline dcon::leech_data_id leech_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::leech_data_id{dcon::leech_data_id::value_base_t(w.creature_get_payload(c).leech.data)};
     }
 
     // every creature of kind `t`, in id order (setup, tests, the serial phases)
@@ -110,11 +113,12 @@ namespace creature {
     // what the spawn tools and the tests ask for: the kind and its variety
     struct spawn_desc {
         type kind = type::centipede;
-        // centipede: the size (< 0 rolled); cicada: 1 a CicadaA (white)
+        // centipede: the size (< 0 rolled; a plain centipede's only); cicada:
+        // 1 a CicadaA (white)
         float size = -1.f;
         // dropbug: moved to the best ceiling spot of the room
         bool relocate = false;
-        // lizard breed, daddy variant
+        // lizard breed, daddy, centipede or leech variant
         uint8_t variety = 0;
     };
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, spawn_desc const& d);
@@ -143,6 +147,8 @@ namespace creature {
         blunt,
         stab,
         explosion,
+        electric,
+        bite,
     };
     // SharedPhysics.TraceProjectileAgainstBodyChunks over the room's
     // creatures, kind by kind: the first kind with a hit, its creature the

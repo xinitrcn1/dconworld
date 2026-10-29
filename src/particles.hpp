@@ -21,12 +21,16 @@ namespace particles {
         dust,   // a puff where something landed or pushed off hard
         bubble, // rising under water
         flash,  // a quick ring where something got hit
+        centipede_shell, // a shell knocked off a centipede (CentipedeShell)
     };
 
     void spawn(sys::game_state& state, dcon::room_id room, kind k, rw::vec2 pos, rw::vec2 vel, float size, float seconds, rw::vec3 color, float alpha = 1.f);
     // droplets thrown up by something hitting the water at `pos`
     void splash(sys::game_state& state, dcon::room_id room, rw::vec2 pos, float strength);
     void bubbles(sys::game_state& state, dcon::room_id room, rw::vec2 pos, int count, float spread);
+    // CentipedeShell: a shell plate tumbling away from `pos`, of the
+    // centipede's hue and saturation, scaled like its sprites
+    void centipede_shell(sys::game_state& state, dcon::room_id room, rw::vec2 pos, rw::vec2 vel, float hue, float saturation, float scale_x, float scale_y);
 
     // effects of the sounds played since `first_sound` (hits, landings, jumps)
     void from_sounds(sys::game_state& state, size_t first_sound);

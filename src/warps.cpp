@@ -4,6 +4,7 @@
 
 #include "warps.hpp"
 #include "cicada.hpp"
+#include "centipede.hpp"
 #include "creature.hpp"
 #include "rooms.hpp"
 #include "items.hpp"
@@ -274,6 +275,7 @@ namespace warps {
                     if (items::grabber(state, it) == p || w.player_get_back_spear(p) == it)
                         w.physical_object_set_room_from_object_location(items::body(state, it), dest.room);
                 });
+                centipede::follow_player(state, p, dest.room, false);
                 items::carry_update(state, p);
                 player_graphics::reset(state, p);
             });

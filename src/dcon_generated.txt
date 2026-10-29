@@ -21,9 +21,10 @@
 //   Every room is simulated all the time, so the creature bounds are for the
 //   whole world, not the realised rooms; the bench's one of each per room
 //   needs ~2100 of each:
-//   creatures -> 16384 (the five kinds' ~10500 for the Watcher bench), and
-//     each kind's data object -> 4096:
-//   centipedes: 17 chunks, 136 push connections each at most
+//   creatures -> 16384 (the five kinds' ~10500 for the Watcher bench, and
+//     the leech schools of the rooms with water), and each kind's data
+//     object -> 4096:
+//   centipedes: 18 chunks (red), 153 push connections each at most
 //   dropbugs: 3 chunks, 3 connections each
 //   cicadas: 2 chunks, 1 connection each
 //   lizards: 3 chunks, 3 connections each; their spit in flight -> 4096
@@ -32,6 +33,7 @@
 //     legs and danglers each -> 65536 tubes (enough for ~2500), so
 //     creature parts -> 131072; their segments, grab paths, tentacle
 //     chunks and graphic segments pooled
+//   leeches: 1 chunk
 //   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
@@ -57,6 +59,7 @@ include{"player_types.hpp"}
 include{"centipede_types.hpp"}
 include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
+include{"leech_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
@@ -696,6 +699,10 @@ object{
 	property{ name{back_flip} type{float} }
 	property{ name{back_locked} type{uint8_t} }
 	property{ name{back_increment} type{uint8_t} }
+	// eating (Player.eatCounter) and PlayerState.foodInStomach, quarterFoodPoints
+	property{ name{eat_counter} type{int32_t} }
+	property{ name{food} type{int32_t} }
+	property{ name{quarter_food} type{int32_t} }
 	// room the music triggers were last armed for (re-armed on entering a room)
 	property{ name{trigger_room} type{room_id} }
 	// vines (Player.vinePos: a climbable rot tube and the position along it)
@@ -972,17 +979,41 @@ relationship{
 	primary_key{creature}
 }
 
-// Centipede (Centipede.cs + CentipedeAI): one chunk per segment
+// Centipede (Centipede.cs + CentipedeAI) in its five templates (the
+// payload's variant): one chunk per segment
 object{
 	name{centipede_data}
 	storage_type{erasable}
 	size{4096}
 	tag{save}
+	// AbstractCreature.ID.RandomSeed (GenerateSize, the graphics' layout)
+	property{ name{seed} type{int32_t} }
 	property{ name{hue} type{float} }
 	// CentipedeGraphics.lightFlash, walkCycle
 	property{ name{light_flash} type{float} }
 	property{ name{walk_cycle} type{float} }
-	// CentipedeGraphics: legs, feelers, body rotations
+	// CentipedeAI.idleCounter; the tracker's age of the slugcat it tracks
+	// (the centiwing's relationship ripens with it)
+	property{ name{idle_counter} type{int32_t} }
+	property{ name{seen_age} type{int32_t} }
+	// the centiwing's flight (wantToFly, flyModeCounter, wingsStartedUp,
+	// outsideLevel) and the flying or swimming body's wave (bodyWave)
+	property{ name{want_to_fly} type{uint8_t} }
+	property{ name{fly_mode_counter} type{int32_t} }
+	property{ name{wings_started_up} type{float} }
+	property{ name{outside_level} type{uint8_t} }
+	property{ name{body_wave} type{float} }
+	// CentipedeState.shells, a bit per chunk, and shellJustFellOff
+	property{ name{shells} type{uint32_t} }
+	property{ name{shell_just_fell_off} type{int8_t} }
+	// the small one: bites left, the slugcat holding it (index + 1, 0 none)
+	// and in which hand
+	property{ name{bites} type{uint8_t} }
+	property{ name{held_by} type{uint8_t} }
+	property{ name{held_hand} type{uint8_t} }
+	// the aquapede's Glower (its LightSource's alpha, 0..0.5)
+	property{ name{glow} type{float} }
+	// CentipedeGraphics: legs, feelers, wings, body rotations
 	property{ name{graphics} type{::centipede::graphics_state} }
 }
 
@@ -1087,6 +1118,29 @@ object{
 	property{ name{ai} type{::daddy::ai_state} }
 	// DaddyGraphics: eyes, the Hunter's dummy, the reactions
 	property{ name{graphics} type{::daddy::graphics_state} }
+}
+
+// Leeches (Leech.cs + LeechGraphics), Leech, SeaLeech and JungleLeech: one
+// chunk. A school (LeechSchool) is kept by one of its leeches: its members
+// point at that leech (payload.school) and come in payload.school_order
+object{
+	name{leech_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed (TargetBodyChunk's SeededRandomRange)
+	property{ name{seed} type{int32_t} }
+	// the school this leech keeps, if any: its prey, the next member's place
+	property{ name{prey} type{::leech::school_prey_list} }
+	property{ name{prey_count} type{uint8_t} }
+	property{ name{next_order} type{uint32_t} }
+	// seaLeechTerritoryTile (x < 0: null), seaLeechFarFromTerritoryCounter,
+	// avoidThisShortCutEntrance
+	property{ name{territory} type{rw::ivec2} }
+	property{ name{far_from_territory} type{int32_t} }
+	property{ name{avoid_shortcut} type{rw::ivec2} }
+	// LeechGraphics: the body parts, their radii, the wiggle
+	property{ name{graphics} type{::leech::graphics_state} }
 }
 
 //

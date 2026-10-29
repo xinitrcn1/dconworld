@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "shortcuts.hpp"
+#include "centipede.hpp"
 #include "cicada.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -38,6 +39,7 @@ namespace shortcuts {
                 if (auto const item = items::held(state, p, hand))
                     w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             cicada::follow_player(state, p, room, false);
+            centipede::follow_player(state, p, room, false);
         }
 
         // Creature/Player.SpitOutOfShortCut
@@ -55,6 +57,7 @@ namespace shortcuts {
             w.player_get_entering_shortcut(p).reset();
             player_graphics::reset(state, p);
             cicada::follow_player(state, p, room.id, true);
+            centipede::follow_player(state, p, room.id, true);
         }
 
         // the vessel heads back to where it came from

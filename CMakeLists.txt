@@ -86,6 +86,8 @@ add_executable(rwcpp
     src/daddy.cpp
     src/daddy_tentacle.cpp
     src/daddy_graphics.cpp
+    src/leech.cpp
+    src/leech_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

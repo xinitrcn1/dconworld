@@ -9,6 +9,8 @@
 #include "daddy_graphics.hpp"
 #include "dropbug.hpp"
 #include "dropbug_graphics.hpp"
+#include "leech.hpp"
+#include "leech_graphics.hpp"
 #include "lizard.hpp"
 #include "lizard_graphics.hpp"
 #include "physics.hpp"
@@ -27,6 +29,7 @@ namespace creature {
         case type::cicada: return "squidcada";
         case type::lizard: return "lizard";
         case type::daddy: return "daddy long legs";
+        case type::leech: return "leech";
         case type::count: break;
         }
         return "creature";
@@ -59,6 +62,10 @@ namespace creature {
             pl.daddy = daddy_payload{};
             pl.daddy.data = uint16_t(w.create_daddy_data().index());
             break;
+        case type::leech:
+            pl.leech = leech_payload{};
+            pl.leech.data = uint16_t(w.create_leech_data().index());
+            break;
         case type::count:
             break;
         }
@@ -73,6 +80,7 @@ namespace creature {
         case type::cicada: w.delete_cicada_data(cicada_data(w, c)); break;
         case type::lizard: w.delete_lizard_data(lizard_data(w, c)); break;
         case type::daddy: w.delete_daddy_data(daddy_data(w, c)); break;
+        case type::leech: w.delete_leech_data(leech_data(w, c)); break;
         case type::count: break;
         }
         // its parts and their data objects
@@ -147,11 +155,12 @@ namespace creature {
 
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 pos, spawn_desc const& d) {
         switch (d.kind) {
-        case type::centipede: return centipede::create(state, room, pos, d.size);
+        case type::centipede: return centipede::create(state, room, pos, d.size, centipede::variant(d.variety % centipede::variant_count));
         case type::dropbug: return dropbug::create(state, room, pos, d.relocate);
         case type::cicada: return cicada::create(state, room, pos, d.size != 0.f);
         case type::lizard: return lizard::create(state, room, pos, lizard::breed(d.variety % lizard::breed_count));
         case type::daddy: return daddy::create(state, room, pos, daddy::variant(d.variety % daddy::variant_count));
+        case type::leech: return leech::create(state, room, pos, leech::variant(d.variety % leech::variant_count));
         case type::count: break;
         }
         return dcon::creature_id{};
@@ -164,6 +173,7 @@ namespace creature {
         case type::cicada: cicada::destroy(state, c); return;
         case type::lizard: lizard::destroy(state, c); return;
         case type::daddy: daddy::destroy(state, c); return;
+        case type::leech: leech::destroy(state, c); return;
         case type::count: return;
         }
     }
@@ -176,7 +186,11 @@ namespace creature {
         auto const& pl = w.creature_get_payload(c);
         switch (w.creature_get_type(c)) {
         case type::centipede:
-            return "centipede at " + at(w.body_chunk_get_pos(chunk(state, c, centipede::head_index(state, c)))) + " behavior " + behavior + dead;
+            return std::string{centipede::to_string(pl.centipede.variant)} + " at " + at(w.body_chunk_get_pos(chunk(state, c, centipede::head_index(state, c))))
+                + " behavior " + behavior + (pl.centipede.flying ? " flying" : "")
+                + (pl.centipede.variant == centipede::variant::small ? ""
+                    : " shells " + std::to_string(__builtin_popcount(w.centipede_data_get_shells(centipede_data(w, c)))) + "/" + std::to_string(chunk_count(state, c)))
+                + dead;
         case type::dropbug:
             return "dropbug at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + " behavior " + behavior
                 + (dropbug::sitting_in_ceiling(state, c) ? " in the ceiling" : "") + dead;
@@ -201,6 +215,10 @@ namespace creature {
                 + " legs " + std::to_string(daddy::legs_gripping(state, c)) + "/" + std::to_string(pl.daddy.tentacle_count)
                 + (held ? " holding the slugcat" : "") + (eating ? " eating the slugcat" : "") + dead;
         }
+        case type::leech:
+            return std::string{leech::to_string(pl.leech.variant)} + " at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + " school of "
+                + std::to_string(leech::school_size(state, c)) + (leech::attached_to(state, c) ? " latched on to the slugcat" : "")
+                + (pl.leech.hunt_prey ? " hunting" : "") + dead;
         case type::count:
             break;
         }
@@ -256,6 +274,11 @@ namespace creature {
                 if (viewed)
                     daddy_graphics::update(state, c, room);
                 return;
+            case type::leech:
+                leech::update(state, c, room);
+                if (viewed)
+                    leech_graphics::update(state, c, room);
+                return;
             case type::count:
                 return;
             }
@@ -265,11 +288,13 @@ namespace creature {
         // carries, a slugcat in a pipe or being eaten don't)
         bool collides(sys::game_state const& state, dcon::creature_id c, dcon::player_id p, dcon::room_id room) {
             switch (state.world.creature_get_type(c)) {
-            case type::centipede: return !state.world.player_get_in_shortcut(p);
+            case type::centipede: return centipede::collides(state, c, p);
             case type::dropbug: return dropbug::collides(state, c, p);
             case type::cicada: return cicada::collides(state, c, p, room);
             case type::lizard: return lizard::collides(state, c, p, room);
             case type::daddy: return daddy::collides(state, c, p, room);
+            // a leech is in another collision layer than the slugcat
+            case type::leech: return false;
             case type::count: break;
             }
             return false;
@@ -283,6 +308,7 @@ namespace creature {
             case type::cicada: cicada::collide_player(state, c, i, p, j); return;
             case type::lizard: lizard::collide_player(state, c, room, i, p, j); return;
             case type::daddy: daddy::collide_player(state, c, i, p, j); return;
+            case type::leech: return;
             case type::count: return;
             }
         }
@@ -292,6 +318,7 @@ namespace creature {
         bool pushes_kin(type t) noexcept { return t != type::daddy; }
         void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id other, uint32_t j) {
             switch (state.world.creature_get_type(c)) {
+            case type::centipede: centipede::collide_kin(state, c, i, other, j); return;
             case type::dropbug: dropbug::collide_kin(state, c, i, other, j); return;
             case type::cicada: cicada::collide_kin(state, c, i, other, j); return;
             default: return;
@@ -363,6 +390,7 @@ namespace creature {
                 return;
             }
             case type::daddy: daddy_graphics::reset(state, c); return;
+            case type::leech: leech_graphics::reset_positions(state, c); return;
             case type::count: return;
             }
         });
@@ -402,11 +430,12 @@ namespace creature {
         uint32_t const k = part.chunk >= 0 ? uint32_t(part.chunk) : 0u;
         bool const explosion = type == damage_type::explosion;
         switch (state.world.creature_get_type(c)) {
-        case type::centipede: centipede::violence(state, c, k, momentum, damage, stun_bonus); return;
+        case type::centipede: centipede::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::dropbug: dropbug::violence(state, c, k, momentum, damage, stun_bonus); return;
         case type::cicada: cicada::violence(state, c, k, momentum, damage, stun_bonus); return;
         case type::lizard: lizard::violence(state, c, k, momentum, damage, stun_bonus, rock, explosion); return;
         case type::daddy: daddy::violence(state, c, part, momentum, damage, stun_bonus, explosion); return;
+        case type::leech: leech::violence(state, c, momentum, damage, stun_bonus); return;
         case type::count: return;
         }
     }
@@ -447,6 +476,7 @@ namespace creature {
         case type::cicada: cicada::release_player(state, c, p); return;
         case type::lizard: lizard::release_player(state, c, p); return;
         case type::daddy: daddy::release_player(state, c, p); return;
+        case type::leech: leech::release_player(state, c, p); return;
         case type::count: return;
         }
     }

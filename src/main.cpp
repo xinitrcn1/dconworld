@@ -14,6 +14,7 @@
 
 #include "audio.hpp"
 #include "centipede.hpp"
+#include "leech.hpp"
 #include "cicada.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
@@ -70,7 +71,8 @@ namespace {
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
-            "  --centipede <x,y[,size]>  spawn a centipede (repeatable)\n"
+            "  --centipede <x,y[,size|variant]>  spawn a centipede of that size (0..1) or a\n"
+            "                      variant: small (baby) wing (centiwing) red aqua (aquapede) (repeatable)\n"
             "  --dropbug <x,y>     spawn a dropwig, on the ceiling above if there is one (repeatable)\n"
             "  --cicada <x,y[,b]>  spawn a squidcada, white (CicadaA) or with b dark (CicadaB) (repeatable)\n"
             "  --lizard <x,y[,breed]>  spawn a lizard (default green): pink green blue yellow white\n"
@@ -78,6 +80,7 @@ namespace {
             "                      blizzard basilisk indigo peach (repeatable)\n"
             "  --daddy <x,y[,variant]>  spawn a daddy long legs (default daddy): daddy\n"
             "                      brother mother (TerrorLongLegs) hunter (repeatable)\n"
+            "  --leech <x,y[,variant]>  spawn a leech (default the red one): sea jungle (repeatable)\n"
             "  --item <x,y,kind[,pearl]>  place an item (repeatable): rock spear explosive\n"
             "                      electric pearl (with a DataPearl type, e.g. cc)\n"
             "  --weaver            the Watcher starts decorated\n"
@@ -88,7 +91,9 @@ namespace {
             "controls: arrows/WASD move, Z/Space jump, X throw, Left Shift pick up/drop\n"
             "          (hold down to drop), push into a pipe entrance to travel it,\n"
             "          R respawn, left click teleport, K spawn a centipede at the cursor\n"
-            "          (Shift+K a big one, Ctrl+K removes them all), V a dropwig on the\n"
+            "          (Shift+K the next variant: centipede, baby, centiwing, red, aquapede;\n"
+            "          Ctrl+K removes them all), O three leeches at the cursor (Shift+O the\n"
+            "          next variant: leech, sea, jungle; Ctrl+O removes them all), V a dropwig on the\n"
             "          ceiling above the cursor (Ctrl+V removes them all), Q a white\n"
             "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
             "          Y a lizard at the cursor, the next breed each time (Shift+Y the same\n"
@@ -387,8 +392,26 @@ int main(int argc, char* argv[]) {
             weaver = true;
         } else if (a == "--centipede") {
             float x = 0.f, y = 0.f, sz = -1.f;
-            if (std::sscanf(next().c_str(), "%f,%f,%f", &x, &y, &sz) >= 2)
-                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::centipede, sz}});
+            char name[32] = "";
+            if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
+                auto v = centipede::variant::centipede;
+                char* end = nullptr;
+                float const f = std::strtof(name, &end);
+                if (name[0] != 0 && end != nullptr && *end == 0)
+                    sz = f;
+                else if (name[0] != 0 && !centipede::parse_variant(name, v))
+                    std::fprintf(stderr, "unknown centipede %s, a centipede instead\n", name);
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::centipede, sz, false, uint8_t(v)}});
+            }
+        } else if (a == "--leech") {
+            float x = 0.f, y = 0.f;
+            char name[32] = "leech";
+            auto v = leech::variant::leech;
+            if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
+                if (!leech::parse_variant(name, v))
+                    std::fprintf(stderr, "unknown leech %s, a leech instead\n", name);
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::leech, -1.f, false, uint8_t(v)}});
+            }
         } else if (a == "--dropbug") {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
@@ -742,12 +765,34 @@ int main(int argc, char* argv[]) {
                         remove_all(creature::type::centipede);
                         break;
                     }
+                    // Shift: on to the next variant
+                    static uint32_t variant = 0;
+                    if ((e.key.mod & SDL_KMOD_SHIFT) != 0)
+                        variant = (variant + 1) % centipede::variant_count;
                     float mx = 0.f, my = 0.f;
                     SDL_GetMouseState(&mx, &my);
                     // same mapping as the teleport click
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
-                    auto const c = centipede::create(gs, a.room, at, (e.key.mod & SDL_KMOD_SHIFT) ? 0.9f : -1.f);
-                    reports::add_log("centipede, size " + std::to_string(gs.world.creature_get_payload(c).centipede.size));
+                    auto const c = centipede::create(gs, a.room, at, -1.f, centipede::variant(variant));
+                    reports::add_log(std::string{centipede::to_string(centipede::variant(variant))} + ", size "
+                        + std::to_string(gs.world.creature_get_payload(c).centipede.size));
+                    break;
+                }
+                case SDLK_O: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        remove_all(creature::type::leech);
+                        break;
+                    }
+                    // Shift: on to the next variant; a little school each time
+                    static uint32_t variant = 0;
+                    if ((e.key.mod & SDL_KMOD_SHIFT) != 0)
+                        variant = (variant + 1) % leech::variant_count;
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    for (int i = 0; i < 3; ++i)
+                        leech::create(gs, a.room, at + vec2{float(i - 1) * 8.f, 0.f}, leech::variant(variant));
+                    reports::add_log(std::string{"3 x "} + leech::to_string(leech::variant(variant)));
                     break;
                 }
                 case SDLK_V: {

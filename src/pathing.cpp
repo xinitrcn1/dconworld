@@ -96,7 +96,8 @@ namespace pathing {
             int32_t const w = room.width, h = room.height;
             dist.assign(size_t(w) * size_t(h), unreachable);
             // a step costs at most 50 * 25.5 + 10 * 25.5 (drop at the highest
-            // resistance, open_air at its most): below the ring's size
+            // resistance, open_air at its most; mid_air adds at most 25.5):
+            // below the ring's size
             constexpr uint32_t ring = 4096;
             static thread_local std::vector<std::vector<uint32_t>> buckets(ring);
             size_t pending = 0;
@@ -152,8 +153,11 @@ namespace pathing {
             auto const enter = [&](ivec2 v, uint32_t base) {
                 uint32_t const r = resistance[index(v)];
                 uint32_t cost = base * (r == 0 ? 10u : r) / 10u;
-                if (proximity != nullptr && std::abs(v.x - goal.x) + std::abs(v.y - goal.y) > 6)
+                if (proximity != nullptr && m.open_air != 0 && std::abs(v.x - goal.x) + std::abs(v.y - goal.y) > 6)
                     cost += uint32_t(10 - std::min<int32_t>((*proximity)[index(v)], 10)) * m.open_air;
+                // the flying centiwing's TravelPreference
+                if (proximity != nullptr && m.mid_air != 0 && (*proximity)[index(v)] >= 2)
+                    cost += uint32_t(rw::custom::lerp_map(float((*proximity)[index(v)]), 1.f, 6.f, float(m.mid_air), 0.f));
                 return cost;
             };
             auto const relax = [&](ivec2 u, uint32_t c) {
@@ -282,7 +286,7 @@ namespace pathing {
         size_t const f = fields.size() < max_fields ? fields.size() : oldest;
         if (f == fields.size())
             fields.emplace_back();
-        auto const* proximity = m.open_air != 0 ? &proximity_map(state, room) : nullptr;
+        auto const* proximity = m.open_air != 0 || m.mid_air != 0 ? &proximity_map(state, room) : nullptr;
         auto const view = world::get_room_view(state, room);
         auto const& acc = access_map(state, view);
         auto& pf = fields[f];

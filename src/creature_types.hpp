@@ -26,6 +26,7 @@
 #include "cicada_types.hpp"
 #include "daddy_types.hpp"
 #include "dropbug_types.hpp"
+#include "leech_types.hpp"
 #include "lizard_types.hpp"
 #include "math.hpp"
 
@@ -38,10 +39,11 @@ namespace creature {
         cicada,
         lizard,
         daddy,
+        leech,
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
-    inline constexpr type all_types[type_count] = {type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy};
+    inline constexpr type all_types[type_count] = {type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech};
 
     // the payload of a kind: what only that kind has, the hottest of it here
     // and its data object's index
@@ -58,12 +60,14 @@ namespace creature {
         float run;
         float excitement;
         rw::ivec2 temp_idle_pos;
-        int32_t idle_counter;
         int32_t annoying_collisions;
         // movement: bodyDirection true means chunk 0 leads
         uint8_t body_direction;
         uint8_t moving;
-        // centipede_data
+        // the template (Centiwing, Small, Red, AquaCenti) and Centipede.flying
+        centipede::variant variant;
+        uint8_t flying;
+        // centipede_data (the variants' own state is there)
         uint16_t data;
     };
 
@@ -154,6 +158,28 @@ namespace creature {
         uint16_t data;
     };
 
+    struct leech_payload {
+        rw::vec2 swim_direction;
+        // offShootGoal (has_goal: not null)
+        rw::vec2 off_shoot_goal;
+        float air_drown;
+        float land_walk_cycle;
+        int32_t charge_counter;
+        int32_t loner_counter;
+        // its place in its school (LeechSchool.leeches is in this order)
+        uint32_t school_order;
+        // the leech whose leech_data keeps its school (creature index)
+        uint16_t school;
+        int8_t land_walk_dir;
+        leech::variant variant;
+        // huntPrey: a slugcat (index + 1, 0 none)
+        uint8_t hunt_prey;
+        uint8_t has_goal;
+        uint8_t flee_from_rain;
+        // leech_data
+        uint16_t data;
+    };
+
     // creature.payload: the struct of the creature's type
     union payload {
         centipede_payload centipede;
@@ -161,6 +187,7 @@ namespace creature {
         cicada_payload cicada;
         lizard_payload lizard;
         daddy_payload daddy;
+        leech_payload leech;
 
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
@@ -170,6 +197,7 @@ namespace creature {
     static_assert(sizeof(cicada_payload) <= 64);
     static_assert(sizeof(lizard_payload) <= 64);
     static_assert(sizeof(daddy_payload) <= 64);
+    static_assert(sizeof(leech_payload) <= 64);
     static_assert(sizeof(payload) <= 64);
     static_assert(std::is_trivially_copyable_v<payload>);
 

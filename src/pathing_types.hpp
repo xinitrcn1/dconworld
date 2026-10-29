@@ -18,15 +18,31 @@ namespace pathing {
     // `open_air` is CicadaPather's preference for open space: tenths added
     // to a step per tile its destination is closer than 10 to the terrain
     // (AImap.terrainProximity), away from the goal
+    // `mid_air` is the flying centiwing's CentipedeAI.TravelPreference:
+    // LerpMap(terrainProximity, 1, 6, mid_air, 0) tenths added to a step
+    // onto a tile 2 or more tiles from the terrain (vanilla adds up to 500
+    // on top of 1; here up to 50 on top of 10, for the 16 bit costs)
     struct movement {
         uint8_t resistance[access_count] = {};
         uint8_t swim = 0;
         uint8_t open_air = 0;
+        uint8_t mid_air = 0;
         constexpr bool allows(access a) const noexcept { return resistance[uint32_t(a)] != 0; }
         constexpr bool operator==(movement const&) const = default;
     };
-    // Centipede: every surface, at one cost
+    // Centipede: every surface, at one cost (SmallCentipede and
+    // RedCentipede inherit it)
     inline constexpr movement climber{{10, 10, 10, 10, 10, 0, 0}, 0};
+    // Centiwing: Air at 1, so every open tile. Crawling, TravelPreference
+    // adds 1000 to a step onto a tile it wouldn't rather climb than fly
+    // over: here the air tiles cost the most a resistance can (25.5);
+    // flying, it adds the mid air cost
+    inline constexpr movement centiwing_crawl{{10, 10, 10, 10, 10, 255, 0}, 0};
+    inline constexpr movement centiwing_fly{{10, 10, 10, 10, 10, 10, 0}, 0, 0, 50};
+    // AquaCenti: WaterOnly, swims at 1; floors and corridors Unwanted at 1,
+    // poles at 10, walls and ceilings at 100 (Unwanted: only when there is
+    // no other way, here the dearest resistances)
+    inline constexpr movement aquacenti{{200, 200, 250, 255, 255, 0, 0}, 10};
     // DropBug: floors and corridors at 1, poles at 1.5, walls and ceilings
     // at 3 (it swims on the surface only: AirAndSurface)
     inline constexpr movement drop_bug{{10, 10, 15, 30, 30, 0, 0}, 0};

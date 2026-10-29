@@ -17,6 +17,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "dropbug.hpp"
+#include "leech.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
@@ -583,6 +584,140 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " flees=%d stunned=%d", int(flees), int(stunned));
             r.check("small centipede flees, spears stun", flees && stunned && !s.dead(), s.describe() + d);
             centipede::destroy(gs, c);
+        }
+        {
+            // a centiwing on one ledge flies over a bottomless pit to the
+            // other one and lands there (the slugcat shut away out of sight)
+            int32_t const wd = 44, ht = 26;
+            std::vector<std::string> rows;
+            for (int32_t r0 = 0; r0 < ht; ++r0) {
+                int32_t const y = ht - 1 - r0;
+                std::string row(size_t(wd), ' ');
+                for (int32_t x = 0; x < wd; ++x) {
+                    bool const border = x == 0 || x == wd - 1 || y == ht - 1;
+                    bool const ledge = y < 10 && (x < 10 || x > 33);
+                    bool const closet = y >= 19 && x < 7 && !(y >= 21 && y <= 22 && x > 1 && x < 5);
+                    row[size_t(x)] = border || ledge || closet ? '#' : ' ';
+                }
+                rows.push_back(row);
+            }
+            auto const gap = make_room(gs, region, rows);
+            sim s(gs, gap, feet_at(3, 21));
+            auto const c = centipede::create(gs, gap, world::room_view::middle_of_tile(6, 10), -1.f, centipede::variant::wing);
+            ivec2 const target{38, 10};
+            gs.world.creature_set_destination(c, target);
+            gs.world.creature_get_payload(c).centipede.temp_idle_pos = target;
+            bool flew = false;
+            float lowest = 1e9f;
+            auto const head = [&] { return gs.world.body_chunk_get_pos(centipede::chunk(gs, c, centipede::head_index(gs, c))); };
+            bool const landed = s.until(2000, [&] {
+                bool const flying = gs.world.creature_get_payload(c).centipede.flying;
+                flew = flew || flying;
+                for (uint32_t i = 0; i < centipede::chunk_count(gs, c); ++i)
+                    lowest = std::min(lowest, gs.world.body_chunk_get_pos(centipede::chunk(gs, c, i)).y);
+                return flew && !flying && world::room_view::get_tile_position(head()).x > 33;
+            });
+            char d[128];
+            std::snprintf(d, sizeof(d), " flew=%d landed=%d head=(%.0f,%.0f) lowest=%.0f", int(flew), int(landed), head().x, head().y, lowest);
+            r.check("centiwing flies over a gap", flew && landed && lowest > 100.f, s.describe() + d);
+            centipede::destroy(gs, c);
+        }
+        {
+            // a red centipede hunts the slugcat down and its shock kills it;
+            // a heavy blow on a shell knocks it off but glances off the armour
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, pit, feet_at(8, 1));
+            auto const c = centipede::create(gs, pit, feet_at(30, 1), -1.f, centipede::variant::red);
+            bool const killed = s.until(3000, [&] { return s.dead(); });
+            uint32_t k = centipede::chunk_count(gs, c) / 2;
+            while (k + 1 < centipede::chunk_count(gs, c) && !centipede::has_shell(gs, c, k))
+                ++k;
+            bool const had = centipede::has_shell(gs, c, k);
+            float const health = gs.world.creature_get_health(c);
+            centipede::violence(gs, c, k, vec2{2.f, 0.f}, 1.f, 0.f, creature::damage_type::stab);
+            bool const off = had && !centipede::has_shell(gs, c, k);
+            float const hurt = health - gs.world.creature_get_health(c);
+            char d[128];
+            std::snprintf(d, sizeof(d), " chunks=%u killed=%d shell off=%d hurt=%.4f", centipede::chunk_count(gs, c), int(killed), int(off), hurt);
+            r.check("red centipede kills, sheds shells", killed && off && hurt < 0.05f && centipede::chunk_count(gs, c) == 18, s.describe() + d);
+            centipede::destroy(gs, c);
+        }
+        {
+            // a baby centipede is picked up with one hand and eaten bite by
+            // bite (two food pips); one held without eating it shocks the slugcat
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, pit, feet_at(10, 1));
+            auto const c = centipede::create(gs, pit, feet_at(11, 1), -1.f, centipede::variant::small);
+            s.run(5);
+            s.step(0, 0, false, false, true);
+            s.step();
+            bool const held = centipede::held_in_hand(gs, s.p, 0) == c || centipede::held_in_hand(gs, s.p, 1) == c;
+            int32_t const food0 = gs.world.player_get_food(s.p);
+            bool const eaten = s.until(400, [&] { return !creature::is(gs.world, c, creature::type::centipede); }, 0, 0, false, true);
+            int32_t const food = gs.world.player_get_food(s.p) - food0;
+            auto const c2 = centipede::create(gs, pit, s.pos(1) + vec2{14.f, 0.f}, -1.f, centipede::variant::small);
+            s.run(3);
+            s.step(0, 0, false, false, true);
+            s.step();
+            bool const held2 = centipede::held_in_hand(gs, s.p, 0) == c2 || centipede::held_in_hand(gs, s.p, 1) == c2;
+            bool const shocked = s.until(200, [&] { return s.stun() > 0; });
+            bool const dropped = !centipede::held_in_hand(gs, s.p, 0) && !centipede::held_in_hand(gs, s.p, 1);
+            char d[128];
+            std::snprintf(d, sizeof(d), " held=%d eaten=%d food=%d held2=%d shocked=%d dropped=%d", int(held), int(eaten), food, int(held2), int(shocked), int(dropped));
+            r.check("baby centipede eaten, or shocks", held && eaten && food == 2 && held2 && shocked && dropped && !s.dead(), s.describe() + d);
+            if (creature::is(gs.world, c2, creature::type::centipede))
+                centipede::destroy(gs, c2);
+        }
+        {
+            // an aquapede swims about under the water, lit by its Glower
+            auto const pool = make_room(gs, region, box(40, 24, [](int32_t, int32_t) { return ' '; }), 18);
+            sim s(gs, pool, feet_at(3, 20));
+            auto const c = centipede::create(gs, pool, world::room_view::middle_of_tile(20, 8), -1.f, centipede::variant::aqua);
+            vec2 const start = gs.world.body_chunk_get_pos(centipede::chunk(gs, c, 0));
+            uint32_t under = 0;
+            for (int t = 0; t < 300; ++t) {
+                s.step();
+                if (physics::object_submersion(gs, s.room, centipede::body(gs, c)) > 0.5f)
+                    ++under;
+            }
+            float const moved = rw::distance(start, gs.world.body_chunk_get_pos(centipede::chunk(gs, c, 0)));
+            float const glow = gs.world.centipede_data_get_glow(creature::centipede_data(gs.world, c));
+            char d[128];
+            std::snprintf(d, sizeof(d), " under=%u/300 moved=%.0f glow=%.2f", under, moved, glow);
+            r.check("aquapede swims under water", under > 280 && moved > 40.f && glow > 0.f, s.describe() + d);
+            centipede::destroy(gs, c);
+        }
+        {
+            // a school of leeches finds the slugcat at the bottom of their
+            // pool, latches on and holds it down: it runs out of breath far
+            // more than floating up alone
+            auto const run_pool = [&](int leeches, uint32_t& most, bool& schooled) {
+                auto const pool = make_room(gs, region, box(40, 24, [](int32_t, int32_t) { return ' '; }), 18);
+                sim s(gs, pool, feet_at(20, 3));
+                std::vector<dcon::creature_id> ls;
+                for (int i = 0; i < leeches; ++i)
+                    ls.push_back(leech::create(gs, pool, world::room_view::middle_of_tile(14 + i, 3)));
+                float air = 1.f;
+                for (int t = 0; t < 2000; ++t) {
+                    s.step();
+                    uint32_t on = 0;
+                    for (auto const l : ls)
+                        on += leech::attached_to(gs, l) == s.p ? 1 : 0;
+                    most = std::max(most, on);
+                    schooled = schooled || (!ls.empty() && leech::school_size(gs, ls[0]) > 1);
+                    air = std::min(air, gs.world.player_get_air_in_lungs(s.p));
+                }
+                for (auto const l : ls)
+                    leech::destroy(gs, l);
+                return air;
+            };
+            uint32_t most = 0, none = 0;
+            bool schooled = false, alone_schooled = false;
+            float const air = run_pool(5, most, schooled);
+            float const alone = run_pool(0, none, alone_schooled);
+            char d[128];
+            std::snprintf(d, sizeof(d), "schooled=%d latched=%u air %.2f (%.2f without leeches)", int(schooled), most, air, alone);
+            r.check("leeches latch on, drag it under", schooled && most > 0 && air < alone - 0.1f, d);
         }
         {
             // a dropwig waits in the ceiling, drops on the slugcat walking
@@ -1467,6 +1602,7 @@ namespace selftest {
         case creature::type::cicada: return cicada;
         case creature::type::lizard: return lizard;
         case creature::type::daddy: return daddy;
+        case creature::type::leech: return leeches[0];
         case creature::type::count: break;
         }
         return centipede;
@@ -1476,9 +1612,12 @@ namespace selftest {
         world_creatures out;
         auto const room = world::get_room_view(gs, rid);
         uint32_t const k0 = uint32_t(rid.index()) * 2654435761u;
-        // the next lizard breed and daddy long legs variant in every room
+        // the next lizard breed, daddy long legs, centipede and leech variant
+        // in every room
         out.breed = lizard::breed(uint32_t(rid.index()) % lizard::breed_count);
         out.variant = daddy::variant(uint32_t(rid.index()) % daddy::variant_count);
+        out.centipede_variant = centipede::variant(uint32_t(rid.index()) % centipede::variant_count);
+        out.leech_variant = leech::variant(uint32_t(rid.index()) % leech::variant_count);
         for (auto const t : creature::all_types) {
             // each kind rolls its spot from its own seed
             uint32_t salt = 0;
@@ -1488,6 +1627,7 @@ namespace selftest {
             case creature::type::cicada: salt = 0xC1CADAu; break;
             case creature::type::lizard: salt = 0x112A2Du; break;
             case creature::type::daddy: salt = 0xDADD1u; break;
+            case creature::type::leech: salt = 0x1EEC4u; break;
             case creature::type::count: break;
             }
             rw::rng rng{(k0 ^ salt) | 1u};
@@ -1498,10 +1638,13 @@ namespace selftest {
                 bool ok = false;
                 switch (t) {
                 case creature::type::centipede:
-                    // somewhere it can stand, any size
-                    ok = pathing::accessible(room, tile, pathing::climber);
-                    if (ok)
+                    // somewhere it can stand (an aquapede in the water if
+                    // there is any), any size
+                    ok = pathing::accessible(room, tile, out.centipede_variant == centipede::variant::aqua ? pathing::aquacenti : pathing::climber);
+                    if (ok) {
                         d.size = rng.value();
+                        d.variety = uint8_t(out.centipede_variant);
+                    }
                     break;
                 case creature::type::dropbug:
                     // placed in the room's best ceiling spot like a story session does
@@ -1524,11 +1667,21 @@ namespace selftest {
                     ok = pathing::accessible(room, tile, pathing::daddy) && pathing::terrain_proximity(room, tile) > 1;
                     d.variety = uint8_t(out.variant);
                     break;
+                case creature::type::leech:
+                    // under the water (a jungle leech on the ground)
+                    ok = out.leech_variant == leech::variant::jungle ? pathing::accessible(room, tile, pathing::standard_ground) && !room.get_tile(tile).solid()
+                                                                     : room.get_tile(tile).water == 1 && !room.get_tile(tile).solid();
+                    d.variety = uint8_t(out.leech_variant);
+                    break;
                 case creature::type::count:
                     break;
                 }
-                if (ok)
+                if (ok && t == creature::type::leech) {
+                    for (uint32_t i = 0; i < world_creatures::school; ++i)
+                        out.leeches[i] = creature::create(gs, rid, world::room_view::middle_of_tile(tile) + vec2{float(i) * 6.f - 6.f, 0.f}, d);
+                } else if (ok) {
                     id = creature::create(gs, rid, world::room_view::middle_of_tile(tile), d);
+                }
             }
         }
         return out;
@@ -1558,7 +1711,8 @@ namespace selftest {
         // unvisited), with random input
         constexpr uint32_t batch = 128;
         std::vector<world_creatures> creatures(size_t(w.room_size()));
-        uint32_t lizards = 0, daddies = 0, bugs_in_ceiling = 0;
+        uint32_t lizards = 0, daddies = 0, bugs_in_ceiling = 0, leeches = 0, schools = 0;
+        uint32_t centipedes_of[centipede::variant_count] = {}, shells_before = 0;
         w.for_each_room([&](dcon::room_id rid) {
             auto& c = creatures[size_t(rid.index())];
             c = spawn_creatures(gs, rid);
@@ -1566,6 +1720,13 @@ namespace selftest {
             daddies += c.daddy ? 1 : 0;
             if (c.dropbug && dropbug::sitting_in_ceiling(gs, c.dropbug))
                 ++bugs_in_ceiling;
+            if (c.centipede) {
+                ++centipedes_of[uint32_t(c.centipede_variant)];
+                shells_before += uint32_t(__builtin_popcount(w.centipede_data_get_shells(creature::centipede_data(w, c.centipede))));
+            }
+            for (auto const l : c.leeches)
+                leeches += l ? 1 : 0;
+            schools += c.leeches[0] ? 1 : 0;
         });
         std::vector<dcon::player_id> players;
         for (uint32_t i = 0; i < batch; ++i)
@@ -1578,6 +1739,8 @@ namespace selftest {
         uint32_t cicadas_sat = 0, cicadas_charged = 0, cicadas_lost = 0, cicadas_held = 0, cicadas_carried = 0;
         uint32_t lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
         uint32_t daddies_gripped = 0, daddies_hunted = 0, daddies_held = 0, daddies_ate = 0, daddies_lost = 0;
+        uint32_t wings_flew = 0, babies_held = 0, babies_eaten = 0, aquapedes_swam = 0;
+        uint32_t leeches_latched = 0, leeches_drowned_slugcat = 0, leeches_lost = 0;
         // what happened in a visited room
         struct visit {
             dcon::room_id room;
@@ -1589,6 +1752,8 @@ namespace selftest {
             bool bug_dropped = false, cicada_sat = false, cicada_charged = false, cicada_held = false;
             bool lizard_hunted = false, lizard_bit = false, lizard_tongued = false, lizard_jumped = false, lizard_spat = false, lizard_swam = false;
             bool daddy_gripped = false, daddy_hunted = false, daddy_held = false, daddy_ate = false;
+            bool wing_flew = false, baby_held = false, baby_eaten = false, aqua_swam = false;
+            bool leech_latched = false;
         };
         std::vector<dcon::room_id> all;
         w.for_each_room([&](dcon::room_id rid) { all.push_back(rid); });
@@ -1633,8 +1798,24 @@ namespace selftest {
                     }
                     auto const& c = creatures[size_t(x.room.index())];
                     bool finite = finite_chunks(gs, player::body(gs, x.p));
-                    if (c.centipede)
-                        finite = finite && finite_chunks(gs, centipede::body(gs, c.centipede));
+                    if (c.centipede) {
+                        auto const cc = c.centipede;
+                        if (creature::is(w, cc, creature::type::centipede)) {
+                            finite = finite && finite_chunks(gs, centipede::body(gs, cc));
+                            auto const& cp = w.creature_get_payload(cc).centipede;
+                            x.wing_flew = x.wing_flew || (cp.variant == centipede::variant::wing && cp.flying);
+                            x.baby_held = x.baby_held || (cp.variant == centipede::variant::small && w.centipede_data_get_held_by(creature::centipede_data(w, cc)) == x.p.index() + 1);
+                            x.aqua_swam = x.aqua_swam || (cp.variant == centipede::variant::aqua
+                                && physics::object_submersion(gs, world::get_room_view(gs, x.room), centipede::body(gs, cc)) > 0.5f);
+                        } else {
+                            x.baby_eaten = x.baby_eaten || c.centipede_variant == centipede::variant::small;
+                        }
+                    }
+                    for (auto const l : c.leeches)
+                        if (l && creature::is(w, l, creature::type::leech)) {
+                            finite = finite && finite_chunks(gs, leech::body(gs, l));
+                            x.leech_latched = x.leech_latched || leech::attached_to(gs, l) == x.p;
+                        }
                     if (c.dropbug) {
                         finite = finite && finite_chunks(gs, dropbug::body(gs, c.dropbug));
                         x.bug_dropped = x.bug_dropped || w.creature_get_payload(c.dropbug).dropbug.from_ceiling_jump;
@@ -1678,7 +1859,7 @@ namespace selftest {
                 auto const name = std::string{gs.to_string_view(w.room_get_name(x.room))};
                 auto const& c = creatures[size_t(x.room.index())];
                 auto const in_room = [&](dcon::physical_object_id o) { return w.physical_object_get_room_from_object_location(o) == x.room; };
-                if (c.centipede && in_room(centipede::body(gs, c.centipede))) {
+                if (c.centipede && creature::is(w, c.centipede, creature::type::centipede) && in_room(centipede::body(gs, c.centipede))) {
                     vec2 const hp = w.body_chunk_get_pos(centipede::chunk(gs, c.centipede, 0));
                     if (left_room(room, hp) && ++lost <= 5)
                         std::printf("  centipede left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
@@ -1719,6 +1900,19 @@ namespace selftest {
                 daddies_hunted += x.daddy_hunted ? 1 : 0;
                 daddies_held += x.daddy_held ? 1 : 0;
                 daddies_ate += x.daddy_ate ? 1 : 0;
+                wings_flew += x.wing_flew ? 1 : 0;
+                babies_held += x.baby_held ? 1 : 0;
+                babies_eaten += x.baby_eaten ? 1 : 0;
+                aquapedes_swam += x.aqua_swam ? 1 : 0;
+                leeches_latched += x.leech_latched ? 1 : 0;
+                if (x.leech_latched && w.player_get_dead(x.p))
+                    ++leeches_drowned_slugcat;
+                for (auto const l : c.leeches)
+                    if (l && creature::is(w, l, creature::type::leech) && in_room(leech::body(gs, l))) {
+                        vec2 const hp = w.body_chunk_get_pos(leech::chunk(gs, l, 0));
+                        if (left_room(room, hp) && ++leeches_lost <= 5)
+                            std::printf("  %s left %s at (%.0f, %.0f)\n", leech::to_string(c.leech_variant), name.c_str(), hp.x, hp.y);
+                    }
                 if (w.player_get_eaten(x.p))
                     ++eaten;
                 else if (w.player_get_dead(x.p))
@@ -1736,10 +1930,21 @@ namespace selftest {
             std::printf("%u creatures with a non finite position\n", unvisited_bad);
         bad += unvisited_bad;
         uint32_t const world_ticks = gs.tick;
-        for (auto& c : creatures)
+        uint32_t shells_after = 0, leeches_dead = 0;
+        for (auto& c : creatures) {
+            if (c.centipede && creature::is(w, c.centipede, creature::type::centipede))
+                shells_after += uint32_t(__builtin_popcount(w.centipede_data_get_shells(creature::centipede_data(w, c.centipede))));
+            for (auto const l : c.leeches)
+                leeches_dead += l && creature::is(w, l, creature::type::leech) && w.creature_get_dead(l) ? 1 : 0;
+        }
+        for (auto& c : creatures) {
             for (auto const t : creature::all_types)
                 if (auto const id = c.of(t); id && creature::is(w, id, t))
                     creature::destroy(gs, id);
+            for (auto const l : c.leeches)
+                if (l && creature::is(w, l, creature::type::leech))
+                    creature::destroy(gs, l);
+        }
 
         uint32_t rocks = 0;
         w.for_each_item([&](dcon::item_id) { ++rocks; });
@@ -1753,6 +1958,11 @@ namespace selftest {
         std::printf("scavenger loot: %u outposts with %u toll spears and %u pearl strings (%u pearls), %u treasuries with %u items, %u data pearls placed in all\n",
             w.outpost_size(), tolls, w.pearl_string_size(), strung, w.treasury_size(), loot, pearls);
         std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
+        std::printf("centipede variants (in turn): %u plain, %u baby (%u picked up, %u eaten), %u centiwings (%u flew), %u red, %u aquapedes (%u swam); %u shells knocked off\n",
+            centipedes_of[0], centipedes_of[1], babies_held, babies_eaten, centipedes_of[2], wings_flew, centipedes_of[3], centipedes_of[4], aquapedes_swam,
+            shells_before - std::min(shells_before, shells_after));
+        std::printf("leeches: %u in %u schools (every variant in turn, in the rooms with water), %u latched on to the slugcat (%u of those slugcats died), %u died, %u fell out of their room\n",
+            leeches, schools, leeches_latched, leeches_drowned_slugcat, leeches_dead, leeches_lost);
         std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
         std::printf("squidcadas: one per room, %u sat down, %u bump attacked, %u picked up (%u carried through a pipe), %u fell out of their room\n",
             cicadas_sat, cicadas_charged, cicadas_held, cicadas_carried, cicadas_lost);
@@ -1853,6 +2063,8 @@ namespace selftest {
                 w.for_each_room([&](dcon::room_id rid) {
                     auto const c = spawn_creatures(gs, rid);
                     creatures += (c.centipede ? 1 : 0) + (c.dropbug ? 1 : 0) + (c.cicada ? 1 : 0) + (c.lizard ? 1 : 0) + (c.daddy ? 1 : 0);
+                    for (auto const l : c.leeches)
+                        creatures += l ? 1 : 0;
                 });
             // one slugcat, viewed, standing in the first room
             auto const first = dcon::room_id{0};
