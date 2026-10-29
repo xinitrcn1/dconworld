@@ -5,6 +5,7 @@
 #include "physics.hpp"
 #include "centipede.hpp"
 #include "items.hpp"
+#include "rot.hpp"
 #include "shortcuts.hpp"
 
 // Port notes
@@ -254,7 +255,12 @@ namespace player {
     X(spear_prog) \
     X(spear_row) \
     X(spear_line) \
-    X(spear_sound_ready)
+    X(spear_sound_ready) \
+    X(vine_float_pos) \
+    X(vine_grab_delay) \
+    X(vine_climb_cursor) \
+    X(zero_g_pole_grab_dir) \
+    X(eaten)
 
         // Reference accessors into the data container for one player, so the
         // port reads like the C# ("this.canJump" -> p.can_jump())
@@ -398,6 +404,7 @@ namespace player {
             p.random() = random;
             // id properties come back as fat ids (not references)
             p.state.world.player_set_vessel_shortcut(p.id, dcon::shortcut_id{});
+            p.state.world.player_set_vine(p.id, dcon::rot_tube_id{});
             p.air_in_lungs() = 1.f;
             p.flip_direction() = 1;
             p.last_flip_direction() = 1;
@@ -449,6 +456,7 @@ namespace player {
 
     void destroy(sys::game_state& state, dcon::player_id id) {
         items::release_all(state, id);
+        rot::release_player(state, id);
         centipede::release_player(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
@@ -468,7 +476,9 @@ namespace player {
         auto const c1 = physics::chunk(state, o, 1);
         physics::hard_set_position(state, c0, pos + vec2{0.f, 17.f});
         physics::hard_set_position(state, c1, pos);
+        rot::release_player(state, id);
         for (auto const c : {c0, c1}) {
+            state.world.body_chunk_set_collide_with_terrain(c, true);
             state.world.body_chunk_set_vel(c, vec2{0.f, 0.f});
             state.world.body_chunk_set_contact_point(c, ivec2{0, 0});
             state.world.body_chunk_set_last_contact_point(c, ivec2{0, 0});
@@ -480,6 +490,9 @@ namespace player {
     void update(sys::game_state& state, dcon::player_id id, room_view const& room, input_package const& new_input) {
         ctx x(state, id, room);
         pref& p = x.p;
+        // eaten by the rot: destroyed in vanilla, nothing left to update
+        if (p.eaten())
+            return;
 
         // aerobic level decay (exhaustion only applies to malnourished cats)
         p.exhausted() = false;
@@ -881,6 +894,27 @@ namespace player {
                     }
                 }
             }
+
+            // grabbing a climbable vine (zero gravity vines aren't ported)
+            if (p.vine_grab_delay() > 0)
+                --p.vine_grab_delay();
+            if (p.animation() != animation_index::vine_grab && p.vine_grab_delay() == 0 && x.eff_gravity() > 0.f
+            && (p.want_to_grab() > 0 || x.in(0).y > 0)) {
+                int32_t const n = custom::int_clamp(int32_t(rw::distance(x.last_pos(0), x.pos(0)) / 5.f), 1, 10);
+                for (int32_t l = 0; l < n; ++l) {
+                    vec2 const at = rw::lerp(x.last_pos(0), x.pos(0), n > 1 ? float(l) / float(n - 1) : 0.f);
+                    if (auto const vp = rot::vines::overlap(x.state, x.room.id, at, x.rad(0)); vp.has_value()) {
+                        x.sound(sound::sound_id::grab_corruption_tube);
+                        p.animation() = animation_index::vine_grab;
+                        x.state.world.player_set_vine(p.id, vp->vine);
+                        p.vine_float_pos() = vp->float_pos;
+                        p.want_to_grab() = 0;
+                        break;
+                    }
+                }
+            }
+            if (p.animation() == animation_index::vine_grab && !rot::vines::valid(x.state, x.room.id, x.state.world.player_get_vine(p.id)))
+                p.animation() = animation_index::none;
 
             p.dynamic_run_speed()[0] = 3.6f;
             p.dynamic_run_speed()[1] = 3.6f;
@@ -2126,8 +2160,67 @@ namespace player {
             case animation_index::dead:
                 p.body_mode() = body_mode_index::dead;
                 break;
+            case animation_index::vine_grab: {
+                // hanging on and climbing a vine (ClimbableVinesSystem)
+                namespace vines = rot::vines;
+                p.dynamic_run_speed()[0] = 0.f;
+                p.dynamic_run_speed()[1] = 0.f;
+                p.body_mode() = body_mode_index::default_;
+                vines::position vp{x.state.world.player_get_vine(p.id), p.vine_float_pos()};
+                vec2 const dir = swim_dir(x, true);
+                if (rw::magnitude(dir) > 0.f) {
+                    vec2& cursor = p.vine_climb_cursor();
+                    cursor = rw::clamp_magnitude(cursor + dir * custom::lerp_map(rw::dot(dir, rw::normalized(cursor)), -1.f, 1.f, 10.f, 3.f), 30.f);
+                    vec2 const before = vines::on_vine_pos(x.state, vp);
+                    vp.float_pos += vines::climb_on_vine_speed(x.state, vp, x.pos(0) + cursor) * mathf::lerp(2.1f, 1.5f, g) / vines::total_length(x.state, vp.vine);
+                    vp.float_pos = mathf::clamp(vp.float_pos, 0.f, 1.f);
+                    vines::push_at_vine(x.state, vp, (before - vines::on_vine_pos(x.state, vp)) * 0.05f);
+                    if (p.vine_grab_delay() == 0) {
+                        if (auto const other = vines::vine_switch(x.state, x.room.id, vp, x.pos(0) + cursor, x.rad(0)); other.has_value()) {
+                            vp = *other;
+                            p.vine_grab_delay() = 10;
+                        }
+                    }
+                    if (++p.animation_frame() > 30)
+                        p.animation_frame() = 0;
+                } else {
+                    p.vine_climb_cursor() *= 0.8f;
+                }
+                x.state.world.player_set_vine(p.id, vp.vine);
+                p.vine_float_pos() = vp.float_pos;
+                x.vel(0) += p.vine_climb_cursor() / 190.f;
+                x.vel(1) -= p.vine_climb_cursor() / 190.f;
+                vec2 const on = vines::on_vine_pos(x.state, vp);
+                ivec2 const iv = in.zero_g_gamepad_int_vec();
+                if (iv.x != 0)
+                    p.zero_g_pole_grab_dir().x = iv.x;
+                if (iv.y != 0)
+                    p.zero_g_pole_grab_dir().y = iv.y;
+                bool let_go = false;
+                if (in.jmp && !in1.jmp) {
+                    // jumping off, pushing the vine back
+                    let_go = true;
+                    if (rw::magnitude(dir) > 0.f) {
+                        x.vel(0) += rw::normalized(dir) * 4.f;
+                        x.vel(1) += rw::normalized(dir) * 3.5f;
+                        x.vel(0) = rw::lerp(x.vel(0), rw::clamp_magnitude(x.vel(0), 5.f), 0.5f);
+                        x.vel(1) = rw::lerp(x.vel(1), rw::clamp_magnitude(x.vel(1), 5.f), 0.5f);
+                        vines::push_at_vine(x.state, vp, -rw::normalized(dir) * 15.f);
+                        p.vine_grab_delay() = 10;
+                    }
+                }
+                if (let_go || !custom::dist_less(x.pos(0), on, 40.f + vines::vine_rad(x.state, vp))) {
+                    p.animation() = animation_index::none;
+                    break;
+                }
+                vines::connect_chunk_to_vine(x.state, x.c[0], vp, vines::vine_rad(x.state, vp));
+                vec2 const perp = custom::perpendicular_vector(vines::vine_dir(x.state, vp));
+                ivec2 const gd = p.zero_g_pole_grab_dir();
+                x.vel(0) += perp * 0.2f * float(std::fabs(perp.x) > std::fabs(perp.y) ? gd.x : gd.y);
+                break;
+            }
             default:
-                // antlers, tube worms, zero gravity and vines are not ported
+                // antlers, tube worms and zero gravity are not ported
                 break;
             }
         }

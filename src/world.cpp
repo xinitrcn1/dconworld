@@ -134,6 +134,12 @@ namespace world {
             float fade_out = 0.f;
             int16_t rooms = -1;
         };
+        struct parsed_rot {
+            rot_kind kind = rot_kind::corruption;
+            rw::vec2 pos{0.f, 0.f};
+            rw::vec2 handle{0.f, 100.f};
+            rot_custom_data custom;
+        };
         struct parsed_shortcut {
             rw::ivec2 start;
             rw::ivec2 dest;
@@ -172,6 +178,7 @@ namespace world {
             bool has_settings = false;
             parsers::room_template settings;
             std::vector<parsed_trigger> triggers;
+            std::vector<parsed_rot> rot;
 
             room_view view() const noexcept {
                 room_view v;
@@ -621,6 +628,14 @@ namespace world {
                 dc.music_trigger_set_counter(tid, -1);
                 dc.try_create_music_trigger_location(tid, rid);
             }
+            for (auto const& o : r.rot) {
+                auto const oid = dc.create_rot_placed();
+                dc.rot_placed_set_kind(oid, o.kind);
+                dc.rot_placed_set_pos(oid, o.pos);
+                dc.rot_placed_set_handle(oid, o.handle);
+                dc.rot_placed_set_custom(oid, o.custom);
+                dc.try_create_rot_placed_location(oid, rid);
+            }
             for (auto const& it : r.items) {
                 auto const iid = dc.create_placed_item();
                 dc.placed_item_set_tile(iid, it.tile);
@@ -674,11 +689,11 @@ namespace world {
                 dc.room_set_palette(rid, dc.region_get_palette(r.region));
             if (!dc.room_get_palette(rid))
                 dc.room_set_palette(rid, s.palette_for(0));
-            dc.room_set_effect_color_a(rid, t.effect_color_a ? int16_t(*t.effect_color_a) : int16_t(-1));
-            dc.room_set_effect_color_b(rid, t.effect_color_b ? int16_t(*t.effect_color_b) : int16_t(-1));
+            dc.room_set_effect_color_a(rid, t.effect_color_a.value_or(-1));
+            dc.room_set_effect_color_b(rid, t.effect_color_b.value_or(-1));
             dc.room_set_fade_palette(rid, t.fade_palette_index ? s.palette_for(*t.fade_palette_index) : dcon::palette_id{});
             dc.room_set_fade_palette_amount(rid, t.fade_palette_amount.value_or(0.f));
-            dc.room_set_danger_type(rid, t.danger_type ? to_danger_type(*t.danger_type) : danger_type::rain);
+            dc.room_set_danger_type(rid, to_danger_type(t.danger_type.value_or("Rain")));
             dc.room_set_grime(rid, t.grime.value_or(0.5f));
             dc.room_set_clouds(rid, t.clouds.value_or(0.f));
             dc.room_set_ceiling_drips(rid, t.ceiling_drips.value_or(0.5f));
@@ -887,6 +902,72 @@ namespace world {
             }
         }
 
+        // The "PlacedObjects:" line of a room settings file
+        // (RoomSettings.LoadPlacedObjects): ", " separated objects of
+        // "<type><x><y><data>" with ResizableObjectData "<handle x>~<handle y>"
+        // (CustomRotData appends its fields). Only the rot objects are kept;
+        // slugcat filters aren't applied.
+        void parse_placed_rot(std::string_view text, std::vector<parsed_rot>& out) {
+            constexpr std::string_view key = "PlacedObjects: ";
+            size_t at = text.find(key);
+            while (at != std::string_view::npos && at != 0 && text[at - 1] != '\n')
+                at = text.find(key, at + 1);
+            if (at == std::string_view::npos)
+                return;
+            std::string_view line = text.substr(at + key.size());
+            line = line.substr(0, line.find('\n'));
+            auto const split = [](std::string_view sv, std::string_view sep) {
+                std::vector<std::string_view> r;
+                for (size_t p = 0;;) {
+                    size_t const q = sv.find(sep, p);
+                    r.push_back(sv.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p));
+                    if (q == std::string_view::npos)
+                        return r;
+                    p = q + sep.size();
+                }
+            };
+            auto const num = [](std::string_view sv) { return std::strtof(std::string{sv}.c_str(), nullptr); };
+            for (auto entry : split(line, ", ")) {
+                while (!entry.empty() && (entry.front() == ' ' || entry.front() == '\r'))
+                    entry.remove_prefix(1);
+                while (!entry.empty() && (entry.back() == ' ' || entry.back() == '\r' || entry.back() == ','))
+                    entry.remove_suffix(1);
+                auto const parts = split(entry, "><");
+                if (parts.size() < 4)
+                    continue;
+                parsed_rot o;
+                if (parts[0] == "Corruption") o.kind = rot_kind::corruption;
+                else if (parts[0] == "PassiveCorruption") o.kind = rot_kind::passive_corruption;
+                else if (parts[0] == "CorruptionTube") o.kind = rot_kind::tube;
+                else if (parts[0] == "CorruptionDarkness") o.kind = rot_kind::darkness;
+                else continue;
+                o.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                auto const d = split(parts[3], "~");
+                if (d.size() >= 2)
+                    o.handle = rw::vec2{num(d[0]), num(d[1])};
+                // CustomRotData.FromString (panelPos at 2 and 3)
+                if (o.kind == rot_kind::passive_corruption && d.size() >= 19) {
+                    auto& c = o.custom;
+                    c.min_size = num(d[4]);
+                    c.max_size = num(d[5]);
+                    c.eye_chance = num(d[6]);
+                    c.min_eye_size = num(d[7]);
+                    c.max_eye_size = num(d[8]);
+                    c.min_color = num(d[9]);
+                    c.max_color = num(d[10]);
+                    c.slowdown = num(d[11]);
+                    c.leg_chance = num(d[12]);
+                    c.color = d[13] == "EffectColorA" ? rot_color::effect_color_a : d[13] == "EffectColorB" ? rot_color::effect_color_b : rot_color::default_;
+                    c.cross_eyes = d[14] == "Cross";
+                    c.hostile = d[15] == "Hostile";
+                    c.density = num(d[16]);
+                    c.darkness_chance = num(d[17]);
+                    c.darkness_scale = num(d[18]);
+                }
+                out.push_back(o);
+            }
+        }
+
         // Settings of one room: template (explicit or region default) then the room file
         void resolve_settings(sys::game_state const& s, parsed_room& r, layered_fs::directory const& dir, std::string const& region_name,
             template_map const& templates, parsers::room_template const& region_default) {
@@ -900,6 +981,7 @@ namespace world {
             r.err.filename = f.path;
             auto const t = parse_template(s, of->to_string_view(), r.err);
             parse_triggers(of->to_string_view(), r.triggers);
+            parse_placed_rot(of->to_string_view(), r.rot);
             auto const lname = text::to_lowercase_native(t.template_);
             if (lname == "none") {
                 // explicitly no template

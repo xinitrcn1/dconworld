@@ -20,6 +20,7 @@
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "render.hpp"
+#include "rot.hpp"
 #include "reports.hpp"
 #include "selftest.hpp"
 #include "shortcuts.hpp"
@@ -347,13 +348,13 @@ int main(int argc, char* argv[]) {
         }
         roots.push_back(sa);
     }
+    // our own assets (HUD font) come before so the game data can be overriden
+    if (char const* base = SDL_GetBasePath(); base != nullptr)
+        gs.fs.add_root(std::string{base} + "assets");
     for (auto const& r : roots) {
         reports::add_log("root: " + r);
         gs.fs.add_root(r);
     }
-    // our own assets (HUD font) come last so the game data always wins
-    if (char const* base = SDL_GetBasePath(); base != nullptr)
-        gs.fs.add_root(std::string{base} + "assets");
     gs.fs.generate_unpopulated_tree();
     parsers::error_handler err;
     world::load(gs, err);
@@ -438,6 +439,22 @@ int main(int argc, char* argv[]) {
             reports::add_log("centipede at " + std::to_string(int(hp.x)) + "," + std::to_string(int(hp.y)) + " behavior "
                 + std::to_string(int(gs.world.centipede_get_behavior(c))) + (gs.world.centipede_get_dead(c) ? " dead" : ""));
         });
+        if (auto const rs = rot::system_of(gs, a.room); rs) {
+            auto const& w = gs.world;
+            uint32_t bulbs = 0, eyes = 0, legs = 0, tendrils = 0, vines = 0, meals = 0;
+            w.rot_system_for_each_rot_bulb_membership(rs, [&](dcon::rot_bulb_membership_id m) {
+                ++bulbs;
+                eyes += w.rot_bulb_get_has_eye(w.rot_bulb_membership_get_bulb(m)) ? 1 : 0;
+            });
+            w.rot_system_for_each_rot_tube_membership(rs, [&](dcon::rot_tube_membership_id m) {
+                auto const k = w.rot_tube_get_kind(w.rot_tube_membership_get_tube(m));
+                (k == world::rot_tube_kind::leg ? legs : k == world::rot_tube_kind::tendril ? tendrils : vines) += 1;
+            });
+            w.rot_system_for_each_rot_meal_membership(rs, [&](dcon::rot_meal_membership_id) { ++meals; });
+            reports::add_log("rot: " + std::to_string(bulbs) + " bulbs (" + std::to_string(eyes) + " eyes), " + std::to_string(legs) + " legs, "
+                + std::to_string(tendrils) + " tendrils, " + std::to_string(vines) + " vines, " + std::to_string(meals) + " meals"
+                + (w.player_get_eaten(a.players[0]) ? ", the slugcat was eaten" : ""));
+        }
         render::use_room(r, gs, a.room);
         a.update_camera(float(r.width), float(r.height));
         render::draw_frame(r, gs, a.view(), 1.f, a.cam, a.hud(false, false));

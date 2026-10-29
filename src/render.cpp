@@ -17,6 +17,7 @@
 #include "items.hpp"
 #include "physics.hpp"
 #include "player_graphics.hpp"
+#include "rot.hpp"
 #include "shortcuts.hpp"
 #include "reports.hpp"
 
@@ -525,7 +526,7 @@ void main() {
                 white_uv = vec2{(white_it->second.x + white_it->second.w * 0.5f) / tw, (white_it->second.y + white_it->second.h * 0.5f) / th};
             world.for_each_player([&](dcon::player_id pid) {
                 auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid))
+                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid) || world.player_get_eaten(pid))
                     return;
                 cmds.clear();
                 player_graphics::build(s, pid, alpha, cmds);
@@ -567,7 +568,7 @@ void main() {
             painter p{r.batch};
             world.for_each_player([&](dcon::player_id pid) {
                 auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid))
+                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid) || world.player_get_eaten(pid))
                     return;
                 auto const c0 = physics::chunk(s, o, 0);
                 auto const c1 = physics::chunk(s, o, 1);
@@ -724,6 +725,197 @@ void main() {
             });
         }
 
+        // DaddyCorruption's sprites, with plain shapes. `front`: what vanilla
+        // puts in the Water/Shortcuts containers over the level (most bulbs,
+        // eye slits, dots, black goo, CorruptionDarkness), else the Midground
+        // (tubes and the bulbs among creatures)
+        struct rot_palette {
+            rw::vec3 black{0.f, 0.f, 0.f};
+            rw::vec3 effect_a{1.f, 1.f, 1.f};
+            rw::vec3 effect_b{1.f, 1.f, 1.f};
+        };
+        rot_palette room_rot_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            rot_palette pal;
+            auto const palette = s.world.room_get_palette(room).id;
+            if (!palette || r.palette_pixels.empty())
+                return pal;
+            // Texture2D.GetPixel(x, y) counts rows from the bottom
+            auto const px = [&](int x, int y) {
+                uint8_t const* p = r.palette_pixels.data() + (size_t(palette.index()) * palette_width * palette_height
+                    + size_t(palette_height - 1 - y) * palette_width + size_t(x)) * 3;
+                return rw::vec3{float(p[0]) / 255.f, float(p[1]) / 255.f, float(p[2]) / 255.f};
+            };
+            pal.black = px(2, 7);
+            pal.effect_a = px(31, 5);
+            pal.effect_b = px(31, 3);
+            return pal;
+        }
+
+        void build_rot(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool front) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            auto const mix = [](rw::vec3 a, rw::vec3 b, float t) { return a + (b - a) * mathf::clamp01(t); };
+            rot_palette const pal = room_rot_palette(r, s, room.id);
+            if (front) {
+                // CorruptionDarkness: a blot of black goo
+                w.room_for_each_rot_placed_location(room.id, [&](dcon::rot_placed_location_id l) {
+                    auto const o = w.rot_placed_location_get_placed(l);
+                    if (w.rot_placed_get_kind(o) == world::rot_kind::darkness)
+                        p.glow(w.rot_placed_get_pos(o), rw::magnitude(w.rot_placed_get_handle(o)), to_rgba(pal.black, 0.85f), to_rgba(pal.black, 0.f));
+                });
+            }
+            auto const sys = rot::system_of(s, room.id);
+            if (!sys)
+                return;
+            bool const gw = w.rot_system_get_gw_mode(sys);
+            rw::vec3 const sys_effect = w.rot_system_get_effect_color(sys);
+            rw::vec3 const sys_eye = w.rot_system_get_eye_color(sys);
+            // CustomRotData.RotColor
+            auto const custom_color = [&](dcon::rot_placed_id c, rw::vec3 fallback) {
+                if (!c)
+                    return fallback;
+                switch (w.rot_placed_get_custom(c).color) {
+                case world::rot_color::effect_color_a: return pal.effect_a;
+                case world::rot_color::effect_color_b: return pal.effect_b;
+                default: return fallback;
+                }
+            };
+            // flicker of the eyes (Random.value in RenderSlits)
+            static uint32_t flicker = 0x1234567u;
+            auto const flick = [&] {
+                flicker = flicker * 1664525u + 1013904223u;
+                return float(flicker >> 8) * (1.f / 16777215.f);
+            };
+
+            if (!front) {
+                // TubeGraphic: a 4 pixel wide mesh along the graphic segments, then the bumps
+                w.rot_system_for_each_rot_tube_membership(sys, [&](dcon::rot_tube_membership_id m) {
+                    auto const t = w.rot_tube_membership_get_tube(m);
+                    auto const g = w.rot_tube_get_graphic(t);
+                    uint32_t const n = g.size();
+                    if (n < 2)
+                        return;
+                    auto const kind = w.rot_tube_get_kind(t);
+                    float const deadness = w.rot_tube_get_deadness(t);
+                    auto const fac = [&](float f) {
+                        switch (kind) {
+                        case world::rot_tube_kind::leg: return mathf::pow(f, 1.5f) * 0.4f * (1.f - deadness);
+                        case world::rot_tube_kind::tendril: return 0.f;
+                        case world::rot_tube_kind::climb: return std::sin(f * mathf::pi) * 0.4f;
+                        }
+                        return 0.f;
+                    };
+                    rw::vec3 effect = sys_effect;
+                    if (kind == world::rot_tube_kind::leg) {
+                        auto const b = w.rot_tube_get_bulb(t);
+                        effect = custom_color(w.rot_bulb_get_custom(b), sys_effect);
+                    }
+                    auto const at = [&](uint32_t i) { return rw::lerp(g[i].last_pos, g[i].pos, alpha); };
+                    vec2 prev = at(0);
+                    prev += rw::custom::dir_vec(at(1), prev) * 1.f;
+                    uint32_t prev_col = to_rgba(mix(pal.black, effect, fac(0.f)));
+                    for (uint32_t j = 0; j < n; ++j) {
+                        vec2 const cur = at(j);
+                        vec2 const a = rw::custom::perpendicular_vector(rw::normalized(prev - cur)) * 2.f;
+                        uint32_t const col = to_rgba(mix(pal.black, effect, fac(float(j) / float(n - 1))));
+                        r.batch.push_back(vertex{prev.x - a.x, prev.y - a.y, prev_col, 0.f, 0.f});
+                        r.batch.push_back(vertex{prev.x + a.x, prev.y + a.y, prev_col, 0.f, 0.f});
+                        r.batch.push_back(vertex{cur.x + a.x, cur.y + a.y, col, 0.f, 0.f});
+                        r.batch.push_back(vertex{prev.x - a.x, prev.y - a.y, prev_col, 0.f, 0.f});
+                        r.batch.push_back(vertex{cur.x + a.x, cur.y + a.y, col, 0.f, 0.f});
+                        r.batch.push_back(vertex{cur.x - a.x, cur.y - a.y, col, 0.f, 0.f});
+                        prev = cur;
+                        prev_col = col;
+                    }
+                    // TubeGraphic.OnTubePos
+                    float const step = 1.f / float(n - 1);
+                    for (auto const& bump : w.rot_tube_get_bumps(t)) {
+                        vec2 const p0 = rot::tube_graphic_pos(s, t, bump.pos.y - step, alpha);
+                        vec2 const p1 = rot::tube_graphic_pos(s, t, bump.pos.y + step, alpha);
+                        vec2 const c = rot::tube_graphic_pos(s, t, bump.pos.y, alpha) + rw::custom::perpendicular_vector(rw::custom::dir_vec(p0, p1)) * bump.pos.x;
+                        float const rad = mathf::lerp(2.f, 6.f, bump.size);
+                        p.circle(c, rad, to_rgba(mix(pal.black, effect, fac(bump.pos.y))));
+                        if (bump.eye_size > 0.f)
+                            p.circle(c, rad * bump.eye_size, to_rgba(gw ? pal.black : effect));
+                    }
+                });
+            }
+
+            w.rot_system_for_each_rot_bulb_membership(sys, [&](dcon::rot_bulb_membership_id m) {
+                auto const b = w.rot_bulb_membership_get_bulb(m);
+                bool const midground = w.rot_bulb_get_body_in_midground(b);
+                vec2 const pos = rw::lerp(w.rot_bulb_get_last_pos(b), w.rot_bulb_get_pos(b), alpha);
+                float const rad = w.rot_bulb_get_rad(b);
+                vec2 const stalk = w.rot_bulb_get_eye_stalk_pos(b);
+                auto const cp = w.rot_bulb_get_custom(b);
+                world::rot_custom_data const cd = cp ? w.rot_placed_get_custom(cp) : world::rot_custom_data{};
+                rw::vec3 const effect = custom_color(cp, sys_effect);
+                float const rotation = std::atan2(pos.x - stalk.x, pos.y - stalk.y) / 6.2831855f * 360.f + w.rot_bulb_get_rotation(b);
+                if (front && w.rot_bulb_get_has_black_goo(b)) {
+                    // the "corruption" goo sprite under the bulb
+                    float const goo = rad * mathf::clamp(rad * 0.35f, 3.f, 7.f) / 100.f * (cp ? cd.darkness_scale : 1.f);
+                    p.glow(w.rot_bulb_get_stuck_pos(b), goo * 100.f, to_rgba(pal.black, 0.8f), to_rgba(pal.black, 0.f));
+                }
+                if (midground != front) {
+                    // JaggedCircle: a ragged disc turned with the bulb
+                    uint32_t const col = to_rgba(cp ? mix(pal.black, effect, w.rot_bulb_get_color_fac(b)) : pal.black);
+                    constexpr int segs = 12;
+                    uint32_t h = uint32_t(b.index()) * 2654435761u;
+                    float radii[segs];
+                    for (int k = 0; k < segs; ++k) {
+                        h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+                        radii[k] = rad * (0.82f + 0.18f * float(h & 0xFFFF) / 65535.f);
+                    }
+                    for (int k = 0; k < segs; ++k) {
+                        float const a0 = (rotation + float(k) * 360.f / segs) * mathf::deg2rad;
+                        float const a1 = (rotation + float(k + 1) * 360.f / segs) * mathf::deg2rad;
+                        p.tri(pos, pos + vec2{std::sin(a0), std::cos(a0)} * radii[k], pos + vec2{std::sin(a1), std::cos(a1)} * radii[(k + 1) % segs], col);
+                    }
+                }
+                if (!front)
+                    return;
+                if (w.rot_bulb_get_has_dot(b)) {
+                    vec2 const at = pos + rw::custom::dir_vec(stalk, pos) * rad * (1.f - cd.max_eye_size);
+                    p.circle(at, rad * w.rot_bulb_get_dot_scale(b), to_rgba(mix(pal.black, effect, mathf::lerp(cd.min_color, cd.max_color, w.rot_bulb_get_corruption_level(b)))));
+                }
+                if (!w.rot_bulb_get_has_eye(b))
+                    return;
+                // Bulb.RenderSlits: a cross of two slit meshes bulging towards the look direction
+                rw::vec3 const eye = custom_color(cp, sys_eye);
+                float const num = mathf::lerp(rad * 0.5f, rad, w.rot_bulb_get_eye_rad(b));
+                float const num2 = mathf::pow(mathf::max(0.f, mathf::lerp(w.rot_bulb_get_last_closed(b), w.rot_bulb_get_closed(b), alpha)), 0.6f);
+                float const num3 = 1.f - num2;
+                vec2 const look = rw::lerp(w.rot_bulb_get_last_look_dir(b), w.rot_bulb_get_look_dir(b), alpha);
+                vec2 const out = rw::custom::dir_vec(stalk, pos);
+                float num4 = mathf::lerp(w.rot_bulb_get_last_focus(b), w.rot_bulb_get_focus(b), alpha)
+                    * mathf::pow(mathf::inverse_lerp(-1.f, 1.f, rw::dot(out, rw::normalized(w.rot_bulb_get_look_dir(b)))), 0.7f);
+                num4 = mathf::max(num4, num2);
+                float num5 = mathf::inverse_lerp(0.f, 50.f, rw::distance(stalk, pos + out * rad)) * 0.9f;
+                num5 = mathf::lerp(num5, 1.f, 0.5f * num4);
+                vec2 const bulge_dir = rw::lerp(out * num5, look, rw::magnitude(look) * 0.5f);
+                auto const bulge = [&](vec2 v) { return rw::lerp(v, rw::clamp_magnitude(v + bulge_dir * rad, rad), rw::magnitude(bulge_dir)); };
+                uint32_t const col = to_rgba(mix(eye, rw::vec3{1.f, 1.f, 1.f}, mathf::lerp(flick() * w.rot_bulb_get_light(b), 1.f, num2)));
+                for (int i = 0; i < 2; ++i) {
+                    vec2 const v2 = rw::custom::deg_to_vec(rotation + 90.f * float(i));
+                    vec2 const a = rw::custom::perpendicular_vector(v2);
+                    vec2 verts[10];
+                    float const squint = mathf::lerp(1.f, 0.6f, num4);
+                    verts[0] = pos + bulge(v2 * num * 0.9f * squint);
+                    verts[9] = pos + bulge(v2 * -num * 0.9f * squint);
+                    for (int j = 1; j < 5; ++j) {
+                        for (int k = 0; k < 2; ++k) {
+                            float const d = num * (j < 3 ? 0.7f : 0.25f) * (k == 0 ? 1.f : -1.f) * squint;
+                            int const idx = k == 0 ? j : 9 - j;
+                            float const d2 = num3 * (j < 3 ? 0.5f : 1.f) * (idx % 2 == 0 ? 1.f : -1.f) * mathf::lerp(1.f, 2.5f, num4);
+                            verts[idx] = pos + bulge(v2 * d + a * d2);
+                        }
+                    }
+                    for (int k = 0; k < 8; ++k)
+                        p.tri(verts[k], verts[k + 1], verts[k + 2], col);
+                }
+            });
+        }
+
         // RegionGateGraphics, minimal: each door is a slab sliding down from
         // above its opening while closing
         void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room) {
@@ -870,7 +1062,8 @@ void main() {
         else
             draw_geometry();
 
-        // the sprite layers: back spears, creatures (midground), items, gate doors
+        // the sprite layers: rot tubes, back spears, creatures (midground), items, gate doors
+        draw_flat([&] { build_rot(r, s, room, alpha, false); });
         draw_flat([&] { build_items(r, s, room, alpha, true); });
         r.batch.clear();
         bool const sprites = r.slugcat_texture != 0;
@@ -898,6 +1091,8 @@ void main() {
             if (r.show_geometry)
                 draw_geometry();
         }
+        // most of the rot sits over the level's foreground (vanilla's Water container)
+        draw_flat([&] { build_rot(r, s, room, alpha, true); });
 
         // shortcuts are drawn over the level, then water over everything below the surface
         draw_flat([&] {

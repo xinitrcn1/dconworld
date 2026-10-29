@@ -6,6 +6,7 @@
 #include "items.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "rot.hpp"
 #include "shortcuts.hpp"
 #include "world.hpp"
 
@@ -18,6 +19,7 @@ namespace simulation {
 
     void activate_room(sys::game_state& state, dcon::room_id room) {
         items::spawn_room_items(state, room);
+        rot::spawn_room(state, room);
     }
 
     namespace {
@@ -112,8 +114,11 @@ namespace simulation {
             centipede::update_room(state, view);
             centipede::collide(state, view);
             items::update_room(state, view);
+            rot::update_room(state, view);
             gates::update_room(state, room);
         }
+        // noises are heard the tick they happen
+        state.noises.clear();
         ++state.tick;
     }
 }

@@ -6,6 +6,7 @@
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "rot.hpp"
 
 namespace player_graphics {
     using rw::ivec2;
@@ -498,6 +499,14 @@ namespace player_graphics {
                     h.absolute_hunt_pos += vec2{float(flip) * 10.f, -10.f};
                 else
                     h.absolute_hunt_pos += vec2{float(flip) * 15.f, 10.f};
+            } else if (anim == animation_index::vine_grab && rot::vines::valid(state, room.id, w.player_get_vine(p))) {
+                // hand over hand along the vine
+                flag = false;
+                rot::vines::position const vp{w.player_get_vine(p), w.player_get_vine_float_pos(p)};
+                float const along = 20.f * side * std::sin(frame / 30.f * 2.f * mathf::pi) / rot::vines::total_length(state, vp.vine);
+                h.mode = limb_mode::hunt_absolute_position;
+                h.absolute_hunt_pos = rot::vines::on_vine_pos(state, rot::vines::position{vp.vine, vp.float_pos + along})
+                    + custom::perpendicular_vector(rot::vines::vine_dir(state, vp)) * rot::vines::vine_rad(state, vp) * side;
             }
             return flag;
         }

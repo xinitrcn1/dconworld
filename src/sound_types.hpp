@@ -48,6 +48,7 @@ namespace sound {
         rock_hit_creature,
         centipede_shock,
         centipede_attach,
+        grab_corruption_tube,
         count
     };
     char const* to_string(sound_id id) noexcept;

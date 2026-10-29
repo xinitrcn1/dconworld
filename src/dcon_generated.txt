@@ -22,6 +22,10 @@
 //     connections each at most, within the chunk/connection bounds)
 //   path fields: shared distance fields built on demand -> 32, their
 //     distances pooled (rooms are at most ~15k tiles)
+//   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
+//     room for Watcher's rot regions
+//   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
+//     6584 bulbs (806 in the worst room), 618 tubes -> 65536 / 16384
 //   shortcut path tiles pooled (~6266 paths)
 //
 // Tags: `scenario` = static world data loaded from the game files,
@@ -76,7 +80,7 @@ object{
 object{
 	name{room}
 	storage_type{contiguous}
-	size{2048}
+	size{4096}
 	tag{scenario}
 	property{ name{name} type{text_key} }
 	property{ name{display_name} type{text_key} }
@@ -122,6 +126,8 @@ object{
 	property{ name{is_gate} type{bitfield} }
 	// Room.abstractRoom.firstTimeRealized: items get spawned on the first visit
 	property{ name{items_spawned} type{bitfield} }
+	// the rot (DaddyCorruption) was grown on the first visit
+	property{ name{rot_spawned} type{bitfield} }
 	// bumped whenever tiles change at runtime (gate doors, spear beams):
 	// cached path fields of the room are rebuilt
 	property{ name{geometry_version} type{uint16_t} }
@@ -139,7 +145,7 @@ relationship{
 object{
 	name{tile}
 	storage_type{contiguous}
-	size{8388608}
+	size{16777216}
 	tag{scenario}
 	property{ name{terrain} type{world::terrain} }
 	property{ name{flags} type{uint8_t} }
@@ -151,7 +157,7 @@ object{
 object{
 	name{room_camera}
 	storage_type{contiguous}
-	size{4096}
+	size{8192}
 	tag{scenario}
 	property{ name{position} type{rw::vec2} }
 }
@@ -167,7 +173,7 @@ relationship{
 object{
 	name{placed_item}
 	storage_type{contiguous}
-	size{1024}
+	size{16384}
 	tag{scenario}
 	property{ name{tile} type{rw::ivec2} }
 	property{ name{type} type{world::item_type} }
@@ -184,7 +190,7 @@ relationship{
 object{
 	name{room_exit}
 	storage_type{contiguous}
-	size{8192}
+	size{16384}
 	tag{scenario}
 	property{ name{tile} type{rw::ivec2} }
 	// position within the room's exitAndDenIndex
@@ -211,7 +217,7 @@ relationship{
 object{
 	name{shortcut}
 	storage_type{contiguous}
-	size{16384}
+	size{32767}
 	tag{scenario}
 	property{ name{start} type{rw::ivec2} }
 	property{ name{dest} type{rw::ivec2} }
@@ -241,7 +247,7 @@ relationship{
 object{
 	name{music_trigger}
 	storage_type{contiguous}
-	size{512}
+	size{2048}
 	tag{scenario}
 	// spot triggers fire within `rad` of `pos`; region bumps on entering the room
 	property{ name{spot} type{bitfield} }
@@ -270,11 +276,33 @@ relationship{
 	primary_key{trigger}
 }
 
+// Rot (DaddyCorruption) placed objects of the room settings, in file order:
+// Corruption/PassiveCorruption areas (`handle` is the radius handle),
+// CorruptionTube vines and CorruptionDarkness blots (from pos to pos + handle)
+object{
+	name{rot_placed}
+	storage_type{contiguous}
+	size{4096}
+	tag{scenario}
+	property{ name{kind} type{world::rot_kind} }
+	property{ name{pos} type{rw::vec2} }
+	property{ name{handle} type{rw::vec2} }
+	// PassiveCorruption only
+	property{ name{custom} type{world::rot_custom_data} }
+}
+relationship{
+	name{rot_placed_location}
+	tag{scenario}
+	link{ object{rot_placed} name{placed} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{placed}
+}
+
 // AbstractRoomNode as serialised on the connectivity line of the room file
 object{
 	name{room_node}
 	storage_type{contiguous}
-	size{8192}
+	size{16384}
 	tag{scenario}
 	property{ name{type} type{uint16_t} }
 	property{ name{shortcut_length} type{uint16_t} }
@@ -503,6 +531,14 @@ object{
 	property{ name{back_increment} type{uint8_t} }
 	// room the music triggers were last armed for (re-armed on entering a room)
 	property{ name{trigger_room} type{room_id} }
+	// vines (Player.vinePos: a climbable rot tube and the position along it)
+	property{ name{vine} type{rot_tube_id} }
+	property{ name{vine_float_pos} type{float} }
+	property{ name{vine_grab_delay} type{int32_t} }
+	property{ name{vine_climb_cursor} type{rw::vec2} }
+	property{ name{zero_g_pole_grab_dir} type{rw::ivec2} }
+	// eaten by the rot: dead and gone (Creature.Destroy)
+	property{ name{eaten} type{uint8_t} }
 }
 // the physical body a player controls
 relationship{
@@ -626,6 +662,147 @@ relationship{
 	link{ object{centipede} name{centipede} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{centipede}
+}
+
+//
+// Rot (DaddyCorruption): the bulbs growing on the walls of a rot area, the
+// tubes (little legs, tendrils, climbable vines) and the creatures being
+// eaten. Created when the room is first realised and kept, like items.
+//
+object{
+	name{rot_system}
+	storage_type{contiguous}
+	size{256}
+	tag{save}
+	// bounding box of the rot tiles, row major grids over it
+	property{ name{bottom_left} type{rw::ivec2} }
+	property{ name{top_right} type{rw::ivec2} }
+	// DaddyCorruption.directions, zero for tiles without rot
+	property{ name{directions} type{vector_pool{262144}{rw::vec2}} }
+	property{ name{cells} type{vector_pool{262144}{world::rot_cell}} }
+	property{ name{random} type{rw::rng} }
+	// Garbage Wastes rot (no reacting to noise, black eyes on the tubes)
+	property{ name{gw_mode} type{bitfield} }
+	property{ name{effect_color} type{rw::vec3} }
+	property{ name{eye_color} type{rw::vec3} }
+}
+relationship{
+	name{rot_system_location}
+	tag{save}
+	link{ object{rot_system} name{system} type{unique} }
+	link{ object{room} name{room} type{unique} }
+	primary_key{system}
+}
+
+// DaddyCorruption.Bulb
+object{
+	name{rot_bulb}
+	storage_type{contiguous}
+	size{65536}
+	tag{save}
+	property{ name{tile} type{rw::ivec2} }
+	property{ name{pos} type{rw::vec2} }
+	property{ name{last_pos} type{rw::vec2} }
+	property{ name{vel} type{rw::vec2} }
+	property{ name{stuck_pos} type{rw::vec2} }
+	property{ name{eye_stalk_pos} type{rw::vec2} }
+	property{ name{corruption_level} type{float} }
+	property{ name{rad} type{float} }
+	property{ name{rotation} type{float} }
+	property{ name{eye_rad} type{float} }
+	property{ name{has_eye} type{bitfield} }
+	property{ name{has_black_goo} type{bitfield} }
+	property{ name{has_dot} type{bitfield} }
+	property{ name{body_in_midground} type{bitfield} }
+	property{ name{has_heard_sound} type{bitfield} }
+	// the PassiveCorruption its CustomRotData comes from (invalid: none)
+	property{ name{custom} type{rot_placed_id} }
+	property{ name{focus} type{float} }
+	property{ name{last_focus} type{float} }
+	property{ name{get_to_focus} type{float} }
+	property{ name{closed} type{float} }
+	property{ name{last_closed} type{float} }
+	property{ name{light} type{float} }
+	property{ name{felt_something_intensity} type{float} }
+	property{ name{felt_something_delay} type{int16_t} }
+	property{ name{reaction_delay} type{int16_t} }
+	property{ name{bubbles_wait} type{int16_t} }
+	property{ name{look_dir} type{rw::vec2} }
+	property{ name{last_look_dir} type{rw::vec2} }
+	property{ name{next_look_dir} type{rw::vec2} }
+	property{ name{felt_something_at} type{rw::vec2} }
+	property{ name{leg_reach_pos} type{std::optional<rw::vec2>} }
+	property{ name{eat_chunk} type{world::rot_prey} }
+	property{ name{leg} type{rot_tube_id} }
+	property{ name{tendril} type{rot_tube_id} }
+	// rolls of InitiateSprites/ApplyPalette
+	property{ name{color_fac} type{float} }
+	property{ name{dot_scale} type{float} }
+	// eye colour of the last drawn frame (RenderSlits)
+	property{ name{render_light} type{float} }
+}
+relationship{
+	name{rot_bulb_membership}
+	tag{save}
+	link{ object{rot_bulb} name{bulb} type{unique} }
+	link{ object{rot_system} name{system} type{many} index_storage{array} }
+	primary_key{bulb}
+}
+
+// DaddyCorruption.CorruptionTube (LittleLeg, Tendril, ClimbableCorruptionTube)
+object{
+	name{rot_tube}
+	storage_type{contiguous}
+	size{16384}
+	tag{save}
+	property{ name{kind} type{world::rot_tube_kind} }
+	property{ name{segments} type{vector_pool{262144}{world::rot_segment}} }
+	property{ name{graphic} type{vector_pool{524288}{world::rot_graphic_segment}} }
+	property{ name{bumps} type{vector_pool{524288}{world::rot_bump}} }
+	// ClimbableCorruptionTube.ropes, one per segment pair
+	property{ name{ropes} type{vector_pool{32768}{world::rope_state}} }
+	property{ name{stuck_a} type{std::optional<rw::vec2>} }
+	property{ name{stuck_b} type{std::optional<rw::vec2>} }
+	property{ name{con_rad} type{float} }
+	property{ name{push_apart} type{float} }
+	// legs and tendrils: the bulb they grow from
+	property{ name{bulb} type{rot_bulb_id} }
+	// LittleLeg.mountedDir, ClimbableCorruptionTube.aMountDir/bMountDir
+	property{ name{mount_a} type{rw::vec2} }
+	property{ name{mount_b} type{rw::vec2} }
+	property{ name{move_counter} type{int32_t} }
+	property{ name{grab_chunk} type{world::rot_prey} }
+	property{ name{pull_in_prey} type{float} }
+	// LegGraphic.deadness
+	property{ name{deadness} type{float} }
+}
+relationship{
+	name{rot_tube_membership}
+	tag{save}
+	link{ object{rot_tube} name{tube} type{unique} }
+	link{ object{rot_system} name{system} type{many} index_storage{array} }
+	primary_key{tube}
+}
+
+// DaddyCorruption.EatenCreature: a creature being pulled into the rot
+object{
+	name{rot_meal}
+	storage_type{erasable}
+	size{64}
+	tag{save}
+	property{ name{prey} type{world::rot_prey} }
+	property{ name{goal_pos} type{rw::vec2} }
+	property{ name{goal_rad} type{float} }
+	property{ name{progression} type{float} }
+	property{ name{wait} type{float} }
+	property{ name{disable_counter} type{int32_t} }
+}
+relationship{
+	name{rot_meal_membership}
+	tag{save}
+	link{ object{rot_meal} name{meal} type{unique} }
+	link{ object{rot_system} name{system} type{many} index_storage{array} }
+	primary_key{meal}
 }
 
 // A distance field to a goal tile over one room, for one way of moving

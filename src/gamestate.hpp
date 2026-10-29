@@ -41,6 +41,13 @@ namespace sys {
         // (or dropped when nothing plays them)
         std::vector<sound::sound_request> sounds;
         std::vector<sound::music_request> music;
+        // Room.InGameNoise of this tick, for whatever listens (the rot)
+        struct noise {
+            dcon::room_id room;
+            rw::vec2 pos;
+            float strength;
+        };
+        std::vector<noise> noises;
 
         // Room.PlaySound
         void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {

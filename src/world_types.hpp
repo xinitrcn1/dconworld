@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+#include "math.hpp"
+
 namespace world {
     // World.preProcessingGeneration: connectivity maps older than this are stale
     inline constexpr int32_t preprocessing_generation = 20;
@@ -96,6 +98,103 @@ namespace world {
         flood_and_rain,
         none,
         unknown,
+    };
+
+    // Rot (DaddyCorruption) placed objects of the room settings
+    enum class rot_kind : uint8_t {
+        corruption,         // Corruption: a rot area with hostile bulbs
+        passive_corruption, // PassiveCorruption: an area with CustomRotData
+        tube,               // CorruptionTube: a climbable rot vine
+        darkness,           // CorruptionDarkness: a black goo blot
+    };
+
+    // DaddyCorruption.CustomRotData.RotColor
+    enum class rot_color : uint8_t {
+        default_,
+        effect_color_a,
+        effect_color_b,
+    };
+
+    // DaddyCorruption.CustomRotData (PassiveCorruption), vanilla defaults
+    struct rot_custom_data {
+        float min_size = 7.f;
+        float max_size = 15.f;
+        float eye_chance = 0.8f;
+        float min_eye_size = 0.3f;
+        float max_eye_size = 0.55f;
+        float min_color = 0.05f;
+        float max_color = 0.15f;
+        float slowdown = 0.2f;
+        float leg_chance = 0.2f;
+        float density = 2.f;
+        float darkness_chance = 0.f;
+        float darkness_scale = 1.f;
+        rot_color color = rot_color::default_;
+        bool cross_eyes = false; // EyeType.Cross, else Dot
+        bool hostile = false;    // Behavior.Hostile, else Passive
+    };
+
+    // the CorruptionTube subclasses
+    enum class rot_tube_kind : uint8_t {
+        leg,     // LittleLeg: grabs prey and pulls it into the rot
+        tendril, // Tendril: a passive strand hanging from a bulb
+        climb,   // ClimbableCorruptionTube: a vine stretched between two walls
+    };
+
+    // CorruptionTube.segments[i, 0..2]
+    struct rot_segment {
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+    };
+    // RopeGraphic.Segment (drawn positions of a tube)
+    struct rot_graphic_segment {
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+    };
+    // TubeGraphic.Bump: pos.x across the tube, pos.y along it (0..1)
+    struct rot_bump {
+        rw::vec2 pos{0.f, 0.f};
+        float size = 0.f;
+        float eye_size = 0.f;
+    };
+
+    // Rope (a line wrapping around tile corners); bends are capped
+    struct rope_corner {
+        rw::vec2 pos{0.f, 0.f};
+        uint8_t dir = 0; // FloatRect.CornerLabel A (top left), B, C, D
+    };
+    struct rope_state {
+        static constexpr uint32_t max_bends = 8;
+        rw::vec2 a{0.f, 0.f};
+        rw::vec2 b{0.f, 0.f};
+        rw::vec2 last_a{0.f, 0.f};
+        rw::vec2 last_b{0.f, 0.f};
+        float total_length = 0.f;
+        float thickness = 2.f;
+        uint8_t bend_count = 0;
+        rope_corner bends[max_bends];
+    };
+
+    // the bulbs of one tile of a rot system (DaddyCorruption.bulbs[x, y]):
+    // bulbs of a tile are created together, so they are contiguous
+    struct rot_cell {
+        uint32_t first = 0;
+        uint16_t count = 0;
+    };
+
+    // a creature body chunk held by the rot
+    enum class prey_kind : uint8_t {
+        none,
+        player,
+        centipede,
+    };
+    struct rot_prey {
+        prey_kind kind = prey_kind::none;
+        uint8_t chunk = 0;
+        uint16_t id = 0;
+        constexpr bool valid() const noexcept { return kind != prey_kind::none; }
+        constexpr bool same_creature(rot_prey o) const noexcept { return kind == o.kind && id == o.id; }
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]

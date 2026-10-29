@@ -83,6 +83,7 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
+| `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/selftest.*` | scripted movement scenarios and the fuzzer |
@@ -120,8 +121,13 @@ drowning. The underlying `BodyChunk` physics (tile, floor and slope
 collision, water, room bounds) and chunk connections are ported faithfully,
 including the vanilla quirks.
 
-Not ported yet: creatures and object to object collision, zero gravity,
-climbable vines, Remix (MMF) options, the other Downpour/Watcher slugcat
+Climbable vines (`ClimbableVinesSystem`, the `VineGrab` animation) are
+ported for the rot vines: grabbing one while holding up or falling through
+it, climbing and swinging along it, switching to a crossing vine, jumping
+off, and the hands gripping it.
+
+Not ported yet: creatures and object to object collision, zero gravity
+(also on vines), the plant vines and coral, Remix (MMF) options, the other Downpour/Watcher slugcat
 abilities, sand terrain (`TerrainManager`), and the `modify/` mod merge
 system (needed for Downpour/Watcher regions).
 
@@ -144,6 +150,27 @@ drops) kept in a `path_field` object. Fields are shared by every creature
 heading to the same tile, reused until the room's `geometry_version`
 changes (gate doors, spear beams) and recycled least recently used; following
 one is a neighbour lookup.
+
+### Rot
+
+`DaddyCorruption` from the rooms' `PlacedObjects:` (Corruption,
+PassiveCorruption with its `CustomRotData`, CorruptionTube,
+CorruptionDarkness): on a room's first visit the air tiles touching a wall
+inside the rot areas grow bulbs, laid out from a seed like vanilla so a room
+always grows the same rot. Bulbs wobble on their stalks, look around (eyes
+are the two slit meshes of `RenderSlits`), turn to hard impacts they hear
+(`InGameNoise` from `PhysicalObject.TerrainImpact`) and pass touches on to
+their neighbours. Hostile bulbs nibble at any creature touching them and
+drag it towards the thick of the rot; once enough nibbling has added up the
+creature is pulled into the wall and eaten (`EatenCreature`). Some bulbs grow
+a little leg that grabs prey and pulls it in. PassiveCorruption only slows
+creatures and grows hanging tendrils. CorruptionTubes are climbable vines
+between two walls, simulated like `ClimbableCorruptionTube` with `Rope`
+wrapping them around tile corners. Everything is drawn with plain shapes:
+ragged bulbs over the level foreground (vanilla's Water container), tubes and
+bumps with the region's corruption colours, a soft blot for black goo and
+CorruptionDarkness. Not ported: DaddyBubbles/ripples, StuckDaddy restraints,
+RotFlyPaper, the Watcher's sentient rot, slugcat filters on placed objects.
 
 ### Audio
 

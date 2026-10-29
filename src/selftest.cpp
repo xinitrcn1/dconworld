@@ -12,6 +12,7 @@
 #include "items.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
+#include "rot.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
 
@@ -78,6 +79,16 @@ namespace selftest {
             else
                 gs.world.room_set_items_spawned(rid, true); // tests place their own rocks
             return rid;
+        }
+
+        // a rot placed object, as if read from the room's settings
+        void add_rot(sys::game_state& gs, dcon::room_id room, world::rot_kind kind, vec2 pos, vec2 handle, world::rot_custom_data const& custom = {}) {
+            auto const o = gs.world.create_rot_placed();
+            gs.world.rot_placed_set_kind(o, kind);
+            gs.world.rot_placed_set_pos(o, pos);
+            gs.world.rot_placed_set_handle(o, handle);
+            gs.world.rot_placed_set_custom(o, custom);
+            gs.world.try_create_rot_placed_location(o, room);
         }
 
         struct sim {
@@ -491,6 +502,66 @@ namespace selftest {
             centipede::destroy(gs, c);
         }
         {
+            // a rot vine across a tall room: dropping onto it holding up grabs
+            // it, climbing moves along it, jumping lets go
+            auto const room = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
+            // the vine only grows with some rot in the room: a little in a corner
+            add_rot(gs, room, world::rot_kind::corruption, vec2{30.f, 30.f}, vec2{0.f, 25.f});
+            add_rot(gs, room, world::rot_kind::tube, vec2{110.f, 510.f}, vec2{580.f, 0.f});
+            sim s(gs, room, feet_at(30, 1));
+            s.run(150); // the vine settles into its sag
+            player::reset(gs, s.p, room, vec2{400.f, 560.f});
+            bool const grabbed = s.until(120, [&] { return s.animation() == player::animation_index::vine_grab; }, 0, 1);
+            s.run(60);
+            bool const held = s.animation() == player::animation_index::vine_grab && s.pos(1).y > 100.f;
+            float const x0 = s.pos(0).x;
+            s.run(120, 1);
+            float const climbed = s.pos(0).x - x0;
+            bool const still_on = s.animation() == player::animation_index::vine_grab;
+            s.step(0, 1, true);
+            s.step(0, 1, false);
+            bool const let_go = s.animation() != player::animation_index::vine_grab;
+            char d[128];
+            std::snprintf(d, sizeof(d), " grabbed=%d held=%d climbed=%.0fpx still_on=%d let_go=%d", int(grabbed), int(held), climbed, int(still_on), int(let_go));
+            r.check("climb a rot vine", grabbed && held && climbed > 60.f && still_on && let_go, s.describe() + d);
+        }
+        {
+            // lying in thick rot: the bulbs nibble until the slugcat is pulled in and eaten
+            auto const room = make_room(gs, region, box(20, 10, [](int32_t, int32_t) { return ' '; }));
+            add_rot(gs, room, world::rot_kind::corruption, vec2{30.f, 30.f}, vec2{0.f, 160.f});
+            sim s(gs, room, feet_at(2, 1));
+            s.step(0, -1);
+            bool const eaten = s.until(1200, [&] { return gs.world.player_get_eaten(s.p) != 0; }, 0, -1);
+            uint32_t legs = 0, meals = 0;
+            auto const sys = rot::system_of(gs, room);
+            gs.world.rot_system_for_each_rot_tube_membership(sys, [&](dcon::rot_tube_membership_id) { ++legs; });
+            gs.world.rot_system_for_each_rot_meal_membership(sys, [&](dcon::rot_meal_membership_id) { ++meals; });
+            char d[96];
+            std::snprintf(d, sizeof(d), " eaten=%d dead=%d legs=%u meals_left=%u", int(eaten), int(s.dead()), legs, meals);
+            r.check("rot eats a resting slugcat", eaten && s.dead() && meals == 0, s.describe() + d);
+            // respawning brings it back whole
+            player::reset(gs, s.p, room, feet_at(15, 1));
+            s.run(40);
+            r.check("respawn after being eaten", !gs.world.player_get_eaten(s.p) && s.contact(1).y == -1, s.describe());
+        }
+        {
+            // PassiveCorruption only slows creatures down and grows tendrils under ceilings
+            auto const room = make_room(gs, region, box(20, 10, [](int32_t x, int32_t y) { return y >= 5 && x > 2 && x < 17 ? '#' : ' '; }));
+            world::rot_custom_data c;
+            c.leg_chance = 1.f;
+            add_rot(gs, room, world::rot_kind::passive_corruption, vec2{200.f, 100.f}, vec2{0.f, 140.f}, c);
+            sim s(gs, room, feet_at(9, 1));
+            s.run(600, 0, -1);
+            uint32_t tendrils = 0, legs = 0;
+            gs.world.rot_system_for_each_rot_tube_membership(rot::system_of(gs, room), [&](dcon::rot_tube_membership_id m) {
+                auto const k = gs.world.rot_tube_get_kind(gs.world.rot_tube_membership_get_tube(m));
+                (k == world::rot_tube_kind::tendril ? tendrils : legs) += 1;
+            });
+            char d[96];
+            std::snprintf(d, sizeof(d), " eaten=%d tendrils=%u legs=%u", int(gs.world.player_get_eaten(s.p)), tendrils, legs);
+            r.check("passive rot doesn't eat", !gs.world.player_get_eaten(s.p) && !s.dead() && tendrils > 0 && legs == 0, s.describe() + d);
+        }
+        {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';
@@ -531,6 +602,7 @@ namespace selftest {
         auto const p = player::create(gs, first, vec2{0.f, 0.f});
         uint32_t music_requests = 0;
         uint32_t deaths = 0;
+        uint32_t eaten = 0;
         uint32_t lost = 0;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
@@ -587,7 +659,9 @@ namespace selftest {
                 }
                 centipede::destroy(gs, centi);
             }
-            if (w.player_get_dead(p))
+            if (w.player_get_eaten(p))
+                ++eaten;
+            else if (w.player_get_dead(p))
                 ++deaths;
         });
         uint32_t rocks = 0;
@@ -595,6 +669,19 @@ namespace selftest {
         std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
             w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
         std::printf("centipedes: one per room, %u fell out of their room, %u slugcats killed, %u path fields built\n", lost, deaths, pathing::builds());
+        uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
+        w.for_each_rot_tube([&](dcon::rot_tube_id t) {
+            auto const k = w.rot_tube_get_kind(t);
+            (k == world::rot_tube_kind::leg ? legs : k == world::rot_tube_kind::tendril ? tendrils : vines) += 1;
+        });
+        w.for_each_rot_bulb([&](dcon::rot_bulb_id b) { eyes += w.rot_bulb_get_has_eye(b) ? 1 : 0; });
+        w.for_each_rot_system([&](dcon::rot_system_id rs) {
+            uint32_t n = 0;
+            w.rot_system_for_each_rot_bulb_membership(rs, [&](dcon::rot_bulb_membership_id) { ++n; });
+            max_bulbs = std::max(max_bulbs, n);
+        });
+        std::printf("rot: %u placed objects, %u rooms with rot, %u bulbs (%u eyes, at most %u in a room), %u legs, %u tendrils, %u vines, %u slugcats eaten\n",
+            w.rot_placed_size(), w.rot_system_size(), w.rot_bulb_size(), eyes, max_bulbs, legs, tendrils, vines, eaten);
 
         // every connected room exit pipe: sit in the entrance, push into it and
         // expect to come out in the connected room
