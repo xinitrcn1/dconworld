@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "dropbug.hpp"
+#include "rooms.hpp"
 #include "dropbug_graphics.hpp"
 #include "items.hpp"
 #include "particles.hpp"
@@ -53,7 +54,7 @@ namespace dropbug {
             if (v == 0)
                 return dcon::player_id{};
             dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) ? p : dcon::player_id{};
+            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
         }
 
         float object_mass(sys::game_state const& state, dcon::physical_object_id o) {
@@ -143,21 +144,17 @@ namespace dropbug {
         // Room.ceilingTiles: open tiles under a solid one, over open space,
         // above the water
         std::vector<ivec2> const& ceiling_tiles(sys::game_state& state, room_view const& room) {
-            auto& cache = state.ceiling_tile_cache;
+            auto& rt = state.runtime(room.id);
             uint16_t const version = state.world.room_get_geometry_version(room.id);
-            for (auto& c : cache)
-                if (c.room == room.id && c.geometry_version == version)
-                    return c.tiles;
-            if (cache.size() >= 16)
-                cache.erase(cache.begin());
-            auto& c = cache.emplace_back();
-            c.room = room.id;
-            c.geometry_version = version;
+            if (rt.ceiling_version == version)
+                return rt.ceiling_tiles;
+            rt.ceiling_version = version;
+            rt.ceiling_tiles.clear();
             for (int32_t x = 0; x < room.width; ++x)
                 for (int32_t y = 0; y < room.height - 1; ++y)
                     if (!solid(room, ivec2{x, y}) && solid(room, ivec2{x, y + 1}) && !solid(room, ivec2{x, y - 1}) && y > room.default_water_level)
-                        c.tiles.push_back(ivec2{x, y});
-            return c.tiles;
+                        rt.ceiling_tiles.push_back(ivec2{x, y});
+            return rt.ceiling_tiles;
         }
 
         // DropBugAI.ValidCeilingSpot
@@ -284,9 +281,8 @@ namespace dropbug {
             auto& w = state.world;
             dcon::player_id prey;
             float best = float_max;
-            w.for_each_player([&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p) || player::body(state, p) == dcon::physical_object_id{}
-                || w.physical_object_get_room_from_object_location(player::body(state, p)) != room.id)
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
+                if (w.player_get_in_shortcut(p))
                     return;
                 for (uint32_t i = 0; i < 2; ++i) {
                     vec2 const pp = w.body_chunk_get_pos(player::body_chunk(state, p, i));
@@ -379,8 +375,8 @@ namespace dropbug {
                     num += custom::lerp_map(float_dist(test, room_view::get_tile_position(w.dropbug_get_last_seen_pos(d))), 3.f + 8.f * intensity, 2.f, 0.f, intensity * 70.f, 2.f);
             }
             // otherWigsInRoom: keep away from the other dropbugs' spots
-            w.for_each_dropbug([&](dcon::dropbug_id o) {
-                if (o != d && room_of(state, o) == room.id)
+            rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id o) {
+                if (o != d)
                     num += custom::lerp_map(float_dist(test, w.dropbug_get_ceiling(o).ceiling_pos), 50.f, 1.f, 0.f, 1000.f, 3.f);
             });
             return num;
@@ -451,7 +447,9 @@ namespace dropbug {
             // (sic) without a target the direction becomes the position to jump at
             if (!p)
                 w.dropbug_set_jump_at_pos(d, dir);
-            w.dropbug_get_graphics(d).ceiling_jump = 1;
+            // (graphicsModule != null)
+            if (state.viewed(room_of(state, d)))
+                w.dropbug_get_graphics(d).ceiling_jump = 1;
             state.play_sound(sound::sound_id::drop_bug_drop_from_ceiling, room_of(state, d), pos(state, d, 0));
             play_voice(state, d);
         }
@@ -484,8 +482,14 @@ namespace dropbug {
                 return;
             w.dropbug_set_drop_anticipation(d, 1.f);
             pos(state, d, 0) += custom::rnv(rng) * 2.f;
-            for (auto& a : w.dropbug_get_graphics(d).antennae)
-                a.pos += custom::rnv(rng) * 7.f * rng.value();
+            // the antennae twitch where a camera looks (graphicsModule != null);
+            // the rolls are made either way, so the generator doesn't depend on it
+            bool const viewed = state.viewed(room_of(state, d));
+            for (auto& a : w.dropbug_get_graphics(d).antennae) {
+                vec2 const twitch = custom::rnv(rng) * 7.f * rng.value();
+                if (viewed)
+                    a.pos += twitch;
+            }
         }
 
         // CeilingSitModule.Dislodge
@@ -630,16 +634,20 @@ namespace dropbug {
             auto& w = state.world;
             auto& rng = w.dropbug_get_random(d);
             float const hearing = w.dropbug_get_sitting(d) ? 1.f : 0.3f;
-            for (auto const& n : state.noises) {
-                if (n.room != room.id || !custom::dist_less(n.pos, pos(state, d, 0), n.strength * hearing))
+            for (auto const& n : state.noises(room.id)) {
+                if (!custom::dist_less(n.pos, pos(state, d, 0), n.strength * hearing))
                     continue;
                 float const ceiling = w.dropbug_get_in_ceiling_mode(d);
                 if (!w.dropbug_get_sitting(d) || w.dropbug_get_noise_reaction_delay(d) > 0 || rng.value() < mathf::lerp(1.f, 0.1f, ceiling))
                     return;
                 pos(state, d, 1) += custom::rnv(rng) * 4.f;
                 auto& g = w.dropbug_get_graphics(d);
-                for (auto& a : g.antennae)
-                    a.pos += custom::dir_vec(pos(state, d, 0), n.pos) * rng.value() * mathf::lerp(20.f, 1.f, g.deep_ceiling_mode);
+                // (graphicsModule != null, the rolls made either way)
+                for (auto& a : g.antennae) {
+                    vec2 const twitch = custom::dir_vec(pos(state, d, 0), n.pos) * rng.value() * mathf::lerp(20.f, 1.f, g.deep_ceiling_mode);
+                    if (state.viewed(room.id))
+                        a.pos += twitch;
+                }
                 w.dropbug_set_noise_reaction_delay(d, rng.range(0, 30 + int32_t(30.f * ceiling)));
             }
         }
@@ -1418,8 +1426,8 @@ namespace dropbug {
                 score += custom::lerp_map(float_dist(t, c.stay_away_from_pos), 0.f, 15.f, 400.f, 0.f);
                 score -= custom::lerp_map(float_dist(t, c.random_attractor), float(c.room_size / 4), float(c.room_size / 2), 150.f, 0.f);
                 // the creatures already in the room, other dropbugs most of all
-                w.for_each_dropbug([&](dcon::dropbug_id o) {
-                    if (o == d || room_of(state, o) != room.id)
+                rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id o) {
+                    if (o == d)
                         return;
                     float const dist = float_dist(t, here(state, o));
                     score += custom::lerp_map(dist, 50.f, 2.f, 0.f, 500.f, 3.f);
@@ -1585,23 +1593,21 @@ namespace dropbug {
     }
 
     void update_room(sys::game_state& state, room_view const& room) {
-        state.world.for_each_dropbug([&](dcon::dropbug_id d) {
-            if (room_of(state, d) == room.id) {
-                update(state, d, room);
+        bool const viewed = state.viewed(room.id);
+        rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id d) {
+            update(state, d, room);
+            // the GraphicsModule only exists where a camera looks
+            if (viewed)
                 dropbug_graphics::update(state, d, room);
-            }
         });
     }
 
     void collide(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
-        w.for_each_dropbug([&](dcon::dropbug_id d) {
-            if (room_of(state, d) != room.id)
-                return;
-            w.for_each_player([&](dcon::player_id p) {
-                auto const pb = player::body(state, p);
+        rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id d) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 // what it holds is kept out of it by CarryObject
-                if (w.player_get_in_shortcut(p) || w.physical_object_get_room_from_object_location(pb) != room.id || grasped(state, d) == p)
+                if (w.player_get_in_shortcut(p) || grasped(state, d) == p)
                     return;
                 for (uint32_t i = 0; i < 3; ++i)
                     for (uint32_t j = 0; j < 2; ++j)
@@ -1609,8 +1615,8 @@ namespace dropbug {
                             collide_player(state, d, i, p, j);
             });
             // dropbugs climb over each other and follow the dominant ones
-            w.for_each_dropbug([&](dcon::dropbug_id other) {
-                if (other.index() <= d.index() || room_of(state, other) != room.id)
+            rooms::for_each_dropbug(state, room.id, [&](dcon::dropbug_id other) {
+                if (other.index() <= d.index())
                     return;
                 bool touched = false;
                 for (uint32_t i = 0; i < 3; ++i)
@@ -1635,9 +1641,7 @@ namespace dropbug {
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::dropbug_id& hit, uint32_t& hit_chunk) {
         auto const& w = state.world;
         float best = 2.f;
-        w.for_each_dropbug([&](dcon::dropbug_id d) {
-            if (room_of(state, d) != room)
-                return;
+        rooms::for_each_dropbug(state, room, [&](dcon::dropbug_id d) {
             for (uint32_t i = 0; i < 3; ++i) {
                 vec2 const p = pos(state, d, i);
                 float const r = rad + w.body_chunk_get_rad(chunk(state, d, i));
@@ -1680,8 +1684,8 @@ namespace dropbug {
 
     void flying_weapon(sys::game_state& state, dcon::room_id room, vec2 at, vec2 v, vec2 thrown_pos) {
         auto& w = state.world;
-        w.for_each_dropbug([&](dcon::dropbug_id d) {
-            if (room_of(state, d) != room || !consious(state, d))
+        rooms::for_each_dropbug(state, room, [&](dcon::dropbug_id d) {
+            if (!consious(state, d))
                 return;
             auto const view = world::get_room_view(state, room);
             vec2 const head = pos(state, d, 0);
@@ -1698,7 +1702,8 @@ namespace dropbug {
     }
 
     void release_player(sys::game_state& state, dcon::player_id p) {
-        state.world.for_each_dropbug([&](dcon::dropbug_id d) {
+        // whatever holds the slugcat is in its room
+        rooms::for_each_dropbug(state, rooms::room_of(state, p), [&](dcon::dropbug_id d) {
             if (grasped(state, d) == p)
                 lose_all_grasps(state, d);
         });

@@ -27,7 +27,9 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --root <StreamingAssets> [--root <more>...]
 ./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
 ./build/rwcpp --selftest         # scripted movement/item/gate tests (no game data needed)
-./build/rwcpp --fuzz 600         # random input soak test in every room, then every room exit pipe
+./build/rwcpp --fuzz 600         # a creature of each kind in every room, slugcats with random input
+                                 # in 128 rooms at a time (the whole world ticking), then every room exit pipe
+./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread
 ./build/rwcpp --audio-check      # load the sound effects, decode whole songs, report
 ```
 
@@ -64,9 +66,89 @@ playing alone.
 
 Every game object is stored in a DataContainer (`src/dcon_generated.txt`),
 owned by `sys::game_state::world`. Sizes are fixed bounds chosen as powers of
-two a bit above vanilla's needs (2048 rooms, 2^23 tiles, 8 players...), see
-the comment at the top of the definitions. Ownership (room of a camera,
-chunks of an object, body of a player...) is modelled with relationships.
+two a bit above vanilla's needs (4096 rooms, 2^23 tiles, 255 players, ~4000
+of each creature for the whole world...), see the comment at the top of the
+definitions. Ownership (room of a camera, chunks of an object, body of a
+player...) is modelled with relationships. Flags written while the rooms
+update in parallel are bytes, not bitfields (a bitfield shares its byte with
+seven other objects).
+
+## Simulation
+
+There is no AbstractRoom/AbstractCreature layer: every room of every loaded
+region (2074 with the Watcher) is populated at startup and simulated every
+tick, viewed or not, with full physics and AI for every creature in it.
+`simulation::tick` (`src/simulation.cpp`):
+
+- **Startup**: `simulation::populate` does what `Room.Loaded` does on a
+  room's first visit (placed and random items, scavenger outposts and
+  treasuries, story items, fruit, rot, warp points, the sand height map) for
+  every room, in room order. Every room has its own `UnityEngine.Random`
+  (`room.random`), seeded from the world seed (`game_state::random`) and the
+  room's name, so a room rolls the same whatever else happens. Objects are
+  created serially; the sand maps are built in parallel.
+- **Serial, before**: players in a shortcut travel their vessel (coming out
+  moves them, what they hold and the squidcada they carry to another room),
+  the viewed rooms are worked out (the players' rooms and
+  `game_state::camera_rooms`), creatures in a room that just came into view
+  get their graphics modules reset (`reset_positions`: the parts back on the
+  body, the look kept), and `rooms::build_index` buckets every player,
+  creature, item and spit by room.
+- **Parallel**: one TBB task per room runs its players, creatures (update and
+  collisions), outposts, items, rot, water, sand and mud, ambient particles
+  and gate, in that order. A room's update reads and writes only its own
+  objects: every loop over creatures is `rooms::for_each_*` over the room's
+  bucket, and what holds a slugcat is looked for in the slugcat's room. Each
+  room has its own caches and buffers (`sys::room_runtime`): path fields,
+  terrain proximity, ceiling tiles, water surface, sand, and this tick's
+  noises, sounds, music, particles and ripple rings.
+- **Transactions**: whatever would change the data container's structure
+  (creating or deleting objects, a lizard's spit, Spearmaster's needle, a
+  rot meal, a bomb gone off, a centipede eaten by the rot) is queued on the
+  room with `game_state::defer` and applied after the parallel phase, room
+  by room in order, each room's in the order queued; outside the parallel
+  phase `defer` runs at once. Grasps of items are plain properties of the
+  player and the item, so picking up and throwing need no transaction.
+- **Serial, after**: the rooms' sounds, music, particles and rings are
+  merged in room order; the Watcher's warps (which move everything they pull
+  to another room and drive the screen wide sequence) update, every warp
+  room in order; then the particles.
+
+The outcome doesn't depend on the thread count or the scheduling: rooms
+don't see each other while they update, every random roll comes from the
+room's or the object's own generator, and the transactions apply in a fixed
+order. `--selftest` runs a scenario on one thread and on every thread and
+compares a hash of every body chunk; `--bench` does the same for the whole
+world.
+
+Graphics modules (centipede, dropwig, squidcada, lizard with its
+cosmetics, daddy long legs) only update in viewed rooms, like vanilla where a
+creature off screen has no `graphicsModule`. Where the simulation reads the
+graphics module, the off screen path is vanilla's `graphicsModule == null`
+one: `Lizard.LegsGripping` is 2 and `NoGripCounter` 0, the Caramel doesn't
+rear up for its lunge, tongue segments, head flicker and antennae twitches
+aren't touched (their random rolls are still made). Particles, sounds and
+music only come from viewed rooms. The slugcat's room is always viewed, so
+its graphics (which hold the hands items hang from) always run. The water
+surface runs in every room with water.
+
+`--bench N` puts a creature of each kind in every room and times N ticks of
+the whole world on one thread and on every thread. On a 6 core Xeon
+(Skylake, KVM):
+
+| world | creatures | 1 thread | 6 threads | ticks/s |
+| --- | --- | --- | --- | --- |
+| vanilla, 760 rooms | none (no den spawns yet) | 3.8 ms | 0.87 ms | 1150 |
+| vanilla, 760 rooms | 3525, one of each per room | 53 ms | 9.5 ms | 106 |
+| + Watcher, 2074 rooms | none | 12.8 ms | 2.6 ms | 381 |
+| + Watcher, 2074 rooms | 9705, one of each per room | 175 ms | 29 ms | 34 |
+
+With a creature of each kind in all 2074 rooms about half the time goes to
+the daddy long legs' tentacles (`Tentacle`/`DaddyTentacle`: terrain
+collisions, grab path searches, ray traces), and a quarter to building path
+fields (~60 a tick, mostly squidcadas and daddies changing destination); the
+rest is the other creatures, the rot and the water. Rooms scale to about 6x
+on 6 cores; the serial phases take ~0.25 ms a tick.
 
 ## Layout
 
@@ -85,13 +167,14 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/physics.*` | `BodyChunk` and `BodyChunkConnection` ports over the data container |
 | `src/player.*` | slugcat movement (`Player.cs` port); players are data container objects (co-op ready) |
 | `src/shortcuts.*` | shortcut travel: suck-in, the vessel moving along the pipe path, spit out, room to room transfers through `world_<region>.txt` connections |
-| `src/items.*` | rocks (`Rock`/`Weapon`): vanilla spawning on a room's first visit, flight/bounces/wall hits, `Player.GrabUpdate`/`ThrowObject` |
+| `src/items.*` | rocks (`Rock`/`Weapon`): vanilla spawning (`Room.Loaded`, done for every room at startup), flight/bounces/wall hits, `Player.GrabUpdate`/`ThrowObject` |
 | `src/item_graphics.*` | `Rock`, `Spear` (and explosive/electric spears, Spearmaster's needles), `DataPearl` and `ScavengerOutpost` `DrawSprites` with the game's elements |
 | `src/outposts.*` | the scavengers' loot without scavengers: `ScavengerOutpost` (toll spears, `DeerGraphics.Antlers`, `PearlString`s), `ScavengerTreasury`, story `MultiplayerItem`s |
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
 | `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
-| `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
+| `src/simulation.*` | one tick of the whole world: every room in parallel (TBB), the deferred transactions, vessels and warps; startup population of every room |
+| `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures, items and spit by room, for the parallel room updates |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
 | `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
 | `src/dropbug.*` | `DropBug`/`DropBugAI`: the dropwig sitting in the ceiling, dropping on prey, pouncing, biting and carrying, its `CeilingSitModule` |
@@ -112,9 +195,9 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/daddy_tentacle.cpp` | `Tentacle`/`DaddyTentacle`: tile segments, grab paths (`FindTentaclePath`), pulling, growing, chunks on `Rope`s, climbing, hunting, grabbing, examining noises |
 | `src/daddy_graphics.*` | `DaddyGraphics`: leg graphics (`RopeGraphic`), dead legs, danglers, bumps, the eyes, the Hunter's dummy, `DrawSprites` with the game's elements |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
-| `src/pathing.*` | on demand, shared distance fields stored in the data container |
+| `src/pathing.*` | on demand distance fields, cached per room |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
-| `src/selftest.*` | scripted movement scenarios and the fuzzer |
+| `src/selftest.*` | scripted movement scenarios, the thread count determinism check, the fuzzer and the bench |
 | `og/` | decompiled game source used as the reference (not tracked) |
 
 ## Status
@@ -286,16 +369,19 @@ jagged disc and plain triangles).
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
 (reverse Dijkstra with vanilla's connection costs: steps, open diagonals,
-drops) kept in `game_state::path_fields`, a cache outside the data container (never saved). Fields are shared by every creature
+drops) kept in the room's `room_runtime::path_fields`, a cache outside the
+data container (never saved). Fields are shared by every creature of the room
 heading to the same tile, reused until the room's `geometry_version`
-changes (gate doors, spear beams) and recycled least recently used; following
-one is a neighbour lookup.
+changes (gate doors, spear beams), recycled least recently used (32 a room)
+and dropped after 400 ticks unused; following one is a neighbour lookup.
+Fields are built with Dial's algorithm (a ring of cost buckets: the costs are
+small integers) over the room's cached tile accessibility.
 
 ### Rot
 
 `DaddyCorruption` from the rooms' `PlacedObjects:` (Corruption,
 PassiveCorruption with its `CustomRotData`, CorruptionTube,
-CorruptionDarkness): on a room's first visit the air tiles touching a wall
+CorruptionDarkness): when the room is populated (at startup) the air tiles touching a wall
 inside the rot areas grow bulbs, laid out from a seed like vanilla so a room
 always grows the same rot. Bulbs wobble on their stalks, look around (eyes
 are the two slit meshes of `RenderSlits`), turn to hard impacts they hear
@@ -401,8 +487,7 @@ Without the Unity data they, like the other items, fall back to simple
 shapes of our own. Eating isn't ported.
 
 The Watcher's sand is a 1D height map built from the room's TerrainHandles
-(a spline through them) the first time the room is used, kept for the
-session only. Bodies stand on it; their weight slowly presses marks into
+(a spline through them) at startup, kept for the session only. Bodies stand on it; their weight slowly presses marks into
 it and pushes the sand aside, and slopes too steep for sand slump. A
 sandstorm (F6 in a room with sand) blows sand through the air and slowly
 works the dunes back into smooth sine dunes. Mud pits drag and slowly
@@ -436,7 +521,7 @@ other end; room exits follow `world_<region>.txt` connections (merged across
 region files, gates included) to the destination's matching exit. Every one
 of the 1414 connected room exits is exercised by `--fuzz`.
 
-Rocks and spears spawn on a room's first visit like `Room.Loaded`: placed
+Rocks and spears spawn like `Room.Loaded` does on a room's first visit, for every room at startup: placed
 rocks at 75% and spears at 60%, then `RandomItemDensity` random items on
 tiles with three solid tiles below (not in shelters or gates). Spears stick
 in a wall they hit straight on (from up close, or a third of the time from

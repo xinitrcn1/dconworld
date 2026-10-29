@@ -1,16 +1,39 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <memory>
 
 #include "math.hpp"
 #include "gamestate.hpp"
 #include "world.hpp"
+#include "lizard_types.hpp"
+#include "daddy_types.hpp"
 
 namespace selftest {
     // Scripted movement scenarios in synthetic rooms; returns process exit code
     int run();
-    // Random input soak test of the slugcat in every loaded room
+    // Random input soak test: a creature of each kind in every room, then
+    // slugcats in every room (a batch of rooms at a time, the whole world
+    // ticking), then every room exit pipe
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room);
+    // `ticks` ticks of the whole world with a creature of each kind in every
+    // room, once on one thread and once on every thread: ms per tick, and
+    // whether both end in the same world (`load` makes a fresh one)
+    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks);
+    // the creatures spawn_creatures put in a room (invalid: no spot found)
+    struct world_creatures {
+        dcon::centipede_id centipede;
+        dcon::dropbug_id dropbug;
+        dcon::cicada_id cicada;
+        dcon::lizard_id lizard;
+        lizard::breed breed{};
+        dcon::daddy_id daddy;
+        daddy::variant variant{};
+    };
+    // one creature of each kind in the room, placed with rolls seeded by the
+    // room's index (the fuzz's and the bench's world)
+    world_creatures spawn_creatures(sys::game_state& gs, dcon::room_id rid);
     // A sensible place to drop the slugcat in a room (feet position)
     rw::vec2 find_spawn(world::room_view const& room, rw::vec2 near);
 }

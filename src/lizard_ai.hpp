@@ -52,6 +52,8 @@ namespace lizard {
     void jaws_snap_shut(sys::game_state& state, dcon::lizard_id l, rw::vec2 at);
     // Lizard.LegsGripping
     int32_t legs_gripping(sys::game_state const& state, dcon::lizard_id l) noexcept;
+    // Lizard.NoGripCounter: LizardGraphics' ticks without a leg gripping, 0 off screen
+    int32_t no_grip_counter(sys::game_state const& state, dcon::lizard_id l) noexcept;
     // LizardVoice.MakeSound (the intensity drawn at random without one)
     void make_sound(sys::game_state& state, dcon::lizard_id l, emotion e);
     void make_sound(sys::game_state& state, dcon::lizard_id l, emotion e, float intensity);

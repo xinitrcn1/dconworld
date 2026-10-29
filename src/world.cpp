@@ -623,6 +623,8 @@ namespace world {
         dcon::room_id commit_room(sys::game_state& s, parsed_room& r) {
             auto& dc = s.world;
             auto const rid = dc.create_room();
+            // its share of the state outside the data container (caches, buffers)
+            s.rooms.resize(size_t(dc.room_size()));
             dc.room_set_name(rid, s.add_text(r.name));
             dc.room_set_display_name(rid, s.add_text(r.display_name));
             dc.room_set_width(rid, r.width);

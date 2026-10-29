@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "daddy.hpp"
+#include "rooms.hpp"
 #include "daddy_graphics.hpp"
 #include "daddy_internal.hpp"
 #include "centipede.hpp"
@@ -99,7 +100,7 @@ namespace daddy {
             if (v == 0)
                 return dcon::player_id{};
             dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) ? p : dcon::player_id{};
+            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
         }
         uint8_t player_ref(dcon::player_id p) noexcept {
             return p ? uint8_t(p.index() + 1) : 0;
@@ -324,8 +325,9 @@ namespace daddy {
             }
             uint16_t const id = src->id;
             update_examine_sound(x);
-            // DaddyAI.ReactToNoise
-            daddy_graphics::react_to_noise(x.state, x.d, id, noise.pos, noise.strength);
+            // DaddyAI.ReactToNoise (graphicsModule != null)
+            if (x.state.viewed(x.room.id))
+                daddy_graphics::react_to_noise(x.state, x.d, id, noise.pos, noise.strength);
             if (x.hd) {
                 x.a.react_target = room_view::get_tile_position(noise.pos);
                 x.a.react_noise_time = 60;
@@ -403,8 +405,8 @@ namespace daddy {
             bool const listens = x.size_class || x.hd;
             float const hearing = x.hd ? 5.f : (x.z.eyes_closed < 1 ? 2.f : 0.f);
             if (listens)
-                for (auto const& n : x.state.noises)
-                    if (n.room == x.room.id && n.source != body(x.state, x.d))
+                for (auto const& n : x.state.noises(x.room.id))
+                    if (n.source != body(x.state, x.d))
                         heard_noise(x, n, hearing);
             a.current = behavior::idle;
             --a.react_noise_time;
@@ -692,7 +694,7 @@ namespace daddy {
             cicada::release_player(x.state, p);
             lizard::release_player(x.state, p);
             rot::release_player(x.state, p);
-            x.state.world.for_each_daddy([&](dcon::daddy_id o) {
+            rooms::for_each_daddy(x.state, x.room.id, [&](dcon::daddy_id o) {
                 if (o == x.d)
                     return;
                 auto& core = x.state.world.daddy_get_core(o);
@@ -767,8 +769,8 @@ namespace daddy {
             auto& x = *static_cast<impact_ctx*>(user);
             auto& state = *x.state;
             // (it doesn't call PhysicalObject.TerrainImpact: no noise of the impact)
-            if (!state.noises.empty() && state.noises.back().source == o)
-                state.noises.pop_back();
+            if (auto& n = state.runtime(room_of(state, x.d)).noises; !n.empty() && n.back().source == o)
+                n.pop_back();
             state.play_sound(speed < 8.f ? sound::sound_id::cicada_light_terrain_impact : sound::sound_id::cicada_heavy_terrain_impact,
                 room_of(state, x.d), state.world.body_chunk_get_pos(chunk(state, x.d, 0)));
         }
@@ -860,7 +862,7 @@ namespace daddy {
         bool being_eaten(sys::game_state const& state, dcon::player_id p) {
             bool found = false;
             uint8_t const ref = player_ref(p);
-            state.world.for_each_daddy([&](dcon::daddy_id d) {
+            rooms::for_each_daddy(state, rooms::room_of(state, p), [&](dcon::daddy_id d) {
                 auto const& core = state.world.daddy_get_core(d);
                 for (uint32_t i = 0; i < core.eat_count; ++i)
                     found = found || core.eats[i].player == ref;
@@ -1200,9 +1202,8 @@ namespace daddy {
     }
 
     void update_room(sys::game_state& state, room_view const& room) {
-        state.world.for_each_daddy([&](dcon::daddy_id d) {
-            if (room_of(state, d) != room.id)
-                return;
+        bool const viewed = state.viewed(room.id);
+        rooms::for_each_daddy(state, room.id, [&](dcon::daddy_id d) {
             {
                 auto& tents = work_buffer();
                 ctx x(state, d, room, tents, scratch_buffer());
@@ -1210,17 +1211,16 @@ namespace daddy {
                 update(x);
                 store(x);
             }
-            daddy_graphics::update(state, d, room);
+            // the GraphicsModule only exists where a camera looks
+            if (viewed)
+                daddy_graphics::update(state, d, room);
         });
     }
 
     void collide(sys::game_state& state, room_view const& room) {
-        auto& w = state.world;
-        w.for_each_daddy([&](dcon::daddy_id d) {
-            if (room_of(state, d) != room.id)
-                return;
+        rooms::for_each_daddy(state, room.id, [&](dcon::daddy_id d) {
             uint32_t const n = chunk_count(state, d);
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 // a slugcat being eaten is out of the collision layer
                 if (!player_here(state, p, room.id) || being_eaten(state, p))
                     return;
@@ -1237,9 +1237,7 @@ namespace daddy {
         float best = 2.f;
         vec2 const dv = to - from;
         float const len2 = rw::sqr_magnitude(dv);
-        w.for_each_daddy([&](dcon::daddy_id d) {
-            if (room_of(state, d) != room)
-                return;
+        rooms::for_each_daddy(state, room, [&](dcon::daddy_id d) {
             uint32_t const n = chunk_count(state, d);
             for (uint32_t i = 0; i < n; ++i) {
                 vec2 const p = w.body_chunk_get_pos(chunk(state, d, i));
@@ -1256,9 +1254,7 @@ namespace daddy {
             return true;
         // the tentacles, as appendages: the projectile's line crossing one of
         // their segments (the connected chunk, then the tentacle chunks)
-        w.for_each_daddy([&](dcon::daddy_id d) {
-            if (room_of(state, d) != room)
-                return;
+        rooms::for_each_daddy(state, room, [&](dcon::daddy_id d) {
             auto const& parts = w.daddy_get_parts(d);
             for (uint32_t k = 0; k < parts.tentacle_count; ++k) {
                 auto const t = tentacle_of(state, d, k);
@@ -1338,7 +1334,8 @@ namespace daddy {
     void release_player(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
         uint8_t const ref = player_ref(p);
-        w.for_each_daddy([&](dcon::daddy_id d) {
+        // whatever holds or eats the slugcat is in its room
+        rooms::for_each_daddy(state, rooms::room_of(state, p), [&](dcon::daddy_id d) {
             auto& core = w.daddy_get_core(d);
             for (uint32_t i = 0; i < core.eat_count;)
                 if (core.eats[i].player == ref)

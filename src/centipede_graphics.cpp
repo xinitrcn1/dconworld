@@ -126,6 +126,17 @@ namespace centipede_graphics {
                 }
     }
 
+    void reset_positions(sys::game_state& state, dcon::centipede_id c) {
+        auto& w = state.world;
+        auto const keep = w.centipede_get_graphics(c);
+        reset(state, c);
+        auto& g = w.centipede_get_graphics(c);
+        g.random = keep.random;
+        g.default_rotat = keep.default_rotat;
+        for (auto& r : g.body_rotations)
+            r[0] = r[1] = custom::deg_to_vec(g.default_rotat);
+    }
+
     void update(sys::game_state& state, dcon::centipede_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = w.centipede_get_graphics(c);

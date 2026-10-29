@@ -9,7 +9,10 @@
 // must be heap allocated (see sys::make_game_state).
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -23,6 +26,149 @@
 #include "world_types.hpp"
 
 namespace sys {
+    // The objects of one kind in every room, sorted by id within a room (the
+    // order dcon's for_each walks them in): rebuilt at the start of each
+    // tick's parallel phase, when nothing changes rooms, so a room's update
+    // finds its creatures without walking every creature of the world
+    template<typename ID>
+    struct room_buckets {
+        std::vector<uint32_t> first; // per room, plus one past the end
+        std::vector<ID> ids;
+        std::span<ID const> in(dcon::room_id room) const noexcept {
+            size_t const r = size_t(room.index());
+            if (!room || r + 1 >= first.size())
+                return {};
+            return std::span<ID const>{ids.data() + first[r], ids.data() + first[r + 1]};
+        }
+    };
+    struct room_index {
+        // only while the rooms update in parallel (simulation.cpp); the
+        // helpers of rooms.hpp walk every object of the kind otherwise
+        bool valid = false;
+        room_buckets<dcon::player_id> players;
+        room_buckets<dcon::centipede_id> centipedes;
+        room_buckets<dcon::dropbug_id> dropbugs;
+        room_buckets<dcon::cicada_id> cicadas;
+        room_buckets<dcon::lizard_id> lizards;
+        room_buckets<dcon::daddy_id> daddies;
+        room_buckets<dcon::item_id> items;
+        room_buckets<dcon::lizard_spit_id> spits;
+    };
+
+    struct game_state;
+
+    // Room.InGameNoise, for whatever listens (the rot, lizards, daddies...)
+    struct noise {
+        dcon::room_id room;
+        rw::vec2 pos;
+        float strength;
+        // InGameNoise.sourceObject, when it is a physical object
+        dcon::physical_object_id source{};
+    };
+
+    // pathing.hpp's distance fields: a cache derived from the room (it is
+    // never saved), a handful per room, recycled least recently used
+    struct path_field {
+        rw::ivec2 goal{0, 0};
+        pathing::movement movement;
+        uint16_t geometry_version = 0;
+        uint32_t last_used = 0;
+        // travel cost to the goal per tile (row major), 0xFFFF unreachable
+        std::vector<uint16_t> distance;
+    };
+
+    // cosmetic state, never saved (particles.hpp, water.hpp)
+    struct particle {
+        dcon::room_id room;
+        uint8_t kind = 0;
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+        float life = 0.f;   // 0..1
+        float decay = 0.f;  // life per tick
+        float size = 1.f;
+        rw::vec3 color{1.f, 1.f, 1.f};
+        float alpha = 1.f;
+    };
+    // a room's water surface: a height field over x and depth (z, 0 at
+    // the front), its waves, and the walls it reflects off
+    struct water_surface {
+        dcon::room_id room;
+        float x0 = 0.f;
+        float spacing = 6.f;
+        uint32_t nx = 0;
+        float level = 0.f;
+        float time = 0.f;
+        std::vector<float> h;       // nx * nz, row major in z
+        std::vector<float> last_h;
+        std::vector<float> v;
+        std::vector<uint8_t> wall;  // per column: terrain at the surface
+    };
+    // a room's sand (terrain.hpp): its ground height every few pixels,
+    // built from the TerrainHandles and reshaped while playing (not saved)
+    struct sand_field {
+        dcon::room_id room;
+        float x0 = 0.f;
+        float spacing = 4.f;
+        std::vector<float> h;    // current surface
+        std::vector<float> back; // height of the dune's far side above it (the 3D band)
+        float left = 0.f;        // the handles' span: no sand outside it
+        float right = 0.f;
+        float mean = 0.f;        // the sandstorm's resting level
+        float amplitude = 0.f;   // and its dunes
+        float phase = 0.f;
+    };
+    // RippleRing: expanding rings of the ripple layer (warp hints, the
+    // Watcher's ability)
+    struct ripple_ring {
+        dcon::room_id room;
+        rw::vec2 pos;
+        float rad;       // final radius
+        float life;      // 0..1
+        float speed;     // life per tick
+        float intensity;
+    };
+
+    // What a room keeps outside the data container: caches derived from its
+    // tiles, its cosmetic simulation (water, sand), and what its update
+    // produced this tick. Rooms update in parallel, each one touching only its
+    // own room_runtime; the per tick outputs are merged into the game_state's
+    // queues afterwards, in room order
+    struct room_runtime {
+        // pathing.cpp: distance fields, AImap.terrainProximity, and dropbug.cpp's
+        // Room.ceilingTiles, all rebuilt when the geometry_version changes
+        std::vector<path_field> path_fields;
+        std::vector<uint16_t> proximity; // row major, empty until asked for
+        uint16_t proximity_version = 0;
+        std::vector<uint8_t> access; // pathing::access per tile, row major
+        uint16_t access_version = 0;
+        std::vector<rw::ivec2> ceiling_tiles;
+        std::optional<uint16_t> ceiling_version;
+        std::optional<water_surface> water;
+        // built on first use (an empty height map: no sand in the room)
+        std::optional<sand_field> sand;
+        // a camera looks at it this tick: graphics modules, particles,
+        // sounds and music only run for these (simulation.cpp)
+        bool viewed = false;
+        bool was_viewed = false;
+        // what Room.Loaded does on the first visit was done (at startup for
+        // every room, simulation::populate)
+        bool populated = false;
+        // the room's own generator for cosmetic rolls (particles)
+        rw::rng cosmetic{0x51A5C0DEu};
+        // this tick's outputs
+        std::vector<noise> noises;
+        std::vector<sound::sound_request> sounds;
+        std::vector<sound::music_request> music;
+        std::vector<particle> particles;
+        std::vector<ripple_ring> ripple_rings;
+        // what the room's update can't do while the other rooms update:
+        // creating and deleting objects, moving them to other rooms. Applied
+        // after the parallel phase, room by room in order, each room's in
+        // the order they were queued (the "transactions")
+        std::vector<std::function<void(game_state&)>> deferred;
+    };
+
     struct game_state {
         dcon::data_container world;
         layered_fs::filesystem fs;
@@ -37,7 +183,10 @@ namespace sys {
         float screen_height = 768.f;
         // simulation ticks since start
         uint32_t tick = 0;
-        // UnityEngine.Random for world level rolls (item spawns...)
+        // UnityEngine.Random for world level rolls: the world seed every
+        // room's own generator starts from (simulation::populate), and the
+        // creatures' generators as they are made (always serially). Never
+        // used while the rooms update: they roll with room.random
         rw::rng random{0x2545F491u};
         // RainWorldGame.nextIssuedId: the EntityID numbers handed out so far
         int32_t next_issued_id = 0;
@@ -45,18 +194,21 @@ namespace sys {
         // depend on it read this, never a player in the room
         ::player::slugcat_name story_slugcat = ::player::slugcat_name::white;
         // sound/music requests of the last ticks, consumed by audio::update
-        // (or dropped when nothing plays them)
+        // (or dropped when nothing plays them). Only the viewed rooms make
+        // any
         std::vector<sound::sound_request> sounds;
         std::vector<sound::music_request> music;
-        // Room.InGameNoise of this tick, for whatever listens (the rot)
-        struct noise {
-            dcon::room_id room;
-            rw::vec2 pos;
-            float strength;
-            // InGameNoise.sourceObject, when it is a physical object
-            dcon::physical_object_id source{};
-        };
-        std::vector<noise> noises;
+        using noise = sys::noise;
+
+        // per room state outside the data container, indexed by room
+        std::vector<room_runtime> rooms;
+        // the objects of every room while they update in parallel
+        room_index index;
+        // the rooms are updating in parallel (simulation.cpp): structural
+        // changes are deferred, outputs go to the room's buffers
+        bool parallel = false;
+        // rooms a camera looks at besides the players' (the app's view)
+        std::vector<dcon::room_id> camera_rooms;
 
         // story progress the warps and the HUD care about (SaveState's
         // deathPersistentSaveData): karma 0..9 under its cap, and the
@@ -90,102 +242,67 @@ namespace sys {
         };
         warp_sequence warp;
 
-        // RippleRing: expanding rings of the ripple layer (warp hints, the
-        // Watcher's ability)
-        struct ripple_ring {
-            dcon::room_id room;
-            rw::vec2 pos;
-            float rad;       // final radius
-            float life;      // 0..1
-            float speed;     // life per tick
-            float intensity;
-        };
+        using ripple_ring = sys::ripple_ring;
         std::vector<ripple_ring> ripple_rings;
 
-        // Room.PlaySound
+        room_runtime& runtime(dcon::room_id room) { return rooms[size_t(room.index())]; }
+        room_runtime const& runtime(dcon::room_id room) const { return rooms[size_t(room.index())]; }
+        bool has_runtime(dcon::room_id room) const noexcept { return room && size_t(room.index()) < rooms.size(); }
+        // a camera looks at the room: sounds, music, particles and graphics
+        // modules are only for these
+        bool viewed(dcon::room_id room) const noexcept { return has_runtime(room) && rooms[size_t(room.index())].viewed; }
+        // the room's UnityEngine.Random
+        rw::rng& room_random(dcon::room_id room) { return world.room_get_random(room); }
+
+        // Room.PlaySound: heard only from the rooms a camera looks at
         void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {
+            sound::sound_request const r{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch};
+            if (has_runtime(room)) {
+                auto& rt = rooms[size_t(room.index())];
+                if (!rt.viewed)
+                    return;
+                if (parallel) {
+                    if (rt.sounds.size() < 256)
+                        rt.sounds.push_back(r);
+                    return;
+                }
+            } else if (parallel) {
+                return;
+            }
             if (sounds.size() < 256)
-                sounds.push_back(sound::sound_request{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch});
+                sounds.push_back(r);
+        }
+        // Room.InGameNoise: heard in the room the rest of this tick
+        void add_noise(dcon::room_id room, rw::vec2 pos, float strength, dcon::physical_object_id source = {}) {
+            if (!has_runtime(room))
+                return;
+            auto& n = rooms[size_t(room.index())].noises;
+            if (n.size() < 64)
+                n.push_back(noise{room, pos, strength, source});
+        }
+        std::span<noise const> noises(dcon::room_id room) const {
+            if (!has_runtime(room))
+                return {};
+            return rooms[size_t(room.index())].noises;
+        }
+        // A structural change made from a room's update (creating, deleting
+        // or moving objects between rooms): applied right away, or after
+        // the parallel phase when the rooms are updating in parallel
+        template<typename F>
+        void defer(dcon::room_id room, F&& f) {
+            if (parallel && has_runtime(room))
+                rooms[size_t(room.index())].deferred.emplace_back(std::forward<F>(f));
+            else
+                f(*this);
         }
 
-        // pathing.hpp's distance fields: a cache derived from the rooms (it is
-        // never saved), at most 32, recycled least recently used
-        struct path_field {
-            dcon::room_id room;
-            rw::ivec2 goal{0, 0};
-            pathing::movement movement;
-            uint16_t geometry_version = 0;
-            uint32_t last_used = 0;
-            // travel cost to the goal per tile (row major), 0xFFFF unreachable
-            std::vector<uint16_t> distance;
-        };
-        std::vector<path_field> path_fields;
-        // Room.ceilingTiles of the rooms dropbugs sat in (dropbug.cpp), derived
-        // from the tiles like the path fields and never saved
-        struct ceiling_tiles {
-            dcon::room_id room;
-            uint16_t geometry_version = 0;
-            std::vector<rw::ivec2> tiles;
-        };
-        std::vector<ceiling_tiles> ceiling_tile_cache;
-        // AImap.terrainProximity of the rooms flying creatures are in
-        // (pathing.cpp), derived like the path fields and never saved
-        struct terrain_proximity_map {
-            dcon::room_id room;
-            uint16_t geometry_version = 0;
-            std::vector<uint16_t> proximity; // row major
-        };
-        std::vector<terrain_proximity_map> terrain_proximity_cache;
-
-        // cosmetic state, never saved (particles.hpp, water.hpp)
-        struct particle {
-            dcon::room_id room;
-            uint8_t kind = 0;
-            rw::vec2 pos{0.f, 0.f};
-            rw::vec2 last_pos{0.f, 0.f};
-            rw::vec2 vel{0.f, 0.f};
-            float life = 0.f;   // 0..1
-            float decay = 0.f;  // life per tick
-            float size = 1.f;
-            rw::vec3 color{1.f, 1.f, 1.f};
-            float alpha = 1.f;
-        };
+        // cosmetic particles of the viewed rooms (particles.hpp)
+        using particle = sys::particle;
         std::vector<particle> particles;
         // everything rains like an outdoor room at full rain intensity
         bool storm = false;
-        // a room's water surface: a height field over x and depth (z, 0 at
-        // the front), its waves, and the walls it reflects off
-        struct water_surface {
-            dcon::room_id room;
-            float x0 = 0.f;
-            float spacing = 6.f;
-            uint32_t nx = 0;
-            float level = 0.f;
-            float time = 0.f;
-            std::vector<float> h;       // nx * nz, row major in z
-            std::vector<float> last_h;
-            std::vector<float> v;
-            std::vector<uint8_t> wall;  // per column: terrain at the surface
-            uint32_t last_used = 0;
-        };
-        std::vector<water_surface> waters;
-        // a room's sand (terrain.hpp): its ground height every few pixels,
-        // built from the TerrainHandles and reshaped while playing (not saved)
-        struct sand_field {
-            dcon::room_id room;
-            float x0 = 0.f;
-            float spacing = 4.f;
-            std::vector<float> h;    // current surface
-            std::vector<float> back; // height of the dune's far side above it (the 3D band)
-            float left = 0.f;        // the handles' span: no sand outside it
-            float right = 0.f;
-            float mean = 0.f;        // the sandstorm's resting level
-            float amplitude = 0.f;   // and its dunes
-            float phase = 0.f;
-            uint32_t last_used = 0;
-        };
-        std::vector<sand_field> sands;
-
+        using water_surface = sys::water_surface;
+        using sand_field = sys::sand_field;
 
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;

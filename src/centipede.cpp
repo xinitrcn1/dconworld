@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "centipede.hpp"
+#include "rooms.hpp"
 #include "centipede_graphics.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
@@ -43,7 +44,7 @@ namespace centipede {
             if (v == 0)
                 return dcon::player_id{};
             dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) ? p : dcon::player_id{};
+            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
         }
 
         bool consious(sys::game_state const& state, dcon::centipede_id c) {
@@ -280,9 +281,8 @@ namespace centipede {
             // tracker: the closest slugcat it can see
             dcon::player_id prey;
             float best = 1e9f;
-            w.for_each_player([&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p) || player::body(state, p) == dcon::physical_object_id{}
-                || w.physical_object_get_room_from_object_location(player::body(state, p)) != room.id)
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
+                if (w.player_get_in_shortcut(p))
                     return;
                 vec2 const pp = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
                 float const d = rw::distance(pp, pos(state, c, head_index(state, c)));
@@ -303,7 +303,7 @@ namespace centipede {
             dcon::player_id tracked;
             if (uint8_t const sp = w.centipede_get_seen_player(c)) {
                 tracked = dcon::player_id{dcon::player_id::value_base_t(sp - 1)};
-                if (!w.player_is_valid(tracked))
+                if (!w.player_is_valid(tracked) || !rooms::reachable(state, tracked))
                     tracked = dcon::player_id{};
             }
 
@@ -735,23 +735,21 @@ namespace centipede {
     }
 
     void update_room(sys::game_state& state, room_view const& room) {
-        state.world.for_each_centipede([&](dcon::centipede_id c) {
-            if (room_of(state, c) == room.id) {
-                update(state, c, room);
+        bool const viewed = state.viewed(room.id);
+        rooms::for_each_centipede(state, room.id, [&](dcon::centipede_id c) {
+            update(state, c, room);
+            // the GraphicsModule only exists where a camera looks
+            if (viewed)
                 centipede_graphics::update(state, c, room);
-            }
         });
     }
 
     void collide(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
-        w.for_each_centipede([&](dcon::centipede_id c) {
-            if (room_of(state, c) != room.id)
-                return;
+        rooms::for_each_centipede(state, room.id, [&](dcon::centipede_id c) {
             uint32_t const n = chunk_count(state, c);
-            w.for_each_player([&](dcon::player_id p) {
-                auto const pb = player::body(state, p);
-                if (w.player_get_in_shortcut(p) || w.physical_object_get_room_from_object_location(pb) != room.id)
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
+                if (w.player_get_in_shortcut(p))
                     return;
                 for (uint32_t i = 0; i < n; ++i) {
                     for (uint32_t j = 0; j < 2; ++j) {
@@ -771,8 +769,8 @@ namespace centipede {
                 }
             });
             // centipedes push each other around too
-            w.for_each_centipede([&](dcon::centipede_id other) {
-                if (other.index() <= c.index() || room_of(state, other) != room.id)
+            rooms::for_each_centipede(state, room.id, [&](dcon::centipede_id other) {
+                if (other.index() <= c.index())
                     return;
                 uint32_t const m = chunk_count(state, other);
                 for (uint32_t i = 0; i < n; ++i)
@@ -785,9 +783,7 @@ namespace centipede {
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::centipede_id& hit, uint32_t& hit_chunk) {
         auto const& w = state.world;
         float best = 2.f;
-        w.for_each_centipede([&](dcon::centipede_id c) {
-            if (room_of(state, c) != room)
-                return;
+        rooms::for_each_centipede(state, room, [&](dcon::centipede_id c) {
             for (uint32_t i = 0; i < chunk_count(state, c); ++i) {
                 vec2 const p = pos(state, c, i);
                 float const r = rad + w.body_chunk_get_rad(chunk(state, c, i));
@@ -824,7 +820,8 @@ namespace centipede {
     }
 
     void release_player(sys::game_state& state, dcon::player_id p) {
-        state.world.for_each_centipede([&](dcon::centipede_id c) {
+        // whatever holds the slugcat is in its room
+        rooms::for_each_centipede(state, rooms::room_of(state, p), [&](dcon::centipede_id c) {
             for (int g = 0; g < 2; ++g)
                 if (grasped(state, c, g) == p)
                     release(state, c, g);

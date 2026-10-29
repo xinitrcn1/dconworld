@@ -276,7 +276,6 @@ namespace warps {
                 change_state(state, wp, warp_state::cool_down);
                 return;
             }
-            spawn_room(state, dest.room);
             // the warp of the destination it comes out of (the matching exit)
             dcon::warp_point_id exit;
             float best = 300.f;
@@ -410,7 +409,7 @@ namespace warps {
             if (other_layer(state, wp) && !one_way_exit(state, placed)) {
                 float t = w.warp_point_get_shockwave_timer(wp) + 1.f / 60.f;
                 float const limit = w.warp_point_get_shockwave_limit(wp);
-                auto& rng = state.random;
+                auto& rng = state.room_random(room.id);
                 if (t >= limit && !w.warp_point_get_second_shockwave(wp)) {
                     w.warp_point_set_second_shockwave(wp, true);
                     spawn_ripple_ring(state, room.id, pos, 80.f + 180.f * rng.value(), 1.f, 1.f);
@@ -622,8 +621,12 @@ namespace warps {
     }
 
     void spawn_ripple_ring(sys::game_state& state, dcon::room_id room, vec2 pos, float rad, float intensity, float seconds) {
-        if (state.ripple_rings.size() < 256)
-            state.ripple_rings.push_back({room, pos, rad, 0.f, 1.f / (seconds * 40.f), intensity});
+        // cosmetic: only where a camera looks
+        if (!state.viewed(room))
+            return;
+        auto& rings = state.parallel ? state.runtime(room).ripple_rings : state.ripple_rings;
+        if (rings.size() < 256)
+            rings.push_back({room, pos, rad, 0.f, 1.f / (seconds * 40.f), intensity});
     }
 
     void update_ripple_rings(sys::game_state& state) {

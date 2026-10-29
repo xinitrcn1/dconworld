@@ -3,6 +3,7 @@
 
 #include "shortcuts.hpp"
 #include "cicada.hpp"
+#include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
@@ -33,10 +34,9 @@ namespace shortcuts {
         void move_to_room(sys::game_state& state, dcon::player_id p, dcon::room_id room) {
             auto& w = state.world;
             w.physical_object_set_room_from_object_location(player::body(state, p), room);
-            w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
-                auto const item = w.grasp_get_grabbed(g);
-                w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
-            });
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (auto const item = items::held(state, p, hand))
+                    w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             cicada::follow_player(state, p, room, false);
         }
 

@@ -8,8 +8,9 @@
 // and directions crossing over it. Bodies entering, leaving or moving along
 // the surface push it and throw droplets; rain and drops ripple it.
 //
-// It is cosmetic (sys::game_state::waters, never saved): the physics keep
-// floating on the room's flat water level, like most of vanilla does.
+// It is cosmetic (sys::room_runtime::water, never saved): the physics keep
+// floating on the room's flat water level, like most of vanilla does. Every
+// room with water runs its own, viewed or not.
 
 #include <cstdint>
 

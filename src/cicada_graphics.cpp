@@ -3,6 +3,7 @@
 #include <string>
 
 #include "cicada_graphics.hpp"
+#include "rooms.hpp"
 #include "body_parts.hpp"
 #include "cicada.hpp"
 #include "player.hpp"
@@ -37,7 +38,7 @@ namespace cicada_graphics {
             if (v == 0)
                 return dcon::player_id{};
             dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) ? p : dcon::player_id{};
+            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
         }
 
         // Color.Lerp
@@ -107,6 +108,16 @@ namespace cicada_graphics {
                 g.tentacles[i][j].absolute_hunt_pos = p0;
             }
         g.z_rotation = g.last_z_rotation = custom::dir_vec(chunk_pos(state, c, 1), p0);
+    }
+
+    void reset_positions(sys::game_state& state, dcon::cicada_id c) {
+        auto& w = state.world;
+        auto const keep = w.cicada_get_graphics(c);
+        reset(state, c);
+        auto& g = w.cicada_get_graphics(c);
+        g.random = keep.random;
+        g.wing_offset = keep.wing_offset;
+        g.lazy_wing = keep.lazy_wing;
     }
 
     void update(sys::game_state& state, dcon::cicada_id c, room_view const& room) {

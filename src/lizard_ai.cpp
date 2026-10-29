@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "lizard_ai.hpp"
+#include "rooms.hpp"
 #include "lizard_graphics.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -97,7 +98,8 @@ namespace lizard::ai {
 
         // LizardAI.CreatureSpotted
         void creature_spotted(sys::game_state& state, dcon::lizard_id l, bool first, dcon::player_id p) {
-            lizard_graphics::creature_spotted(state, l, first, p);
+            if (state.viewed(room_of(state, l)))
+                lizard_graphics::creature_spotted(state, l, first, p);
             auto const rel = player_relationship(state, l, p);
             if (rel.go_for_kill() && rel.intensity > (first ? 0.2f : 0.45f) && grasped(state, l) != p)
                 enter_animation(state, l, first ? animation::prey_spotted : animation::prey_re_spotted, false);
@@ -123,7 +125,7 @@ namespace lizard::ai {
             vec2 const head = chunk_pos(state, l, 0);
             dcon::player_id seen;
             float best = float_max;
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 if (!player_here(state, p, room.id))
                     return;
                 bool sees = false;
@@ -261,9 +263,7 @@ namespace lizard::ai {
             breed const b = breed_of(state, l);
             vec2 const head = chunk_pos(state, l, 0);
             float const hearing = b == breed::black || b == breed::indigo ? 2.f : custom::lerp_map(a.run_speed, 0.f, 0.6f, 1.3f, 0.6f);
-            for (auto const& n : state.noises) {
-                if (n.room != room.id)
-                    continue;
+            for (auto const& n : state.noises(room.id)) {
                 float const under = room.point_submerged(n.pos) || room.get_tile(head).water == 1 ? 0.2f : 1.f;
                 if (!custom::dist_less(head, n.pos, n.strength * hearing * under))
                     continue;
@@ -497,8 +497,8 @@ namespace lizard::ai {
                 a.comm_flicker = mathf::min(num, a.comm_flicker + 0.25f);
             else
                 a.comm_flicker = mathf::max(num, a.comm_flicker - 0.025f);
-            w.for_each_lizard([&](dcon::lizard_id o) {
-                if (o == l || breed_of(state, o) != breed_of(state, l) || room_of(state, o) != room.id || !consious(state, o))
+            rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id o) {
+                if (o == l || breed_of(state, o) != breed_of(state, l) || !consious(state, o))
                     return;
                 // PackMemberIsSeeingCreature: what a pack member sees and this one doesn't
                 auto& oa = w.lizard_get_ai(o);

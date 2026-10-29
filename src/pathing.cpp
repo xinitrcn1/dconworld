@@ -1,5 +1,5 @@
 #include <algorithm>
-#include <queue>
+#include <atomic>
 #include <vector>
 
 #include "pathing.hpp"
@@ -10,15 +10,23 @@ namespace pathing {
     using world::terrain;
 
     namespace {
-        uint32_t build_count = 0;
+        std::atomic<uint32_t> build_count = 0;
+        // fields kept per room, and how long one is kept unused
+        constexpr size_t max_fields = 32;
+        constexpr uint32_t keep_ticks = 400;
+
+        field_id make_id(dcon::room_id room, size_t slot) noexcept {
+            return field_id(uint32_t(room.index()) << 8 | uint32_t(slot));
+        }
+        sys::path_field const& field_of(sys::game_state const& state, field_id f) noexcept {
+            return state.rooms[f >> 8].path_fields[f & 0xFFu];
+        }
+        dcon::room_id room_of_field(field_id f) noexcept {
+            return dcon::room_id{dcon::room_id::value_base_t(f >> 8)};
+        }
 
         bool solid(room_view const& room, ivec2 t) noexcept {
             return room.get_tile(t).solid();
-        }
-
-        // the four diagonals with both orthogonal neighbours open (OpenDiagonal)
-        bool open_diagonal(room_view const& room, ivec2 a, ivec2 d) noexcept {
-            return !solid(room, a + ivec2{d.x, 0}) && !solid(room, a + ivec2{0, d.y});
         }
 
         // TerrainProximityMapper: a breadth first fill out from the tiles
@@ -56,48 +64,80 @@ namespace pathing {
         }
 
         std::vector<uint16_t> const& proximity_map(sys::game_state& state, dcon::room_id room) {
-            auto& cache = state.terrain_proximity_cache;
+            auto& rt = state.runtime(room);
             uint16_t const version = state.world.room_get_geometry_version(room);
-            for (auto& c : cache)
-                if (c.room == room && c.geometry_version == version)
-                    return c.proximity;
-            if (cache.size() >= 16)
-                cache.erase(cache.begin());
-            auto& c = cache.emplace_back();
-            c.room = room;
-            c.geometry_version = version;
-            fill_terrain_proximity(world::get_room_view(state, room), c.proximity);
-            return c.proximity;
+            if (rt.proximity.empty() || rt.proximity_version != version) {
+                rt.proximity_version = version;
+                fill_terrain_proximity(world::get_room_view(state, room), rt.proximity);
+            }
+            return rt.proximity;
+        }
+
+        // AImap's accessibility of every tile of the room, worked out once per
+        // geometry version (every field of the room starts from it)
+        std::vector<uint8_t> const& access_map(sys::game_state& state, room_view const& room) {
+            auto& rt = state.runtime(room.id);
+            uint16_t const version = state.world.room_get_geometry_version(room.id);
+            if (rt.access.empty() || rt.access_version != version) {
+                rt.access_version = version;
+                rt.access.resize(size_t(room.width) * size_t(room.height));
+                for (int32_t y = 0; y < room.height; ++y)
+                    for (int32_t x = 0; x < room.width; ++x)
+                        rt.access[size_t(y) * size_t(room.width) + size_t(x)] = uint8_t(tile_access(room, ivec2{x, y}));
+            }
+            return rt.access;
         }
 
         // reverse Dijkstra from the seeds over the forward connections;
-        // `proximity` is the room's terrain proximity map for open_air movers
-        void build(room_view const& room, movement const& m, ivec2 goal, std::vector<uint16_t>& dist, std::vector<uint16_t> const* proximity) {
+        // `proximity` is the room's terrain proximity map for open_air movers.
+        // The costs are small integers, so the open list is a ring of buckets
+        // (Dial's algorithm): the same distances as a binary heap, faster
+        void build(room_view const& room, std::vector<uint8_t> const& acc, movement const& m, ivec2 goal, std::vector<uint16_t>& dist, std::vector<uint16_t> const* proximity) {
             int32_t const w = room.width, h = room.height;
             dist.assign(size_t(w) * size_t(h), unreachable);
-            using node = std::pair<uint32_t, uint32_t>; // cost, tile index
-            std::priority_queue<node, std::vector<node>, std::greater<>> open;
+            // a step costs at most 50 * 25.5 + 10 * 25.5 (drop at the highest
+            // resistance, open_air at its most): below the ring's size
+            constexpr uint32_t ring = 4096;
+            static thread_local std::vector<std::vector<uint32_t>> buckets(ring);
+            size_t pending = 0;
+            auto const push = [&](uint32_t c, uint32_t i) {
+                buckets[c & (ring - 1u)].push_back(i);
+                ++pending;
+            };
             auto const index = [w](ivec2 t) { return uint32_t(t.y * w + t.x); };
+            auto const is_solid = [&](ivec2 t) { return acc[index(t)] == uint8_t(access::solid); };
             // every tile's accessibility and resistance for this movement,
             // worked out once rather than per connection
             static thread_local std::vector<uint8_t> walkable, resistance;
+            // for the drops: how far up the open column above a tile the first
+            // walkable tile is (0: a solid tile or the top of the room first)
+            static thread_local std::vector<uint16_t> drop_from;
+            bool const drops = !m.allows(access::air);
             walkable.resize(size_t(w) * size_t(h));
             resistance.resize(size_t(w) * size_t(h));
-            for (int32_t y = 0; y < h; ++y)
+            drop_from.resize(size_t(w) * size_t(h));
+            for (int32_t y = h - 1; y >= 0; --y)
                 for (int32_t x = 0; x < w; ++x) {
-                    access const a = tile_access(room, ivec2{x, y});
                     size_t const i = size_t(y) * size_t(w) + size_t(x);
+                    access const a = access(acc[i]);
                     bool const wet = m.swim && room.get_tile(x, y).water != 0;
                     walkable[i] = a != access::solid && (m.allows(a) || wet);
                     // a swimmer's waterPathingResistance under the surface
                     resistance[i] = wet ? m.swim : m.resistance[uint32_t(a)];
+                    if (drops) {
+                        size_t const up = i + size_t(w);
+                        uint16_t k = 0;
+                        if (y + 1 < h && acc[up] != uint8_t(access::solid))
+                            k = walkable[up] ? 1 : (drop_from[up] == 0 ? 0 : uint16_t(drop_from[up] + 1));
+                        drop_from[i] = k;
+                    }
                 }
             auto const walkable_at = [&](ivec2 t) { return walkable[index(t)] != 0; };
             auto const seed = [&](ivec2 t, uint32_t c) {
                 if (!room.inside(t.x, t.y) || !walkable_at(t) || c >= dist[index(t)])
                     return;
                 dist[index(t)] = uint16_t(c);
-                open.push({c, index(t)});
+                push(c, index(t));
             };
             if (room.inside(goal.x, goal.y) && walkable_at(goal)) {
                 seed(goal, 0);
@@ -121,39 +161,39 @@ namespace pathing {
                 c = std::min<uint32_t>(c, unreachable - 1u);
                 if (c < dist[index(u)]) {
                     dist[index(u)] = uint16_t(c);
-                    open.push({c, index(u)});
+                    push(c, index(u));
                 }
             };
-            while (!open.empty()) {
-                auto const [c, i] = open.top();
-                open.pop();
-                if (c != dist[i])
-                    continue;
-                ivec2 const v{int32_t(i) % w, int32_t(i) / w};
-                // predecessors u with a connection u -> v
-                for (auto const d : rw::custom::eight_directions) {
-                    ivec2 const u = v + d;
-                    if (!room.inside(u.x, u.y) || !walkable_at(u))
+            for (uint32_t c = 0; pending > 0; ++c) {
+                auto& bucket = buckets[c & (ring - 1u)];
+                for (size_t k = 0; k < bucket.size(); ++k) {
+                    uint32_t const i = bucket[k];
+                    --pending;
+                    if (c != dist[i])
                         continue;
-                    if (d.x != 0 && d.y != 0) {
-                        if (open_diagonal(room, u, -d))
-                            relax(u, c + enter(v, diagonal_cost));
-                    } else {
-                        relax(u, c + enter(v, step_cost));
+                    ivec2 const v{int32_t(i) % w, int32_t(i) / w};
+                    // predecessors u with a connection u -> v
+                    for (auto const d : rw::custom::eight_directions) {
+                        ivec2 const u = v + d;
+                        if (!room.inside(u.x, u.y) || !walkable_at(u))
+                            continue;
+                        if (d.x != 0 && d.y != 0) {
+                            // OpenDiagonal: both orthogonal neighbours open
+                            if (!is_solid(u + ivec2{-d.x, 0}) && !is_solid(u + ivec2{0, -d.y}))
+                                relax(u, c + enter(v, diagonal_cost));
+                        } else {
+                            relax(u, c + enter(v, step_cost));
+                        }
+                    }
+                    // DropToFloor/DropToClimb: from the first walkable tile above an
+                    // open column down to v
+                    if (drops) {
+                        int32_t const k2 = drop_from[i];
+                        if (k2 >= 2)
+                            relax(v + ivec2{0, k2}, c + drop_cost);
                     }
                 }
-                // DropToFloor/DropToClimb: from the first walkable tile above an
-                // open column down to v
-                for (int32_t k = 1; v.y + k < h && !m.allows(access::air); ++k) {
-                    ivec2 const u = v + ivec2{0, k};
-                    if (solid(room, u))
-                        break;
-                    if (walkable_at(u)) {
-                        if (k >= 2)
-                            relax(u, c + drop_cost);
-                        break;
-                    }
-                }
+                bucket.clear();
             }
         }
     }
@@ -227,37 +267,45 @@ namespace pathing {
     }
 
     field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement const& m) {
-        auto& fields = state.path_fields;
+        auto& fields = state.runtime(room).path_fields;
         uint16_t const version = state.world.room_get_geometry_version(room);
-        field_id oldest = 0;
-        for (field_id f = 0; f < fields.size(); ++f) {
+        size_t oldest = 0;
+        for (size_t f = 0; f < fields.size(); ++f) {
             auto& pf = fields[f];
-            if (pf.room == room && pf.goal == goal && pf.movement == m && pf.geometry_version == version) {
+            if (pf.goal == goal && pf.movement == m && pf.geometry_version == version) {
                 pf.last_used = state.tick;
-                return f;
+                return make_id(room, f);
             }
             if (pf.last_used < fields[oldest].last_used)
                 oldest = f;
         }
-        field_id const f = fields.size() < 64 ? field_id(fields.size()) : oldest;
+        size_t const f = fields.size() < max_fields ? fields.size() : oldest;
         if (f == fields.size())
             fields.emplace_back();
         auto const* proximity = m.open_air != 0 ? &proximity_map(state, room) : nullptr;
+        auto const view = world::get_room_view(state, room);
+        auto const& acc = access_map(state, view);
         auto& pf = fields[f];
-        build(world::get_room_view(state, room), m, goal, pf.distance, proximity);
-        ++build_count;
-        pf.room = room;
+        build(view, acc, m, goal, pf.distance, proximity);
+        build_count.fetch_add(1, std::memory_order_relaxed);
         pf.goal = goal;
         pf.movement = m;
         pf.geometry_version = version;
         pf.last_used = state.tick;
-        return f;
+        return make_id(room, f);
+    }
+
+    void trim(sys::game_state& state, dcon::room_id room) {
+        auto& fields = state.runtime(room).path_fields;
+        uint32_t const now = state.tick;
+        std::erase_if(fields, [now](auto const& pf) { return now - pf.last_used > keep_ticks; });
     }
 
     uint16_t distance(sys::game_state const& state, field_id f, ivec2 t) noexcept {
-        auto const& pf = state.path_fields[f];
-        int32_t const width = state.world.room_get_width(pf.room);
-        int32_t const height = state.world.room_get_height(pf.room);
+        auto const& pf = field_of(state, f);
+        auto const room = room_of_field(f);
+        int32_t const width = state.world.room_get_width(room);
+        int32_t const height = state.world.room_get_height(room);
         if (t.x < 0 || t.y < 0 || t.x >= width || t.y >= height)
             return unreachable;
         uint32_t const i = uint32_t(t.y * width + t.x);
@@ -278,7 +326,7 @@ namespace pathing {
         if (best)
             return best;
         // a drop: the field is lower somewhere below an open column
-        auto const room = world::get_room_view(state, state.path_fields[f].room);
+        auto const room = world::get_room_view(state, room_of_field(f));
         for (int32_t k = 1; k < room.height; ++k) {
             ivec2 const t = from - ivec2{0, k};
             if (room.get_tile(t).solid())
@@ -291,6 +339,6 @@ namespace pathing {
     }
 
     uint32_t builds() noexcept {
-        return build_count;
+        return build_count.load(std::memory_order_relaxed);
     }
 }

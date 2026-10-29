@@ -2,6 +2,7 @@
 #include <type_traits>
 
 #include "player.hpp"
+#include "rooms.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
@@ -481,6 +482,8 @@ namespace player {
         state.world.try_create_player_body(id, o);
         // erasable slots are reused: drop any graphics state left by a previous player
         state.world.player_set_graphics(id, ::player::graphics_state{});
+        state.world.player_set_grasp0(id, dcon::item_id{});
+        state.world.player_set_grasp1(id, dcon::item_id{});
         p.flip_direction() = p.random().value() < 0.5f ? -1 : 1;
         return id;
     }
@@ -504,6 +507,8 @@ namespace player {
         dropbug::release_player(state, id);
         lizard::release_player(state, id);
         daddy::release_player(state, id);
+        // (they all look in the room the slugcat is leaving)
+        rot::release_player(state, id);
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -513,7 +518,6 @@ namespace player {
         auto const c1 = physics::chunk(state, o, 1);
         physics::hard_set_position(state, c0, pos + vec2{0.f, 17.f});
         physics::hard_set_position(state, c1, pos);
-        rot::release_player(state, id);
         for (auto const c : {c0, c1}) {
             state.world.body_chunk_set_collide_with_terrain(c, true);
             state.world.body_chunk_set_vel(c, vec2{0.f, 0.f});
@@ -2712,9 +2716,7 @@ namespace player {
                     w.body_chunk_get_vel(c) += custom::dir_vec(at, cp) * force * k / mathf::max(0.3f, w.body_chunk_get_mass(c));
                 });
             });
-            w.for_each_centipede([&](dcon::centipede_id c) {
-                if (w.physical_object_get_room_from_object_location(centipede::body(state, c)) != x.room.id)
-                    return;
+            rooms::for_each_centipede(state, x.room.id, [&](dcon::centipede_id c) {
                 uint32_t const n = centipede::chunk_count(state, c);
                 for (uint32_t i = 0; i < n; ++i) {
                     vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, i));
@@ -2726,9 +2728,7 @@ namespace player {
                     }
                 }
             });
-            w.for_each_dropbug([&](dcon::dropbug_id b) {
-                if (w.physical_object_get_room_from_object_location(dropbug::body(state, b)) != x.room.id)
-                    return;
+            rooms::for_each_dropbug(state, x.room.id, [&](dcon::dropbug_id b) {
                 for (uint32_t i = 0; i < 3; ++i) {
                     vec2 const cp = w.body_chunk_get_pos(dropbug::chunk(state, b, i));
                     float const d = rw::distance(cp, at);
@@ -2739,9 +2739,7 @@ namespace player {
                     }
                 }
             });
-            w.for_each_cicada([&](dcon::cicada_id cc) {
-                if (w.physical_object_get_room_from_object_location(cicada::body(state, cc)) != x.room.id)
-                    return;
+            rooms::for_each_cicada(state, x.room.id, [&](dcon::cicada_id cc) {
                 for (uint32_t i = 0; i < 2; ++i) {
                     vec2 const cp = w.body_chunk_get_pos(cicada::chunk(state, cc, i));
                     float const d = rw::distance(cp, at);
@@ -2752,9 +2750,7 @@ namespace player {
                     }
                 }
             });
-            w.for_each_lizard([&](dcon::lizard_id l) {
-                if (w.physical_object_get_room_from_object_location(lizard::body(state, l)) != x.room.id)
-                    return;
+            rooms::for_each_lizard(state, x.room.id, [&](dcon::lizard_id l) {
                 for (uint32_t i = 0; i < 3; ++i) {
                     vec2 const cp = w.body_chunk_get_pos(lizard::chunk(state, l, i));
                     float const d = rw::distance(cp, at);
@@ -2765,9 +2761,7 @@ namespace player {
                     }
                 }
             });
-            w.for_each_daddy([&](dcon::daddy_id dl) {
-                if (w.physical_object_get_room_from_object_location(daddy::body(state, dl)) != x.room.id)
-                    return;
+            rooms::for_each_daddy(state, x.room.id, [&](dcon::daddy_id dl) {
                 uint32_t const n = daddy::chunk_count(state, dl);
                 for (uint32_t i = 0; i < n; ++i) {
                     vec2 const cp = w.body_chunk_get_pos(daddy::chunk(state, dl, i));
@@ -2780,8 +2774,7 @@ namespace player {
                 }
             });
             x.sound(sound::sound_id::fire_spear_explode);
-            if (state.noises.size() < 64)
-                state.noises.push_back({x.room.id, at, 8000.f});
+            state.add_noise(x.room.id, at, 8000.f);
             particles::spawn(state, x.room.id, particles::kind::flash, at, vec2{0.f, 0.f}, 40.f, 0.35f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
             auto& r = p_random(x);
             for (int i = 0; i < 20; ++i) {

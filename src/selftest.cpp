@@ -5,6 +5,11 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <memory>
+#include <thread>
+
+#include <tbb/global_control.h>
 
 #include "selftest.hpp"
 #include "physics.hpp"
@@ -15,6 +20,7 @@
 #include "daddy.hpp"
 #include "items.hpp"
 #include "outposts.hpp"
+#include "player_graphics.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
 #include "rot.hpp"
@@ -194,6 +200,44 @@ namespace selftest {
         }
         vec2 feet_at(int32_t tx, int32_t ty) {
             return vec2{10.f + float(tx) * 20.f, float(ty) * 20.f + 8.f};
+        }
+    }
+
+    namespace {
+        // A few rooms full of creatures, items and rot, two slugcats with
+        // random input, 300 ticks on `threads` threads: a hash of the world
+        uint64_t determinism_run(uint32_t threads) {
+            tbb::global_control limit{tbb::global_control::max_allowed_parallelism, threads};
+            auto const gs_ptr = sys::make_game_state();
+            auto& gs = *gs_ptr;
+            auto const region = gs.world.create_region();
+            gs.world.region_set_name(region, gs.add_text("test"));
+            std::vector<dcon::room_id> rooms;
+            rooms.push_back(make_room(gs, region, box(50, 24, [](int32_t x, int32_t y) { return x == 25 && y < 18 ? '|' : y == 10 && x > 30 ? '-' : ' '; })));
+            rooms.push_back(make_room(gs, region, box(50, 24, [](int32_t, int32_t) { return ' '; }), 8));
+            rooms.push_back(make_room(gs, region, box(40, 30, [](int32_t x, int32_t y) { return y > 20 && x > 10 && x < 30 ? '#' : ' '; })));
+            add_rot(gs, rooms[2], world::rot_kind::corruption, vec2{30.f, 30.f}, vec2{0.f, 160.f});
+            rooms.push_back(make_room(gs, region, box(60, 20, [](int32_t x, int32_t y) { return y < 3 && x > 20 && x < 40 ? '#' : ' '; })));
+            for (auto const rid : rooms) {
+                spawn_creatures(gs, rid);
+                // a second lizard: the spitting kind
+                lizard::create(gs, rid, world::room_view::middle_of_tile(30, 2), lizard::breed::red);
+                for (int i = 0; i < 6; ++i)
+                    items::create(gs, rid, world::room_view::middle_of_tile(5 + i * 6, 3),
+                        i % 3 == 0 ? world::item_type::spear : i % 3 == 1 ? world::item_type::rock : world::item_type::bomb);
+            }
+            std::vector<dcon::player_id> ps{player::create(gs, rooms[0], feet_at(10, 1)), player::create(gs, rooms[2], feet_at(5, 1), player::slugcat_name::red)};
+            rw::rng rng{0xDE7E2u};
+            std::vector<player::input_package> in(ps.size());
+            for (uint32_t t = 0; t < 300; ++t) {
+                if (t % 10 == 0)
+                    for (auto& i : in)
+                        i = player::make_input(float(rng.range(-1, 2)), float(rng.range(-1, 2)), rng.value() < 0.3f, rng.value() < 0.2f, rng.value() < 0.2f);
+                simulation::tick(gs, ps, in);
+                gs.sounds.clear();
+                gs.music.clear();
+            }
+            return simulation::hash(gs);
         }
     }
 
@@ -450,7 +494,9 @@ namespace selftest {
             s.run(30);
             dcon::item_id needle;
             bool const made = s.until(200, [&] {
-                gs.world.player_for_each_grasp_as_grabber(s.p, [&](dcon::grasp_id g) { needle = gs.world.grasp_get_grabbed(g); });
+                for (uint32_t hand = 0; hand < 2; ++hand)
+                    if (auto const it = items::held(gs, s.p, hand))
+                        needle = it;
                 return bool(needle);
             }, 0, 0, false, true);
             bool const is_needle = made && gs.world.item_get_type(needle) == world::item_type::spear && gs.world.item_get_needle(needle);
@@ -673,6 +719,10 @@ namespace selftest {
             // a blue lizard's tongue catches the slugcat from a distance
             auto const hall = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
             sim s(gs, hall, feet_at(10, 1));
+            // the lizard's rolls (its personality, when it shoots and bites)
+            // from a fixed seed: what the other tests used up of
+            // game_state::random doesn't decide whether this one passes
+            gs.random.state = 15838u;
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(17, 1), lizard::breed::blue);
             bool shot = false;
             bool const caught = s.until(3000, [&] {
@@ -690,6 +740,7 @@ namespace selftest {
             // a salamander swims across the pool towards the slugcat on the bank
             auto const pool = make_room(gs, region, box(50, 20, [](int32_t x, int32_t y) { return x >= 40 && y < 9 ? '#' : ' '; }), 8);
             sim s(gs, pool, feet_at(45, 9));
+            gs.random.state = 7919u; // (a fixed seed, like the blue lizard's)
             auto const l = lizard::create(gs, pool, world::room_view::middle_of_tile(5, 3), lizard::breed::salamander);
             float const x0 = gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)).x;
             bool swam = false;
@@ -1291,230 +1342,288 @@ namespace selftest {
             r.check("scavenger toll and treasury", ok, s.describe() + d);
         }
 
+        {
+            // every room updates in parallel: the same world comes out on one
+            // thread and on every thread
+            uint32_t const cores = std::max(2u, std::thread::hardware_concurrency());
+            uint64_t const one = determinism_run(1);
+            uint64_t const many = determinism_run(cores);
+            char d[96];
+            std::snprintf(d, sizeof(d), "1 thread %016llx, %u threads %016llx", (unsigned long long)one, cores, (unsigned long long)many);
+            r.check("same world on any thread count", one == many, d);
+        }
+
         std::printf("\n%d passed, %d failed\n", r.passed, r.failed);
         return r.failed == 0 ? 0 : 1;
     }
 
+    world_creatures spawn_creatures(sys::game_state& gs, dcon::room_id rid) {
+        world_creatures out;
+        auto const room = world::get_room_view(gs, rid);
+        uint32_t const k0 = uint32_t(rid.index()) * 2654435761u;
+        // a centipede somewhere it can stand
+        rw::rng rng{(k0 ^ 0xCE7712EDu) | 1u};
+        for (int k = 0; k < 50 && !out.centipede; ++k) {
+            ivec2 const t{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
+            if (pathing::accessible(room, t, pathing::climber))
+                out.centipede = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
+        }
+        // a dropwig, placed in the room's best ceiling spot like a story session does
+        rw::rng bug_rng{(k0 ^ 0x51ED27u) | 1u};
+        for (int k = 0; k < 50 && !out.dropbug; ++k) {
+            ivec2 const t{bug_rng.range(1, std::max(2, room.width - 1)), bug_rng.range(1, std::max(2, room.height - 1))};
+            if (pathing::accessible(room, t, pathing::drop_bug))
+                out.dropbug = dropbug::create(gs, rid, world::room_view::middle_of_tile(t), true);
+        }
+        // a squidcada somewhere in the air, either colour
+        rw::rng cicada_rng{(k0 ^ 0xC1CADAu) | 1u};
+        for (int k = 0; k < 50 && !out.cicada; ++k) {
+            ivec2 const t{cicada_rng.range(1, std::max(2, room.width - 1)), cicada_rng.range(1, std::max(2, room.height - 1))};
+            if (pathing::accessible(room, t, pathing::cicada))
+                out.cicada = cicada::create(gs, rid, world::room_view::middle_of_tile(t), cicada_rng.value() < 0.5f);
+        }
+        // a lizard standing somewhere, the next breed in every room
+        out.breed = lizard::breed(uint32_t(rid.index()) % lizard::breed_count);
+        rw::rng lizard_rng{(k0 ^ 0x112A2Du) | 1u};
+        for (int k = 0; k < 50 && !out.lizard; ++k) {
+            ivec2 const t{lizard_rng.range(1, std::max(2, room.width - 1)), lizard_rng.range(1, std::max(2, room.height - 1))};
+            if (pathing::accessible(room, t, lizard::params(out.breed).movement) && !room.get_tile(t).solid())
+                out.lizard = lizard::create(gs, rid, world::room_view::middle_of_tile(t), out.breed);
+        }
+        // a daddy long legs in the open, the next variant in every room
+        out.variant = daddy::variant(uint32_t(rid.index()) % daddy::variant_count);
+        rw::rng daddy_rng{(k0 ^ 0xDADD1u) | 1u};
+        for (int k = 0; k < 50 && !out.daddy; ++k) {
+            ivec2 const t{daddy_rng.range(1, std::max(2, room.width - 1)), daddy_rng.range(1, std::max(2, room.height - 1))};
+            if (pathing::accessible(room, t, pathing::daddy) && pathing::terrain_proximity(room, t) > 1)
+                out.daddy = daddy::create(gs, rid, world::room_view::middle_of_tile(t), out.variant);
+        }
+        return out;
+    }
+
+    namespace {
+        bool finite_chunks(sys::game_state const& gs, dcon::physical_object_id o) {
+            bool ok = true;
+            gs.world.physical_object_for_each_chunk_ownership_as_owner(o, [&](dcon::chunk_ownership_id co) {
+                vec2 const q = gs.world.body_chunk_get_pos(gs.world.chunk_ownership_get_chunk(co));
+                ok = ok && std::isfinite(q.x) && std::isfinite(q.y);
+            });
+            return ok;
+        }
+
+        bool left_room(world::room_view const& room, vec2 hp) {
+            return hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f;
+        }
+    }
+
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room) {
         uint32_t bad = 0;
-        rw::rng rng;
         auto& w = gs.world;
-        // one player body reused across every room
-        auto const first = dcon::room_id{0};
-        auto const p = player::create(gs, first, vec2{0.f, 0.f});
+        // Every room is simulated all the time: one of each creature goes
+        // in every room first, then slugcats visit the rooms a batch at a
+        // time (one slugcat per room, every other room ticking along
+        // unvisited), with random input
+        constexpr uint32_t batch = 128;
+        std::vector<world_creatures> creatures(size_t(w.room_size()));
+        uint32_t lizards = 0, daddies = 0, bugs_in_ceiling = 0;
+        w.for_each_room([&](dcon::room_id rid) {
+            auto& c = creatures[size_t(rid.index())];
+            c = spawn_creatures(gs, rid);
+            lizards += c.lizard ? 1 : 0;
+            daddies += c.daddy ? 1 : 0;
+            if (c.dropbug && dropbug::sitting_in_ceiling(gs, c.dropbug))
+                ++bugs_in_ceiling;
+        });
+        std::vector<dcon::player_id> players;
+        for (uint32_t i = 0; i < batch; ++i)
+            players.push_back(player::create(gs, dcon::room_id{0}, vec2{0.f, 0.f}));
         uint32_t music_requests = 0;
         uint32_t deaths = 0;
         uint32_t eaten = 0;
         uint32_t lost = 0;
-        rw::rng bug_rng{0x51ED27u};
-        uint32_t bugs_in_ceiling = 0, bugs_dropped = 0, bugs_lost = 0;
-        bool bug_dropped = false;
-        rw::rng cicada_rng{0xC1CADAu};
+        uint32_t bugs_dropped = 0, bugs_lost = 0;
         uint32_t cicadas_sat = 0, cicadas_charged = 0, cicadas_lost = 0, cicadas_held = 0, cicadas_carried = 0;
-        bool cicada_sat = false, cicada_charged = false, cicada_held = false;
-        rw::rng lizard_rng{0x112A2Du};
-        uint32_t lizard_breed = 0, lizards = 0, lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
-        bool lizard_hunted = false, lizard_bit = false, lizard_tongued = false, lizard_jumped = false, lizard_spat = false, lizard_swam = false;
-        rw::rng daddy_rng{0xDADD1u};
-        uint32_t daddy_variant = 0, daddies = 0, daddies_gripped = 0, daddies_hunted = 0, daddies_held = 0, daddies_ate = 0, daddies_lost = 0;
-        bool daddy_gripped = false, daddy_hunted = false, daddy_held = false, daddy_ate = false;
-        w.for_each_room([&](dcon::room_id rid) {
-            auto const room = world::get_room_view(gs, rid);
-            vec2 near{0.f, 0.f};
-            w.room_for_each_camera_location(rid, [&](dcon::camera_location_id cl) {
-                if (near == vec2{0.f, 0.f})
-                    near = w.room_camera_get_position(w.camera_location_get_camera(cl)) + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f};
-            });
-            player::reset(gs, p, rid, find_spawn(room, near));
-            // a centipede in every room, somewhere it can stand
-            dcon::centipede_id centi;
-            for (int k = 0; k < 50 && !centi; ++k) {
-                ivec2 const t{rng.range(1, std::max(2, room.width - 1)), rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, pathing::climber))
-                    centi = centipede::create(gs, rid, world::room_view::middle_of_tile(t), rng.value());
-            }
-            // and a dropwig, placed in the room's best ceiling spot like a story session does
-            dcon::dropbug_id bug;
-            for (int k = 0; k < 50 && !bug; ++k) {
-                ivec2 const t{bug_rng.range(1, std::max(2, room.width - 1)), bug_rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, pathing::drop_bug))
-                    bug = dropbug::create(gs, rid, world::room_view::middle_of_tile(t), true);
-            }
-            if (bug && dropbug::sitting_in_ceiling(gs, bug))
-                ++bugs_in_ceiling;
-            // and a squidcada somewhere in the air, alternating the colours
-            dcon::cicada_id cic;
-            for (int k = 0; k < 50 && !cic; ++k) {
-                ivec2 const t{cicada_rng.range(1, std::max(2, room.width - 1)), cicada_rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, pathing::cicada))
-                    cic = cicada::create(gs, rid, world::room_view::middle_of_tile(t), cicada_rng.value() < 0.5f);
-            }
-            // and a lizard standing somewhere, the next breed in every room
-            dcon::lizard_id liz;
-            auto const breed = lizard::breed(lizard_breed++ % lizard::breed_count);
-            for (int k = 0; k < 50 && !liz; ++k) {
-                ivec2 const t{lizard_rng.range(1, std::max(2, room.width - 1)), lizard_rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, lizard::params(breed).movement) && !room.get_tile(t).solid())
-                    liz = lizard::create(gs, rid, world::room_view::middle_of_tile(t), breed);
-            }
-            if (liz)
-                ++lizards;
-            // and a daddy long legs in the open, the next variant in every room
-            dcon::daddy_id dll;
-            auto const variant = daddy::variant(daddy_variant++ % daddy::variant_count);
-            for (int k = 0; k < 50 && !dll; ++k) {
-                ivec2 const t{daddy_rng.range(1, std::max(2, room.width - 1)), daddy_rng.range(1, std::max(2, room.height - 1))};
-                if (pathing::accessible(room, t, pathing::daddy) && pathing::terrain_proximity(room, t) > 1)
-                    dll = daddy::create(gs, rid, world::room_view::middle_of_tile(t), variant);
-            }
-            if (dll)
-                ++daddies;
+        uint32_t lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
+        uint32_t daddies_gripped = 0, daddies_hunted = 0, daddies_held = 0, daddies_ate = 0, daddies_lost = 0;
+        // what happened in a visited room
+        struct visit {
+            dcon::room_id room;
+            dcon::player_id p;
+            rw::rng rng;
             int32_t ix = 0, iy = 0;
             bool jmp = false;
+            bool here = true; // the slugcat hasn't left through a pipe
+            bool bug_dropped = false, cicada_sat = false, cicada_charged = false, cicada_held = false;
+            bool lizard_hunted = false, lizard_bit = false, lizard_tongued = false, lizard_jumped = false, lizard_spat = false, lizard_swam = false;
+            bool daddy_gripped = false, daddy_hunted = false, daddy_held = false, daddy_ate = false;
+        };
+        std::vector<dcon::room_id> all;
+        w.for_each_room([&](dcon::room_id rid) { all.push_back(rid); });
+        std::vector<player::input_package> inputs;
+        for (size_t b0 = 0; b0 < all.size(); b0 += batch) {
+            std::vector<visit> v;
+            for (size_t i = b0; i < std::min(all.size(), b0 + batch); ++i) {
+                auto const rid = all[i];
+                auto const room = world::get_room_view(gs, rid);
+                vec2 near{0.f, 0.f};
+                w.room_for_each_camera_location(rid, [&](dcon::camera_location_id cl) {
+                    if (near == vec2{0.f, 0.f})
+                        near = w.room_camera_get_position(w.camera_location_get_camera(cl)) + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f};
+                });
+                auto const p = players[i - b0];
+                player::reset(gs, p, rid, find_spawn(room, near));
+                player_graphics::reset(gs, p);
+                v.push_back(visit{rid, p, rw::rng{uint32_t(rid.index()) * 0x9E3779B1u | 1u}});
+            }
+            std::span<dcon::player_id const> const driven{players.data(), v.size()};
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
-                if (t % 12 == 0) {
-                    ix = rng.range(-1, 2);
-                    iy = rng.range(-1, 2);
-                    jmp = rng.value() < 0.3f;
+                inputs.clear();
+                for (auto& x : v) {
+                    auto& rng = x.rng;
+                    if (t % 12 == 0) {
+                        x.ix = rng.range(-1, 2);
+                        x.iy = rng.range(-1, 2);
+                        x.jmp = rng.value() < 0.3f;
+                    }
+                    inputs.push_back(x.here ? player::make_input(float(x.ix), float(x.iy), x.jmp, rng.value() < 0.05f, rng.value() < 0.05f) : player::input_package{});
                 }
-                auto const in = player::make_input(float(ix), float(iy), jmp, rng.value() < 0.05f, rng.value() < 0.05f);
-                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                simulation::tick(gs, driven, inputs);
                 music_requests += uint32_t(gs.music.size());
                 gs.music.clear();
                 gs.sounds.clear();
-                if (simulation::player_room(gs, p) != rid)
-                    break; // went through a pipe
-                bool finite = true;
-                for (uint32_t i = 0; i < 2; ++i) {
-                    vec2 const q = w.body_chunk_get_pos(player::body_chunk(gs, p, i));
-                    finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
-                }
-                if (centi)
-                    for (uint32_t i = 0; i < centipede::chunk_count(gs, centi); ++i) {
-                        vec2 const q = w.body_chunk_get_pos(centipede::chunk(gs, centi, i));
-                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                for (auto& x : v) {
+                    if (!x.here)
+                        continue;
+                    if (simulation::player_room(gs, x.p) != x.room) {
+                        x.here = false; // went through a pipe
+                        continue;
                     }
-                if (bug) {
-                    for (uint32_t i = 0; i < 3; ++i) {
-                        vec2 const q = w.body_chunk_get_pos(dropbug::chunk(gs, bug, i));
-                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    auto const& c = creatures[size_t(x.room.index())];
+                    bool finite = finite_chunks(gs, player::body(gs, x.p));
+                    if (c.centipede)
+                        finite = finite && finite_chunks(gs, centipede::body(gs, c.centipede));
+                    if (c.dropbug) {
+                        finite = finite && finite_chunks(gs, dropbug::body(gs, c.dropbug));
+                        x.bug_dropped = x.bug_dropped || w.dropbug_get_from_ceiling_jump(c.dropbug);
                     }
-                    bug_dropped = bug_dropped || w.dropbug_get_from_ceiling_jump(bug);
-                }
-                if (cic) {
-                    for (uint32_t i = 0; i < 2; ++i) {
-                        vec2 const q = w.body_chunk_get_pos(cicada::chunk(gs, cic, i));
-                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    if (c.cicada) {
+                        finite = finite && finite_chunks(gs, cicada::body(gs, c.cicada));
+                        x.cicada_sat = x.cicada_sat || !w.cicada_get_flying(c.cicada);
+                        x.cicada_charged = x.cicada_charged || cicada::charging(gs, c.cicada);
+                        x.cicada_held = x.cicada_held || cicada::held_by(gs, x.p) == c.cicada;
                     }
-                    cicada_sat = cicada_sat || !w.cicada_get_flying(cic);
-                    cicada_charged = cicada_charged || cicada::charging(gs, cic);
-                    cicada_held = cicada_held || cicada::held_by(gs, p) == cic;
-                }
-                if (liz) {
-                    for (uint32_t i = 0; i < 3; ++i) {
-                        vec2 const q = w.body_chunk_get_pos(lizard::chunk(gs, liz, i));
-                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    if (c.lizard) {
+                        finite = finite && finite_chunks(gs, lizard::body(gs, c.lizard));
+                        auto const l = c.lizard;
+                        x.lizard_hunted = x.lizard_hunted || w.lizard_get_ai(l).current == lizard::behavior::hunt;
+                        x.lizard_bit = x.lizard_bit || lizard::grasped(gs, l) == x.p;
+                        x.lizard_tongued = x.lizard_tongued || w.lizard_get_tongue(l).state == lizard::tongue_state::lashing_out;
+                        x.lizard_jumped = x.lizard_jumped || w.lizard_get_core(l).anim == lizard::animation::jumping;
+                        x.lizard_spat = x.lizard_spat || w.lizard_get_core(l).anim == lizard::animation::spit;
+                        x.lizard_swam = x.lizard_swam || w.lizard_get_core(l).swim > 0.5f;
                     }
-                    lizard_hunted = lizard_hunted || w.lizard_get_ai(liz).current == lizard::behavior::hunt;
-                    lizard_bit = lizard_bit || lizard::grasped(gs, liz) == p;
-                    lizard_tongued = lizard_tongued || w.lizard_get_tongue(liz).state == lizard::tongue_state::lashing_out;
-                    lizard_jumped = lizard_jumped || w.lizard_get_core(liz).anim == lizard::animation::jumping;
-                    lizard_spat = lizard_spat || w.lizard_get_core(liz).anim == lizard::animation::spit;
-                    lizard_swam = lizard_swam || w.lizard_get_core(liz).swim > 0.5f;
-                }
-                if (dll) {
-                    for (uint32_t i = 0; i < daddy::chunk_count(gs, dll); ++i) {
-                        vec2 const q = w.body_chunk_get_pos(daddy::chunk(gs, dll, i));
-                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    if (c.daddy) {
+                        auto const dll = c.daddy;
+                        finite = finite && finite_chunks(gs, daddy::body(gs, dll));
+                        for (uint32_t k = 0; k < w.daddy_get_parts(dll).tentacle_count; ++k)
+                            for (auto const& tc : w.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, dll, k)))
+                                finite = finite && std::isfinite(tc.pos.x) && std::isfinite(tc.pos.y);
+                        x.daddy_gripped = x.daddy_gripped || daddy::legs_gripping(gs, dll) > 0;
+                        x.daddy_hunted = x.daddy_hunted || w.daddy_get_ai(dll).current == daddy::behavior::hunt;
+                        x.daddy_held = x.daddy_held || daddy::holds(gs, dll, x.p);
+                        x.daddy_ate = x.daddy_ate || daddy::eating(gs, dll, x.p);
                     }
-                    for (uint32_t k = 0; k < w.daddy_get_parts(dll).tentacle_count; ++k)
-                        for (auto const& c : w.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, dll, k)))
-                            finite = finite && std::isfinite(c.pos.x) && std::isfinite(c.pos.y);
-                    daddy_gripped = daddy_gripped || daddy::legs_gripping(gs, dll) > 0;
-                    daddy_hunted = daddy_hunted || w.daddy_get_ai(dll).current == daddy::behavior::hunt;
-                    daddy_held = daddy_held || daddy::holds(gs, dll, p);
-                    daddy_ate = daddy_ate || daddy::eating(gs, dll, p);
-                }
-                if (!finite) {
-                    std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
-                    ++bad;
-                    break;
+                    if (!finite) {
+                        std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(x.room))}.c_str(), t);
+                        ++bad;
+                        x.here = false;
+                    }
                 }
             }
-            if (centi) {
-                vec2 const hp = w.body_chunk_get_pos(centipede::chunk(gs, centi, 0));
-                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
-                    ++lost;
-                    if (lost <= 5)
-                        std::printf("  centipede left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+            for (auto& x : v) {
+                auto const room = world::get_room_view(gs, x.room);
+                auto const name = std::string{gs.to_string_view(w.room_get_name(x.room))};
+                auto const& c = creatures[size_t(x.room.index())];
+                auto const in_room = [&](dcon::physical_object_id o) { return w.physical_object_get_room_from_object_location(o) == x.room; };
+                if (c.centipede && in_room(centipede::body(gs, c.centipede))) {
+                    vec2 const hp = w.body_chunk_get_pos(centipede::chunk(gs, c.centipede, 0));
+                    if (left_room(room, hp) && ++lost <= 5)
+                        std::printf("  centipede left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
                 }
-                centipede::destroy(gs, centi);
-            }
-            if (bug) {
-                vec2 const hp = w.body_chunk_get_pos(dropbug::chunk(gs, bug, 0));
-                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
-                    ++bugs_lost;
-                    if (bugs_lost <= 5)
-                        std::printf("  dropwig left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                if (c.dropbug && in_room(dropbug::body(gs, c.dropbug))) {
+                    vec2 const hp = w.body_chunk_get_pos(dropbug::chunk(gs, c.dropbug, 0));
+                    if (left_room(room, hp) && ++bugs_lost <= 5)
+                        std::printf("  dropwig left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
                 }
-                bugs_dropped += bug_dropped ? 1 : 0;
-                bug_dropped = false;
-                dropbug::destroy(gs, bug);
-            }
-            if (cic) {
-                vec2 const hp = w.body_chunk_get_pos(cicada::chunk(gs, cic, 0));
-                if (w.physical_object_get_room_from_object_location(cicada::body(gs, cic)) != rid)
-                    ++cicadas_carried; // through a pipe, in the slugcat's hands
-                else if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
-                    ++cicadas_lost;
-                    if (cicadas_lost <= 5)
-                        std::printf("  squidcada left %s at (%.0f, %.0f)\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                bugs_dropped += x.bug_dropped ? 1 : 0;
+                if (c.cicada) {
+                    vec2 const hp = w.body_chunk_get_pos(cicada::chunk(gs, c.cicada, 0));
+                    if (!in_room(cicada::body(gs, c.cicada)))
+                        ++cicadas_carried; // through a pipe, in the slugcat's hands
+                    else if (left_room(room, hp) && ++cicadas_lost <= 5)
+                        std::printf("  squidcada left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
                 }
-                cicadas_sat += cicada_sat ? 1 : 0;
-                cicadas_charged += cicada_charged ? 1 : 0;
-                cicadas_held += cicada_held ? 1 : 0;
-                cicada_sat = cicada_charged = cicada_held = false;
-                cicada::destroy(gs, cic);
-            }
-            if (liz) {
-                vec2 const hp = w.body_chunk_get_pos(lizard::chunk(gs, liz, 0));
-                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
-                    ++lizards_lost;
-                    if (lizards_lost <= 5)
-                        std::printf("  %s lizard left %s at (%.0f, %.0f)\n", lizard::to_string(breed), std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                cicadas_sat += x.cicada_sat ? 1 : 0;
+                cicadas_charged += x.cicada_charged ? 1 : 0;
+                cicadas_held += x.cicada_held ? 1 : 0;
+                if (c.lizard && in_room(lizard::body(gs, c.lizard))) {
+                    vec2 const hp = w.body_chunk_get_pos(lizard::chunk(gs, c.lizard, 0));
+                    if (left_room(room, hp) && ++lizards_lost <= 5)
+                        std::printf("  %s lizard left %s at (%.0f, %.0f)\n", lizard::to_string(c.breed), name.c_str(), hp.x, hp.y);
                 }
-                lizards_hunted += lizard_hunted ? 1 : 0;
-                lizards_bit += lizard_bit ? 1 : 0;
-                lizards_tongued += lizard_tongued ? 1 : 0;
-                lizards_jumped += lizard_jumped ? 1 : 0;
-                lizards_spat += lizard_spat ? 1 : 0;
-                lizards_swam += lizard_swam ? 1 : 0;
-                lizard_hunted = lizard_bit = lizard_tongued = lizard_jumped = lizard_spat = lizard_swam = false;
-                lizard::destroy(gs, liz);
-            }
-            if (dll) {
-                vec2 const hp = daddy::middle_of_body(gs, dll);
-                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
-                    ++daddies_lost;
-                    if (daddies_lost <= 5)
-                        std::printf("  %s long legs left %s at (%.0f, %.0f)\n", daddy::to_string(variant), std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                lizards_hunted += x.lizard_hunted ? 1 : 0;
+                lizards_bit += x.lizard_bit ? 1 : 0;
+                lizards_tongued += x.lizard_tongued ? 1 : 0;
+                lizards_jumped += x.lizard_jumped ? 1 : 0;
+                lizards_spat += x.lizard_spat ? 1 : 0;
+                lizards_swam += x.lizard_swam ? 1 : 0;
+                if (c.daddy && in_room(daddy::body(gs, c.daddy))) {
+                    vec2 const hp = daddy::middle_of_body(gs, c.daddy);
+                    if (left_room(room, hp) && ++daddies_lost <= 5)
+                        std::printf("  %s long legs left %s at (%.0f, %.0f)\n", daddy::to_string(c.variant), name.c_str(), hp.x, hp.y);
                 }
-                daddies_gripped += daddy_gripped ? 1 : 0;
-                daddies_hunted += daddy_hunted ? 1 : 0;
-                daddies_held += daddy_held ? 1 : 0;
-                daddies_ate += daddy_ate ? 1 : 0;
-                daddy_gripped = daddy_hunted = daddy_held = daddy_ate = false;
-                daddy::destroy(gs, dll);
+                daddies_gripped += x.daddy_gripped ? 1 : 0;
+                daddies_hunted += x.daddy_hunted ? 1 : 0;
+                daddies_held += x.daddy_held ? 1 : 0;
+                daddies_ate += x.daddy_ate ? 1 : 0;
+                if (w.player_get_eaten(x.p))
+                    ++eaten;
+                else if (w.player_get_dead(x.p))
+                    ++deaths;
             }
-            if (w.player_get_eaten(p))
-                ++eaten;
-            else if (w.player_get_dead(p))
-                ++deaths;
-        });
+        }
+        // the creatures nobody visited for a while kept going too
+        uint32_t unvisited_bad = 0;
+        auto const check_all = [&](dcon::physical_object_id o) {
+            if (!finite_chunks(gs, o))
+                ++unvisited_bad;
+        };
+        w.for_each_centipede([&](dcon::centipede_id c) { check_all(centipede::body(gs, c)); });
+        w.for_each_dropbug([&](dcon::dropbug_id d) { check_all(dropbug::body(gs, d)); });
+        w.for_each_cicada([&](dcon::cicada_id c) { check_all(cicada::body(gs, c)); });
+        w.for_each_lizard([&](dcon::lizard_id l) { check_all(lizard::body(gs, l)); });
+        w.for_each_daddy([&](dcon::daddy_id d) { check_all(daddy::body(gs, d)); });
+        if (unvisited_bad > 0)
+            std::printf("%u creatures with a non finite position\n", unvisited_bad);
+        bad += unvisited_bad;
+        uint32_t const world_ticks = gs.tick;
+        for (auto const& c : creatures) {
+            if (c.centipede && w.centipede_is_valid(c.centipede))
+                centipede::destroy(gs, c.centipede);
+            if (c.dropbug && w.dropbug_is_valid(c.dropbug))
+                dropbug::destroy(gs, c.dropbug);
+            if (c.cicada && w.cicada_is_valid(c.cicada))
+                cicada::destroy(gs, c.cicada);
+            if (c.lizard && w.lizard_is_valid(c.lizard))
+                lizard::destroy(gs, c.lizard);
+            if (c.daddy && w.daddy_is_valid(c.daddy))
+                daddy::destroy(gs, c.daddy);
+        }
+
         uint32_t rocks = 0;
         w.for_each_item([&](dcon::item_id) { ++rocks; });
-        std::printf("fuzzed %u rooms x %u ticks, %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
-            w.room_size(), ticks_per_room, bad, rocks, music_requests, w.music_trigger_size());
+        std::printf("fuzzed %u rooms x %u ticks (%u ticks of the whole world, %u slugcats at a time), %u failures, %u rocks/spears spawned, %u music requests from %u triggers\n",
+            w.room_size(), ticks_per_room, world_ticks, batch, bad, rocks, music_requests, w.music_trigger_size());
         uint32_t tolls = 0, strung = 0, loot = 0, pearls = 0;
         w.for_each_outpost([&](dcon::outpost_id o) { tolls += w.outpost_get_toll_spears(o); });
         w.for_each_pearl_string([&](dcon::pearl_string_id ps) { strung += w.pearl_string_get_pearls(ps).size(); });
@@ -1545,9 +1654,14 @@ namespace selftest {
             w.rot_placed_size(), w.rot_system_size(), w.rot_bulb_size(), eyes, max_bulbs, legs, tendrils, vines, eaten);
 
         // every connected room exit pipe: sit in the entrance, push into it and
-        // expect to come out in the connected room
-        uint32_t pipes = 0, arrived = 0;
-        std::vector<std::string> failed_pipes;
+        // expect to come out in the connected room (a batch of pipes at a time)
+        struct pipe {
+            dcon::room_id room;
+            dcon::room_id target;
+            ivec2 start;
+            ivec2 dir;
+        };
+        std::vector<pipe> pipes;
         w.for_each_shortcut([&](dcon::shortcut_id sc) {
             if (w.shortcut_get_type(sc) != world::shortcut_type::room_exit)
                 return;
@@ -1556,27 +1670,107 @@ namespace selftest {
             if (!target)
                 return;
             auto const rid = w.shortcut_get_room_from_shortcut_location(sc);
-            auto const room = world::get_room_view(gs, rid);
             ivec2 const start = w.shortcut_get_start(sc);
-            ivec2 const dir = room.shortcut_entrance_hole_direction(start);
-            ++pipes;
-            player::reset(gs, p, rid, world::room_view::middle_of_tile(start) - vec2{0.f, 8.f});
-            auto const in = player::make_input(float(-dir.x), float(-dir.y), false, false, false);
-            uint32_t const before = arrived;
-            for (uint32_t t = 0; t < 2400; ++t) {
-                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
-                if (simulation::player_room(gs, p) == target && !w.player_get_in_shortcut(p)) {
-                    ++arrived;
-                    break;
-                }
-            }
-            if (arrived == before && failed_pipes.size() < 10)
-                failed_pipes.push_back(std::string{gs.to_string_view(w.room_get_name(rid))} + " (" + std::to_string(start.x) + "," + std::to_string(start.y) + ")");
+            pipes.push_back(pipe{rid, target, start, world::get_room_view(gs, rid).shortcut_entrance_hole_direction(start)});
         });
-        std::printf("pipes: %u of %u connected room exits delivered the slugcat\n", arrived, pipes);
+        uint32_t arrived = 0;
+        std::vector<std::string> failed_pipes;
+        for (size_t b0 = 0; b0 < pipes.size(); b0 += batch) {
+            size_t const n = std::min(pipes.size() - b0, size_t(batch));
+            std::vector<bool> done(n, false);
+            inputs.clear();
+            for (size_t i = 0; i < n; ++i) {
+                auto const& pp = pipes[b0 + i];
+                player::reset(gs, players[i], pp.room, world::room_view::middle_of_tile(pp.start) - vec2{0.f, 8.f});
+                inputs.push_back(player::make_input(float(-pp.dir.x), float(-pp.dir.y), false, false, false));
+            }
+            std::span<dcon::player_id const> const driven{players.data(), n};
+            size_t left = n;
+            for (uint32_t t = 0; t < 2400 && left > 0; ++t) {
+                simulation::tick(gs, driven, inputs);
+                gs.music.clear();
+                gs.sounds.clear();
+                for (size_t i = 0; i < n; ++i)
+                    if (!done[i] && simulation::player_room(gs, players[i]) == pipes[b0 + i].target && !w.player_get_in_shortcut(players[i])) {
+                        done[i] = true;
+                        inputs[i] = player::input_package{};
+                        --left;
+                        ++arrived;
+                    }
+            }
+            for (size_t i = 0; i < n; ++i)
+                if (!done[i] && failed_pipes.size() < 10)
+                    failed_pipes.push_back(std::string{gs.to_string_view(w.room_get_name(pipes[b0 + i].room))} + " (" + std::to_string(pipes[b0 + i].start.x) + ","
+                        + std::to_string(pipes[b0 + i].start.y) + ")");
+        }
+        std::printf("pipes: %u of %zu connected room exits delivered the slugcat\n", arrived, pipes.size());
         for (auto const& f : failed_pipes)
             std::printf("  pipe stuck: %s\n", f.c_str());
-        player::destroy(gs, p);
+        for (auto const p : players)
+            player::destroy(gs, p);
         return bad == 0 ? 0 : 1;
+    }
+
+    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks) {
+        // the world as it is (no creature spawns yet: items, rot, water,
+        // sand, gates), then with a creature of each kind in every room; each
+        // twice: one thread, then every thread
+        uint32_t const cores = std::max(1u, std::thread::hardware_concurrency());
+        bool same = true;
+        for (int with_creatures = 0; with_creatures < 2; ++with_creatures) {
+        uint64_t hashes[2] = {};
+        double ms[2] = {};
+        for (int run = 0; run < 2; ++run) {
+            auto gs_ptr = load();
+            if (!gs_ptr)
+                return 1;
+            auto& gs = *gs_ptr;
+            auto& w = gs.world;
+            simulation::populate(gs);
+            uint32_t creatures = 0;
+            if (with_creatures)
+                w.for_each_room([&](dcon::room_id rid) {
+                    auto const c = spawn_creatures(gs, rid);
+                    creatures += (c.centipede ? 1 : 0) + (c.dropbug ? 1 : 0) + (c.cicada ? 1 : 0) + (c.lizard ? 1 : 0) + (c.daddy ? 1 : 0);
+                });
+            // one slugcat, viewed, standing in the first room
+            auto const first = dcon::room_id{0};
+            auto const room = world::get_room_view(gs, first);
+            auto const p = player::create(gs, first, find_spawn(room, vec2{room.pixel_width() / 2.f, room.pixel_height() / 2.f}));
+            uint32_t const threads = run == 0 ? 1u : cores;
+            tbb::global_control limit{tbb::global_control::max_allowed_parallelism, threads};
+            player::input_package const in{};
+            // a few ticks to settle (path fields, first falls) before timing
+            for (uint32_t t = 0; t < 10; ++t) {
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                gs.sounds.clear();
+                gs.music.clear();
+            }
+            uint32_t const builds0 = pathing::builds();
+            simulation::times() = {};
+            auto const t0 = std::chrono::steady_clock::now();
+            for (uint32_t t = 0; t < ticks; ++t) {
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                gs.sounds.clear();
+                gs.music.clear();
+            }
+            auto const t1 = std::chrono::steady_clock::now();
+            ms[run] = std::chrono::duration<double, std::milli>(t1 - t0).count() / double(std::max(1u, ticks));
+            hashes[run] = simulation::hash(gs);
+            uint32_t chunks = 0;
+            w.for_each_body_chunk([&](dcon::body_chunk_id) { ++chunks; });
+            std::printf("%u rooms, %u creatures, %u items, %u body chunks; %u thread%s: %.2f ms/tick (%.1f ticks/s), %.1f path fields built a tick, world hash %016llx\n",
+                w.room_size(), creatures, w.item_size(), chunks, threads, threads == 1 ? "" : "s", ms[run], 1000.0 / ms[run],
+                double(pathing::builds() - builds0) / double(std::max(1u, ticks)), (unsigned long long)hashes[run]);
+            auto const& tt = simulation::times();
+            std::printf("  per tick: %.2f ms serial before, %.2f ms rooms (parallel), %.2f ms serial after\n", tt.serial_before / tt.ticks,
+                tt.rooms / tt.ticks, tt.serial_after / tt.ticks);
+            std::fflush(stdout);
+        }
+        same = same && hashes[0] == hashes[1];
+        std::printf("%u cores: %.2fx faster on every thread; 1 thread and %u threads %s\n", cores, ms[0] / ms[1], cores,
+            hashes[0] == hashes[1] ? "agree (deterministic)" : "DISAGREE");
+        }
+        return same ? 0 : 1;
     }
 }

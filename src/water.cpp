@@ -18,27 +18,18 @@ namespace water {
         constexpr float damping = 0.991f;
         constexpr float restore = 0.0012f;
         constexpr float max_height = 30.f;
-        constexpr uint32_t max_surfaces = 8;
 
         uint32_t at(surface_t const& s, uint32_t x, uint32_t z) { return z * s.nx + x; }
 
         surface_t* find(sys::game_state& state, dcon::room_id room) {
-            for (auto& s : state.waters)
-                if (s.room == room)
-                    return &s;
-            return nullptr;
+            if (!state.has_runtime(room))
+                return nullptr;
+            auto& w = state.runtime(room).water;
+            return w ? &*w : nullptr;
         }
 
         surface_t& make(sys::game_state& state, room_view const& room) {
-            auto& waters = state.waters;
-            surface_t* slot = nullptr;
-            if (waters.size() < max_surfaces) {
-                slot = &waters.emplace_back();
-            } else {
-                slot = &*std::min_element(waters.begin(), waters.end(), [](auto const& a, auto const& b) { return a.last_used < b.last_used; });
-            }
-            surface_t& s = *slot;
-            s = surface_t{};
+            surface_t& s = state.runtime(room.id).water.emplace();
             s.room = room.id;
             s.level = room.float_water_level;
             s.x0 = -100.f;
@@ -161,10 +152,10 @@ namespace water {
     }
 
     sys::game_state::water_surface const* surface(sys::game_state const& state, dcon::room_id room) noexcept {
-        for (auto const& s : state.waters)
-            if (s.room == room)
-                return &s;
-        return nullptr;
+        if (!state.has_runtime(room))
+            return nullptr;
+        auto const& w = state.runtime(room).water;
+        return w ? &*w : nullptr;
     }
 
     float height(sys::game_state const& state, surface_t const& s, float x, float z, float alpha) noexcept {
@@ -191,7 +182,6 @@ namespace water {
         surface_t* s = find(state, room.id);
         if (s == nullptr)
             s = &make(state, room);
-        s->last_used = state.tick;
         s->time += 1.f;
         s->last_h = s->h;
         step(*s);

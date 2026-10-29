@@ -16,6 +16,9 @@
 namespace centipede_graphics {
     // the CentipedeGraphics constructor (and GraphicsModule.Reset)
     void reset(sys::game_state& state, dcon::centipede_id c);
+    // GraphicsModule.Reset when a camera looks at the creature's room again:
+    // the parts back to the body, the look (rolled at creation) kept
+    void reset_positions(sys::game_state& state, dcon::centipede_id id);
     // CentipedeGraphics.Update, once per tick after the centipede's update
     void update(sys::game_state& state, dcon::centipede_id c, world::room_view const& room);
     // CentipedeGraphics.DrawSprites (+ ApplyPalette); `alpha` interpolates

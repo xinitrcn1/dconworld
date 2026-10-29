@@ -62,6 +62,8 @@ namespace {
             "                      spearmaster | saint | sofanthiel | watcher (or white/yellow/red)\n"
             "  --selftest          run the scripted movement tests and exit\n"
             "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
+            "  --bench [ticks]     time the whole world (a creature of each kind in every room)\n"
+            "                      on one thread and on every thread, and exit\n"
             "  --audio-check       load the sound effects, decode a song, report and exit\n"
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
@@ -149,7 +151,6 @@ namespace {
                 player::reset(gs, players[i], rid, spawn + vec2{float(i) * 20.f, 0.f});
                 player_graphics::reset(gs, players[i]);
             }
-            simulation::activate_room(gs, rid);
             log_room();
         }
 
@@ -238,9 +239,9 @@ namespace {
                 stuck += w.item_get_mode(it) == world::weapon_mode::stuck_in_wall;
             });
             std::string held;
-            w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
-                held += w.item_get_type(w.grasp_get_grabbed(g)) == world::item_type::spear ? " spear" : " rock";
-            });
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (auto const it = items::held(gs, p, hand))
+                    held += w.item_get_type(it) == world::item_type::spear ? " spear" : " rock";
             if (cicada::held_by(gs, p))
                 held += " squidcada";
             if (held.empty())
@@ -337,6 +338,7 @@ int main(int argc, char* argv[]) {
     bool selftest_mode = false;
     bool audio_check = false;
     int32_t fuzz_ticks = -1;
+    int32_t bench_ticks = -1;
     player::slugcat_name slugcat = player::slugcat_name::white;
     for (int i = 1; i < argc; ++i) {
         std::string const a = argv[i];
@@ -357,6 +359,10 @@ int main(int argc, char* argv[]) {
             fuzz_ticks = 400;
             if (i + 1 < argc && argv[i + 1][0] != '-')
                 fuzz_ticks = std::atoi(argv[++i]);
+        } else if (a == "--bench") {
+            bench_ticks = 200;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                bench_ticks = std::atoi(argv[++i]);
         } else if (a == "--screenshot") {
             screenshot = next();
         } else if (a == "--script") {
@@ -426,8 +432,6 @@ int main(int argc, char* argv[]) {
     if (selftest_mode)
         return selftest::run();
 
-    auto const gs_ptr = sys::make_game_state();
-    auto& gs = *gs_ptr;
     if (roots.empty()) {
         auto const sa = find_streaming_assets();
         if (sa.empty()) {
@@ -436,25 +440,43 @@ int main(int argc, char* argv[]) {
         }
         roots.push_back(sa);
     }
-    // our own assets (HUD font) come before so the game data can be overriden
-    if (char const* base = SDL_GetBasePath(); base != nullptr)
-        gs.fs.add_root(std::string{base} + "assets");
-    for (auto const& r : roots) {
-        reports::add_log("root: " + r);
-        gs.fs.add_root(r);
+    auto const load_world = [&](bool log) {
+        auto ptr = sys::make_game_state();
+        auto& g = *ptr;
+        // our own assets (HUD font) come before so the game data can be overriden
+        if (char const* base = SDL_GetBasePath(); base != nullptr)
+            g.fs.add_root(std::string{base} + "assets");
+        for (auto const& r : roots) {
+            if (log)
+                reports::add_log("root: " + r);
+            g.fs.add_root(r);
+        }
+        g.fs.generate_unpopulated_tree();
+        parsers::error_handler err;
+        world::load(g, err);
+        if (log && !err.accumulated_errors.empty())
+            reports::add_log("errors:\n" + err.accumulated_errors);
+        if (log && !err.accumulated_warnings.empty())
+            reports::add_log("warnings:\n" + err.accumulated_warnings);
+        if (err.fatal || g.world.room_size() == 0)
+            reports::error_fatal("no rooms loaded");
+        return ptr;
+    };
+    if (bench_ticks >= 0) {
+        bool first = true;
+        return selftest::bench([&] {
+            auto ptr = load_world(first);
+            first = false;
+            return ptr;
+        }, uint32_t(bench_ticks));
     }
-    gs.fs.generate_unpopulated_tree();
-    parsers::error_handler err;
-    world::load(gs, err);
-    if (!err.accumulated_errors.empty())
-        reports::add_log("errors:\n" + err.accumulated_errors);
-    if (!err.accumulated_warnings.empty())
-        reports::add_log("warnings:\n" + err.accumulated_warnings);
-    if (err.fatal || gs.world.room_size() == 0)
-        reports::error_fatal("no rooms loaded");
+    auto const gs_ptr = load_world(true);
+    auto& gs = *gs_ptr;
 
-    if (fuzz_ticks >= 0)
+    if (fuzz_ticks >= 0) {
+        simulation::populate(gs);
         return selftest::fuzz(gs, uint32_t(fuzz_ticks));
+    }
     if (audio_check) {
         auto sound = audio::create(gs);
         return sound && audio::self_check(*sound, gs) ? 0 : 1;
@@ -467,6 +489,8 @@ int main(int argc, char* argv[]) {
     a.slugcat = slugcat;
     // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
     gs.story_slugcat = slugcat;
+    // every room's first visit, now: items, scavenger loot, rot, warps, sand
+    simulation::populate(gs);
     dcon::room_id start = gs.find_room(start_room);
     if (!start) {
         reports::add_log("unknown room \"" + start_room + "\", using the first one");
@@ -506,6 +530,7 @@ int main(int argc, char* argv[]) {
 
     if (headless) {
         auto const step = [&](player::input_package const& in) {
+            gs.camera_rooms.assign(1, a.room);
             simulation::tick(gs, a.players, std::span{&in, 1});
             a.follow_player();
             gs.sounds.clear(); // nothing plays them headless
@@ -642,6 +667,7 @@ int main(int argc, char* argv[]) {
             }
             inputs.push_back(in);
         }
+        gs.camera_rooms.assign(1, a.room);
         simulation::tick(gs, a.players, inputs);
         a.follow_player();
     };

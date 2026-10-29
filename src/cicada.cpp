@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "cicada.hpp"
+#include "rooms.hpp"
 #include "cicada_graphics.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
@@ -49,13 +50,13 @@ namespace cicada {
             if (v == 0)
                 return dcon::player_id{};
             dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) ? p : dcon::player_id{};
+            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
         }
         uint8_t player_ref(dcon::player_id p) {
             return p ? uint8_t(p.index() + 1) : 0;
         }
 
-        dcon::cicada_id cicada_of(sys::game_state const& state, uint8_t v) {
+        dcon::cicada_id cicada_of(sys::game_state const& state, uint16_t v) {
             if (v == 0)
                 return dcon::cicada_id{};
             dcon::cicada_id const c{dcon::cicada_id::value_base_t(v - 1)};
@@ -265,7 +266,7 @@ namespace cicada {
             auto& w = state.world;
             dcon::player_id seen;
             float best = float_max;
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 if (!player_here(state, p, room.id))
                     return;
                 for (uint32_t i = 0; i < 2; ++i) {
@@ -422,7 +423,8 @@ namespace cicada {
 
         template<typename F>
         void for_each_member(sys::game_state const& state, dcon::cicada_id leader, F&& f) {
-            state.world.for_each_cicada([&](dcon::cicada_id o) {
+            // a circle group is of one room
+            rooms::for_each_cicada(state, room_of(state, leader), [&](dcon::cicada_id o) {
                 if (circle_leader(state, o) == leader)
                     f(o);
             });
@@ -439,7 +441,7 @@ namespace cicada {
             auto& w = state.world;
             uint32_t slot = 0;
             for_each_member(state, leader, [&](dcon::cicada_id o) { slot = std::max(slot, w.cicada_get_circle_slot(o) + 1); });
-            w.cicada_set_circle_leader(c, uint8_t(leader.index() + 1));
+            w.cicada_set_circle_leader(c, uint16_t(leader.index() + 1));
             w.cicada_set_circle_slot(c, slot);
         }
 
@@ -459,7 +461,7 @@ namespace cicada {
                 });
                 if (next) {
                     w.cicada_set_circle(next, w.cicada_get_circle(c));
-                    for_each_member(state, c, [&](dcon::cicada_id o) { w.cicada_set_circle_leader(o, uint8_t(next.index() + 1)); });
+                    for_each_member(state, c, [&](dcon::cicada_id o) { w.cicada_set_circle_leader(o, uint16_t(next.index() + 1)); });
                 }
             }
             w.cicada_set_no_circle_group_counter(c, w.cicada_get_random(c).range(10, 140));
@@ -475,7 +477,7 @@ namespace cicada {
             g.rotation_dir = rng.value() < 0.5f ? -1.f : 1.f;
             g.rotation = rng.value();
             w.cicada_set_circle(c, g);
-            w.cicada_set_circle_leader(c, uint8_t(c.index() + 1));
+            w.cicada_set_circle_leader(c, uint16_t(c.index() + 1));
             w.cicada_set_circle_slot(c, 0);
         }
 
@@ -522,8 +524,8 @@ namespace cicada {
         // the other cicadas of the room it can see (its tracker's cicadas)
         template<typename F>
         void for_each_seen_cicada(sys::game_state const& state, dcon::cicada_id c, room_view const& room, F&& f) {
-            state.world.for_each_cicada([&](dcon::cicada_id o) {
-                if (o != c && room_of(state, o) == room.id && visual_contact(state, c, room, pos(state, o, 0)))
+            rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id o) {
+                if (o != c && visual_contact(state, c, room, pos(state, o, 0)))
                     f(o);
             });
         }
@@ -672,8 +674,8 @@ namespace cicada {
                     for (int i = 0; i < 5; ++i) {
                         vec2 v3 = v2 + custom::deg_to_vec(mathf::lerp(-75.f, 75.f, rng.value())) * 80.f;
                         v3 = rw::lerp(v3, v2 + custom::dir_vec(v2, main) * 80.f, 0.8f * mathf::inverse_lerp(400.f, 30.f, rw::distance(v3, main)));
-                        w.for_each_cicada([&](dcon::cicada_id o) {
-                            if (o == c || room_of(state, o) != room.id)
+                        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id o) {
+                            if (o == c)
                                 return;
                             vec2 const theirs = room_view::middle_of_tile(pos(state, o, 0));
                             if (custom::dist_less(v3, theirs, 100.f))
@@ -1246,20 +1248,18 @@ namespace cicada {
     }
 
     void update_room(sys::game_state& state, room_view const& room) {
-        state.world.for_each_cicada([&](dcon::cicada_id c) {
-            if (room_of(state, c) == room.id) {
-                update(state, c, room);
+        bool const viewed = state.viewed(room.id);
+        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id c) {
+            update(state, c, room);
+            // the GraphicsModule only exists where a camera looks
+            if (viewed)
                 cicada_graphics::update(state, c, room);
-            }
         });
     }
 
     void collide(sys::game_state& state, room_view const& room) {
-        auto& w = state.world;
-        w.for_each_cicada([&](dcon::cicada_id c) {
-            if (room_of(state, c) != room.id)
-                return;
-            w.for_each_player([&](dcon::player_id p) {
+        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id c) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 // what holds it is kept apart by the carry
                 if (!player_here(state, p, room.id) || holder(state, c) == p)
                     return;
@@ -1268,8 +1268,8 @@ namespace cicada {
                         if (push_apart(state, chunk(state, c, i), player::body_chunk(state, p, j)) && consious(state, c))
                             collide_player(state, c, i, p, j);
             });
-            w.for_each_cicada([&](dcon::cicada_id other) {
-                if (other.index() <= c.index() || room_of(state, other) != room.id)
+            rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id other) {
+                if (other.index() <= c.index())
                     return;
                 for (uint32_t i = 0; i < 2; ++i)
                     for (uint32_t j = 0; j < 2; ++j)
@@ -1284,9 +1284,7 @@ namespace cicada {
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::cicada_id& hit, uint32_t& hit_chunk) {
         auto const& w = state.world;
         float best = 2.f;
-        w.for_each_cicada([&](dcon::cicada_id c) {
-            if (room_of(state, c) != room)
-                return;
+        rooms::for_each_cicada(state, room, [&](dcon::cicada_id c) {
             for (uint32_t i = 0; i < 2; ++i) {
                 vec2 const p = pos(state, c, i);
                 float const r = rad + w.body_chunk_get_rad(chunk(state, c, i));
@@ -1326,10 +1324,16 @@ namespace cicada {
         dcon::cicada_id found;
         if (!p)
             return found;
-        state.world.for_each_cicada([&](dcon::cicada_id c) {
+        auto const look = [&](dcon::cicada_id c) {
             if (state.world.cicada_get_held_by(c) == p.index() + 1)
                 found = c;
-        });
+        };
+        // in the slugcat's room while the rooms update; anywhere otherwise
+        // (a pipe moves the slugcat first, then what it carries)
+        if (state.index.valid)
+            rooms::for_each_cicada(state, rooms::room_of(state, p), look);
+        else
+            state.world.for_each_cicada(look);
         return found;
     }
 
@@ -1348,8 +1352,8 @@ namespace cicada {
         int32_t const flip = w.player_get_flip_direction(p);
         dcon::cicada_id result;
         score = float_max;
-        w.for_each_cicada([&](dcon::cicada_id c) {
-            if (room_of(state, c) != room.id || w.cicada_get_held_by(c))
+        rooms::for_each_cicada(state, room.id, [&](dcon::cicada_id c) {
+            if (w.cicada_get_held_by(c))
                 return;
             // Player.Grabability: not while it charges, nor while it is
             // keeping its distance from this slugcat
@@ -1396,7 +1400,8 @@ namespace cicada {
 
     void release_player(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
-        w.for_each_cicada([&](dcon::cicada_id c) {
+        // whatever holds the slugcat or clings to it is in its room
+        rooms::for_each_cicada(state, rooms::room_of(state, p), [&](dcon::cicada_id c) {
             if (w.cicada_get_held_by(c) == p.index() + 1)
                 release(state, c);
             if (w.cicada_get_sticky_player(c) == p.index() + 1)

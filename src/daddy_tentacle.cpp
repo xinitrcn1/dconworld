@@ -15,6 +15,7 @@
 #include <queue>
 
 #include "daddy_internal.hpp"
+#include "rooms.hpp"
 #include "daddy_graphics.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
@@ -823,7 +824,7 @@ namespace daddy::detail {
             auto& t = tw.t;
             bool flag = false;
             bool done = false;
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(x.state, x.room.id, [&](dcon::player_id p) {
                 if (done || !player_here(x.state, p, x.room.id))
                     return;
                 uint8_t const ref = player_ref(p);
@@ -834,7 +835,8 @@ namespace daddy::detail {
                             continue;
                         if (x.z.eyes_closed < 1 || x.rng.value() < 0.05f) {
                             see_player(x, p);
-                            daddy_graphics::feel_something(x.state, x.d, ref, tw.c[j].pos);
+                            if (x.state.viewed(x.room.id))
+                                daddy_graphics::feel_something(x.state, x.d, ref, tw.c[j].pos);
                         }
                         collide_with_creature(x, tw, j, pc);
                         if (!t.needed_for_locomotion && t.grab_player == 0 && j == tw.c.size() - 1 && (x.size_class || x.z.digesting_counter <= 0)

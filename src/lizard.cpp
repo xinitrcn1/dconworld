@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "lizard.hpp"
+#include "rooms.hpp"
 #include "lizard_ai.hpp"
 #include "lizard_graphics.hpp"
 #include "items.hpp"
@@ -37,10 +38,12 @@ namespace lizard {
             rw::rng& rng;
             dcon::physical_object_id o;
             dcon::body_chunk_id c[3];
+            // a camera looks at the room: it has a graphicsModule (LizardGraphics)
+            bool viewed;
 
             ctx(sys::game_state& s, dcon::lizard_id l, room_view const& r)
                 : state(s), id(l), room(r), p(params_of(s, l)), z(s.world.lizard_get_core(l)), g(s.world.lizard_get_graphics(l)),
-                  a(s.world.lizard_get_ai(l)), rng(s.world.lizard_get_random(l)), o(body(s, l)) {
+                  a(s.world.lizard_get_ai(l)), rng(s.world.lizard_get_random(l)), o(body(s, l)), viewed(s.viewed(r.id)) {
                 for (uint32_t i = 0; i < 3; ++i)
                     c[i] = physics::chunk(s, o, i);
             }
@@ -147,7 +150,7 @@ namespace lizard {
             float const health = w.lizard_get_health(l);
             if (health < 0.5f)
                 st = int32_t(float(st) * (1.f + mathf::inverse_lerp(0.75f, 0.f, health) * 1.5f));
-            if (st > 5 && w.lizard_get_stun(l) <= 0)
+            if (st > 5 && w.lizard_get_stun(l) <= 0 && state.viewed(room_of(state, l)))
                 lizard_graphics::stun(state, l, st);
             w.lizard_set_stun(l, std::max(w.lizard_get_stun(l), st));
             if (w.lizard_get_stun(l) > 0) {
@@ -173,7 +176,7 @@ namespace lizard {
             int32_t const st = int32_t(damage * 30.f + stun_bonus);
             player::stun(state, p, st);
             bool held = false;
-            w.for_each_lizard([&](dcon::lizard_id o) { held = held || grasped(state, o) == p; });
+            rooms::for_each_lizard(state, rooms::room_of(state, p), [&](dcon::lizard_id o) { held = held || grasped(state, o) == p; });
             if (!held && st > rng.range(5, 12))
                 items::release_all(state, p);
             if (damage >= 1.f)
@@ -205,7 +208,7 @@ namespace lizard {
                 // stronger one keeps it
                 float const dominance = x.p.bite_dominance * x.rng.value();
                 grabbed = true;
-                w.for_each_lizard([&](dcon::lizard_id other) {
+                rooms::for_each_lizard(x.state, x.room.id, [&](dcon::lizard_id other) {
                     if (other == x.id || grasped(x.state, other) != p)
                         return;
                     if (params_of(x.state, other).bite_dominance > dominance)
@@ -233,7 +236,7 @@ namespace lizard {
             }
             // (only an Attacks relationship makes a DamageAttack of it)
             x.sound(sound::sound_id::lizard_jaws_shut_miss_creature);
-            w.for_each_lizard([&](dcon::lizard_id other) {
+            rooms::for_each_lizard(x.state, x.room.id, [&](dcon::lizard_id other) {
                 if (grasped(x.state, other) == p)
                     lose_all_grasps(x.state, other);
             });
@@ -309,9 +312,15 @@ namespace lizard {
             for (int i = 0; i < 3; ++i)
                 particles::spawn(x.state, x.room.id, particles::kind::drop, t.pos, (-t.vel + custom::rnv(x.rng) * speed * x.rng.value()) * x.rng.value(),
                     1.5f, 0.6f, vec3{0.75f, 0.8f, 0.85f}, 0.6f);
+            // (graphicsModule != null; rolled either way, so the generator
+            // doesn't depend on the camera)
             for (int32_t i = 0; i < x.p.tongue_segments && i < max_tongue; ++i) {
-                x.g.tongue[i].pos += custom::rnv(x.rng) * x.rng.value() * 0.5f * speed;
-                x.g.tongue[i].vel += custom::rnv(x.rng) * x.rng.value() * 0.5f * speed;
+                vec2 const dp = custom::rnv(x.rng) * x.rng.value() * 0.5f * speed;
+                vec2 const dv = custom::rnv(x.rng) * x.rng.value() * 0.5f * speed;
+                if (x.viewed) {
+                    x.g.tongue[i].pos += dp;
+                    x.g.tongue[i].vel += dv;
+                }
             }
         }
 
@@ -320,7 +329,7 @@ namespace lizard {
         bool trace_players(sys::game_state const& state, dcon::room_id room, vec2 a, vec2 b, float rad, dcon::player_id& hit, uint32_t& k, vec2& at) {
             auto const& w = state.world;
             float best = 2.f;
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(state, room, [&](dcon::player_id p) {
                 if (!player_here(state, p, room))
                     return;
                 for (uint32_t i = 0; i < 2; ++i) {
@@ -541,6 +550,9 @@ namespace lizard {
                 } else {
                     particles::spawn(x.state, x.room.id, particles::kind::drop, x.pos(0), v * 0.5f * x.rng.value(), 1.5f, 0.6f, vec3{0.75f, 0.8f, 0.85f}, 0.6f);
                 }
+                // the tongue's segments are LizardGraphics' (graphicsModule != null)
+                if (!x.viewed)
+                    continue;
                 if (!x.is(breed::blue))
                     v = rw::slerp(v, custom::dir_vec(x.pos(0), x.g.head.pos) * tp.lash_out_speed * d, float(i) / float(n));
                 else
@@ -685,8 +697,9 @@ namespace lizard {
         // Lizard.GetFrameSpeed
         float get_frame_speed(ctx& x, float run_speed) {
             float num = float(legs_gripping(x.state, x.id)) / 4.f;
+            int32_t const no_grip = no_grip_counter(x.state, x.id);
             num = num * (1.f - x.p.no_grip_speed) + x.p.no_grip_speed;
-            if (x.g.no_grip_counter < 1)
+            if (no_grip < 1)
                 num = mathf::lerp(num, 1.f + body_desperation(x), body_force(x) - 1.f);
             if (num == 0.f && body_wiggle_fac(x) > 0.f)
                 for (uint32_t i = 0; i < 3; ++i)
@@ -757,7 +770,7 @@ namespace lizard {
                         s.y *= -1;
                         b.y = 0.f;
                     }
-                } else if (x.g.no_grip_counter == 0 && fc.dest.y == fc.start.y && !x.solid(0, 0, 1)
+                } else if (no_grip_counter(x.state, x.id) == 0 && fc.dest.y == fc.start.y && !x.solid(0, 0, 1)
                 && !x.solid(0, (fc.dest.x < here_tile.x ? -1 : 0) + (fc.dest.x > here_tile.x ? 1 : 0), 1)) {
                     b.y = x.p.floor_leverage;
                 }
@@ -1016,7 +1029,7 @@ namespace lizard {
                     }
                 z.in_allowed_terrain_counter = near ? std::max(0, z.in_allowed_terrain_counter - 10) : 0;
             }
-            z.apply_gravity = z.in_allowed_terrain_counter < x.p.regain_footing_counter || x.g.no_grip_counter > 10 || z.commited_to_drop.valid;
+            z.apply_gravity = z.in_allowed_terrain_counter < x.p.regain_footing_counter || no_grip_counter(x.state, x.id) > 10 || z.commited_to_drop.valid;
             z.swim = mathf::clamp(z.swim - 0.05f, 0.f, 1.f);
             x.a.stuck.satisfied_with_this_position = z.swim > 0.5f;
             float num4 = act_animation(x);
@@ -1269,10 +1282,12 @@ namespace lizard {
                     x.pos(1) = rw::lerp(x.pos(1), room_view::middle_of_tile(j.act_on.start) - iv * float(z.time_in_animation) * 0.5f, 0.2f);
                     x.vel(0) += iv * 1.5f;
                     x.vel(2) -= iv * 2.f;
-                    x.g.head.vel += custom::dir_vec(x.pos(0), room_view::middle_of_tile(j.act_on.best.goal)) * 10.f;
-                    vec2 const perp = custom::perpendicular_vector(x.pos(0), x.pos(2));
-                    for (int32_t i = 0; i < x.p.tail_segments && i < max_tail; ++i)
-                        x.g.tail[i].bp.vel -= iv * float(i) + perp * (z.time_in_animation % 6 < 3 ? -5.f : 5.f);
+                    if (x.viewed) {
+                        x.g.head.vel += custom::dir_vec(x.pos(0), room_view::middle_of_tile(j.act_on.best.goal)) * 10.f;
+                        vec2 const perp = custom::perpendicular_vector(x.pos(0), x.pos(2));
+                        for (int32_t i = 0; i < x.p.tail_segments && i < max_tail; ++i)
+                            x.g.tail[i].bp.vel -= iv * float(i) + perp * (z.time_in_animation % 6 < 3 ? -5.f : 5.f);
+                    }
                     if (z.time_in_animation > z.time_to_remain_in_animation - 5)
                         enter_animation(x.state, x.id, animation::jumping, false);
                     z.in_allowed_terrain_counter = x.p.regain_footing_counter + 10;
@@ -1348,9 +1363,6 @@ namespace lizard {
             auto& w = x.state.world;
             x.sound_at(sound::sound_id::red_lizard_spit, from);
             // LizardSpit constructor
-            auto const sp = w.create_lizard_spit();
-            w.lizard_spit_set_room(sp, uint32_t(x.room.id.index()));
-            w.lizard_spit_set_owner(sp, uint32_t(x.id.index() + 1));
             spit_state s;
             vec2 const v = dir * 40.f;
             s.last_pos = from;
@@ -1380,7 +1392,14 @@ namespace lizard {
             s.jagged_alpha = x.rng.value() * 0.5f;
             s.dot_alpha = x.rng.value() * 0.5f;
             s.color = x.is(breed::red) ? vec3{1.f, 0.f, 0.f} : w.lizard_get_effect_color(x.id);
-            w.lizard_spit_set_spit(sp, s);
+            // room.AddObject: a new object, made once the rooms are done updating
+            x.state.defer(x.room.id, [s, room = x.room.id, owner = x.id](sys::game_state& st) {
+                auto& sw = st.world;
+                auto const sp = sw.create_lizard_spit();
+                sw.lizard_spit_set_room(sp, uint32_t(room.index()));
+                sw.lizard_spit_set_owner(sp, sw.lizard_is_valid(owner) ? uint32_t(owner.index() + 1) : 0u);
+                sw.lizard_spit_set_spit(sp, s);
+            });
             x.a.spit.delay = 12;
             x.pos(2) -= dir * 8.f;
             x.pos(1) -= dir * 4.f;
@@ -1395,7 +1414,7 @@ namespace lizard {
             auto& s = w.lizard_spit_get_spit(sp);
             dcon::lizard_id const owner{dcon::lizard_id::value_base_t(w.lizard_spit_get_owner(sp) - 1)};
             bool const has_owner = w.lizard_spit_get_owner(sp) != 0 && w.lizard_is_valid(owner);
-            rw::rng& rng = state.random;
+            rw::rng& rng = state.room_random(room.id);
             s.last_pos = s.pos;
             s.pos += s.vel;
             s.vel.y -= 0.9f;
@@ -1768,9 +1787,11 @@ namespace lizard {
                             float const k = custom::lerp_map(float(j.jump_counter), 20.f, 60.f, 3.f, 0.f);
                             x.vel(0) += n * float(j.spin) * k;
                             x.vel(2) -= n * float(j.spin) * k;
-                            x.g.head.vel += n * float(j.spin) * 50.f;
-                            for (int32_t i = 0; i < x.p.tail_segments && i < max_tail; ++i)
-                                x.g.tail[i].bp.vel += n * float(j.spin) * std::sin(mathf::inverse_lerp(0.f, float(x.p.tail_segments - 1), float(i)) * mathf::pi) * 15.f;
+                            if (x.viewed) {
+                                x.g.head.vel += n * float(j.spin) * 50.f;
+                                for (int32_t i = 0; i < x.p.tail_segments && i < max_tail; ++i)
+                                    x.g.tail[i].bp.vel += n * float(j.spin) * std::sin(mathf::inverse_lerp(0.f, float(x.p.tail_segments - 1), float(i)) * mathf::pi) * 15.f;
+                            }
                         }
                     }
                     for (uint32_t k = 0; k < 3; ++k)
@@ -1920,8 +1941,11 @@ namespace lizard {
             float const health = x.health();
             if (!dead && x.rng.value() * 0.7f > health && x.rng.value() < 0.125f)
                 stun(state, l, x.rng.range(1, x.rng.range(1, 27 - custom::int_clamp(int32_t(20.f * health), 0, 10))));
-            if (!dead && x.rng.value() * 0.2f > health && x.rng.value() < 0.025f)
-                lizard_graphics::white_flicker(state, l, x.rng.range(1, 5));
+            if (!dead && x.rng.value() * 0.2f > health && x.rng.value() < 0.025f) {
+                int32_t const flicker = x.rng.range(1, 5);
+                if (x.viewed)
+                    lizard_graphics::white_flicker(state, l, flicker);
+            }
             if (!dead && x.rng.value() * 0.5f > health && x.rng.value() < 0.05f)
                 set_jaw_open(state, l, x.rng.value());
             // bodyChunkConnections[2].active = BodyStiff()
@@ -1960,8 +1984,9 @@ namespace lizard {
             });
             if (x.p.tongue && (z.anim == animation::shoot_tongue || (!x.is(breed::blue) && tongue_out(state, l))))
                 z.jaw_open += 0.1f;
-            if (x.is(breed::caramel) && !x.narrow(here(state, l)) && z.anim == animation::prepare_to_lounge) {
-                // the Caramel rears up for its lunge
+            if (x.viewed && x.is(breed::caramel) && !x.narrow(here(state, l)) && z.anim == animation::prepare_to_lounge) {
+                // the Caramel rears up for its lunge (all of it under
+                // graphicsModule != null in vanilla, the body's pull too)
                 x.g.show_dominance = 1.f;
                 vec2 v{x.pos(2).x + z.lounge_dir.x * 10.f, x.pos(2).y + 15.f};
                 x.vel(1) += custom::dir_vec(x.pos(1), v);
@@ -2060,7 +2085,7 @@ namespace lizard {
         if (v == 0)
             return dcon::player_id{};
         dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-        return state.world.player_is_valid(p) ? p : dcon::player_id{};
+        return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
     }
 
     breed breed_of(sys::game_state const& state, dcon::lizard_id l) noexcept {
@@ -2117,8 +2142,8 @@ namespace lizard {
                 // the pack leader calls the others: the most dominant yellow in the room
                 bool leader = true;
                 float const dom = w.lizard_get_dominance(l);
-                w.for_each_lizard([&](dcon::lizard_id o) {
-                    if (o != l && w.lizard_get_breed(o) == breed::yellow && room_of(state, o) == room && w.lizard_get_dominance(o) > dom)
+                rooms::for_each_lizard(state, room, [&](dcon::lizard_id o) {
+                    if (o != l && w.lizard_get_breed(o) == breed::yellow && w.lizard_get_dominance(o) > dom)
                         leader = false;
                 });
                 if (leader)
@@ -2282,7 +2307,18 @@ namespace lizard {
     }
 
     int32_t legs_gripping(sys::game_state const& state, dcon::lizard_id l) noexcept {
+        // Lizard.LegsGripping: the limbs' grip of LizardGraphics, 2 without
+        // a graphicsModule (off screen)
+        if (!state.viewed(room_of(state, l)))
+            return 2;
         return state.world.lizard_get_graphics(l).legs_grabbing;
+    }
+
+    int32_t no_grip_counter(sys::game_state const& state, dcon::lizard_id l) noexcept {
+        // Lizard.NoGripCounter: 0 without a graphicsModule
+        if (!state.viewed(room_of(state, l)))
+            return 0;
+        return state.world.lizard_get_graphics(l).no_grip_counter;
     }
 
     void make_sound(sys::game_state& state, dcon::lizard_id l, emotion e) {
@@ -2490,30 +2526,30 @@ namespace lizard {
 
     void update_room(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
-        w.for_each_lizard([&](dcon::lizard_id l) {
-            if (room_of(state, l) == room.id) {
-                update(state, l, room);
+        bool const viewed = state.viewed(room.id);
+        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
+            update(state, l, room);
+            // the GraphicsModule only exists where a camera looks (the legs'
+            // grip the body runs on falls back to Lizard.LegsGripping's 2)
+            if (viewed)
                 lizard_graphics::update(state, l, room);
-            }
         });
-        std::vector<dcon::lizard_spit_id> gone;
-        w.for_each_lizard_spit([&](dcon::lizard_spit_id s) {
-            if (w.lizard_spit_get_room(s) != uint32_t(room.id.index()))
+        rooms::for_each_lizard_spit(state, room.id, [&](dcon::lizard_spit_id s) {
+            if (w.lizard_spit_get_spit(s).dead)
                 return;
             spit_update(state, s, room);
+            // Destroy: gone at the end of the tick
             if (w.lizard_spit_get_spit(s).dead)
-                gone.push_back(s);
+                state.defer(room.id, [s](sys::game_state& st) {
+                    if (st.world.lizard_spit_is_valid(s))
+                        st.world.delete_lizard_spit(s);
+                });
         });
-        for (auto const s : gone)
-            w.delete_lizard_spit(s);
     }
 
     void collide(sys::game_state& state, room_view const& room) {
-        auto& w = state.world;
-        w.for_each_lizard([&](dcon::lizard_id l) {
-            if (room_of(state, l) != room.id)
-                return;
-            w.for_each_player([&](dcon::player_id p) {
+        rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id l) {
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
                 // what it holds is kept out of it by CarryObject
                 if (!player_here(state, p, room.id) || grasped(state, l) == p)
                     return;
@@ -2524,8 +2560,8 @@ namespace lizard {
             });
             // lizards push each other about (their fights and communication
             // aren't ported, the Yellow pack's aside)
-            w.for_each_lizard([&](dcon::lizard_id other) {
-                if (other.index() <= l.index() || room_of(state, other) != room.id)
+            rooms::for_each_lizard(state, room.id, [&](dcon::lizard_id other) {
+                if (other.index() <= l.index())
                     return;
                 for (uint32_t i = 0; i < 3; ++i)
                     for (uint32_t j = 0; j < 3; ++j)
@@ -2537,9 +2573,7 @@ namespace lizard {
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::lizard_id& hit, uint32_t& hit_chunk) {
         auto const& w = state.world;
         float best = 2.f;
-        w.for_each_lizard([&](dcon::lizard_id l) {
-            if (room_of(state, l) != room)
-                return;
+        rooms::for_each_lizard(state, room, [&](dcon::lizard_id l) {
             for (uint32_t i = 0; i < 3; ++i) {
                 auto const c = chunk(state, l, i);
                 vec2 const p = w.body_chunk_get_pos(c);
@@ -2586,8 +2620,10 @@ namespace lizard {
                 for (int32_t i = 0; i < sparks; ++i)
                     particles::spawn(state, room, particles::kind::spark, head + custom::rnv(rng) * 5.f * rng.value(),
                         custom::rnv(rng) * mathf::lerp(0.2f, 0.4f, rng.value()) * rw::magnitude(momentum), 2.f, 0.3f, vec3{1.f, 1.f, 1.f});
-                lizard_graphics::white_flicker(state, l, sparks);
-                w.lizard_get_graphics(l).head.vel += momentum * 2.f;
+                if (state.viewed(room)) {
+                    lizard_graphics::white_flicker(state, l, sparks);
+                    w.lizard_get_graphics(l).head.vel += momentum * 2.f;
+                }
                 num *= 0.1f;
                 st = (damage * 0.5f * 30.f + stun_bonus * 0.6666667f) / p.base_stun_resistance;
                 if (w.lizard_get_breed(l) == breed::cyan)
@@ -2617,7 +2653,8 @@ namespace lizard {
 
     void release_player(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
-        w.for_each_lizard([&](dcon::lizard_id l) {
+        // whatever holds the slugcat or has its tongue on it is in its room
+        rooms::for_each_lizard(state, rooms::room_of(state, p), [&](dcon::lizard_id l) {
             if (grasped(state, l) == p)
                 lose_all_grasps(state, l);
             auto& t = w.lizard_get_tongue(l);

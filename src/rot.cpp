@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "rot.hpp"
+#include "rooms.hpp"
 #include "centipede.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
@@ -328,7 +329,7 @@ namespace rot {
 
         dcon::physical_object_id prey_body(sys::game_state const& state, rot_prey p) {
             auto const& w = state.world;
-            if (p.kind == prey_kind::player && w.player_is_valid(prey_player(p)))
+            if (p.kind == prey_kind::player && w.player_is_valid(prey_player(p)) && rooms::reachable(state, prey_player(p)))
                 return player::body(state, prey_player(p));
             if (p.kind == prey_kind::centipede && w.centipede_is_valid(prey_centipede(p)))
                 return centipede::body(state, prey_centipede(p));
@@ -352,9 +353,8 @@ namespace rot {
         // every chunk of every creature in the room (Room.abstractRoom.creatures)
         template<typename F>
         void for_each_creature_chunk(sys::game_state const& state, dcon::room_id room, F&& f) {
-            auto const& w = state.world;
             bool stop = false;
-            w.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_player(state, room, [&](dcon::player_id p) {
                 if (stop)
                     return;
                 rot_prey const base{prey_kind::player, 0, uint16_t(p.index())};
@@ -363,7 +363,7 @@ namespace rot {
                 for (uint8_t i = 0; i < 2 && !stop; ++i)
                     stop = f(rot_prey{prey_kind::player, i, base.id}, player::body_chunk(state, p, i));
             });
-            w.for_each_centipede([&](dcon::centipede_id c) {
+            rooms::for_each_centipede(state, room, [&](dcon::centipede_id c) {
                 if (stop)
                     return;
                 rot_prey const base{prey_kind::centipede, 0, uint16_t(c.index())};
@@ -843,16 +843,24 @@ namespace rot {
                 w.rot_meal_set_disable_counter(m, 0);
                 return;
             }
-            if (!prey_in_room(state, p, room_of(state, s)))
+            auto const room = room_of(state, s);
+            if (!prey_in_room(state, p, room))
                 return;
-            auto const m = w.create_rot_meal();
-            w.try_create_rot_meal_membership(m, s);
-            w.rot_meal_set_prey(m, rot_prey{p.kind, 0, p.id});
-            w.rot_meal_set_goal_pos(m, goal);
-            w.rot_meal_set_goal_rad(m, rad);
-            w.rot_meal_set_progression(m, 0.f);
-            w.rot_meal_set_wait(m, 0.f);
-            w.rot_meal_set_disable_counter(m, 0);
+            // EatenCreature: a new object, made once the rooms are done
+            // updating (a second bulb nibbling it this tick finds it made)
+            state.defer(room, [s, p, goal, rad, room](sys::game_state& st) {
+                auto& sw = st.world;
+                if (meal_of(st, s, p) || !prey_in_room(st, p, room))
+                    return;
+                auto const m = sw.create_rot_meal();
+                sw.try_create_rot_meal_membership(m, s);
+                sw.rot_meal_set_prey(m, rot_prey{p.kind, 0, p.id});
+                sw.rot_meal_set_goal_pos(m, goal);
+                sw.rot_meal_set_goal_rad(m, rad);
+                sw.rot_meal_set_progression(m, 0.f);
+                sw.rot_meal_set_wait(m, 0.f);
+                sw.rot_meal_set_disable_counter(m, 0);
+            });
         }
 
         // Bulb.Update
@@ -1003,7 +1011,12 @@ namespace rot {
                 player::die(state, pl);
                 w.player_set_eaten(pl, 1);
             } else {
-                centipede::destroy(state, prey_centipede(p));
+                // Destroy: gone at the end of the tick
+                auto const c = prey_centipede(p);
+                state.defer(room_of(state, s), [c](sys::game_state& st) {
+                    if (st.world.centipede_is_valid(c))
+                        centipede::destroy(st, c);
+                });
             }
             return true;
         }
@@ -1179,17 +1192,13 @@ namespace rot {
         } else {
             // Garbage Wastes rot is in its later, quieter state from Survivor's
             // timeline on (Artificer's comes before it)
-            bool artificer = false;
-            w.for_each_player([&](dcon::player_id p) {
-                artificer = artificer || w.player_get_stats(p).name == player::slugcat_name::artificer;
-            });
+            bool const artificer = state.story_slugcat == player::slugcat_name::artificer;
             w.rot_system_set_gw_mode(s, (is("gw") || is("cl")) && !artificer);
             w.rot_system_set_effect_color(s, region ? w.region_get_corruption_effect_color(region) : rw::vec3{0.f, 0.f, 1.f});
             w.rot_system_set_eye_color(s, region ? w.region_get_corruption_eye_color(region) : rw::vec3{0.f, 0.f, 1.f});
             // the Watcher's sentient rot (DaddyCorruption.SentientRotMode): the
             // Outer Rim's and the rot regions' is purple
-            bool watcher = false;
-            w.for_each_player([&](dcon::player_id p) { watcher = watcher || w.player_get_stats(p).name == player::slugcat_name::watcher; });
+            bool const watcher = state.story_slugcat == player::slugcat_name::watcher;
             if (is("wora") || is("wrsa") || is("wsur") || (watcher && rname.size() > 1 && (rname[0] == 'w' || rname[0] == 'W'))) {
                 w.rot_system_set_effect_color(s, rw::vec3{0.5f, 0.12f, 0.72f});
                 w.rot_system_set_eye_color(s, rw::vec3{0.75f, 0.35f, 1.f});
@@ -1235,9 +1244,7 @@ namespace rot {
             return;
         auto& r = w.rot_system_get_random(s);
         // DaddyCorruption.NoiseInRoom
-        for (auto const& n : state.noises) {
-            if (n.room != room.id)
-                continue;
+        for (auto const& n : state.noises(room.id)) {
             w.rot_system_for_each_rot_bulb_membership(s, [&](dcon::rot_bulb_membership_id m) {
                 auto const b = w.rot_bulb_membership_get_bulb(m);
                 if (custom::dist_less(n.pos, w.rot_bulb_get_pos(b), n.strength))
@@ -1253,8 +1260,12 @@ namespace rot {
             if (meal_update(state, s, meal))
                 done.push_back(meal);
         });
-        for (auto const m : done)
-            w.delete_rot_meal(m);
+        if (!done.empty())
+            state.defer(room.id, [done = std::move(done)](sys::game_state& st) {
+                for (auto const m : done)
+                    if (st.world.rot_meal_is_valid(m))
+                        st.world.delete_rot_meal(m);
+            });
         w.rot_system_for_each_rot_tube_membership(s, [&](dcon::rot_tube_membership_id m) {
             auto const t = w.rot_tube_membership_get_tube(m);
             switch (w.rot_tube_get_kind(t)) {
@@ -1274,21 +1285,33 @@ namespace rot {
     void release_player(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
         auto const is_p = [&](rot_prey const& q) { return q.kind == prey_kind::player && q.id == uint16_t(p.index()); };
-        w.for_each_rot_tube([&](dcon::rot_tube_id t) {
+        // the rot that has hold of the slugcat is its room's
+        auto const room = rooms::room_of(state, p);
+        auto const s = system_of(state, room);
+        if (!s)
+            return;
+        w.rot_system_for_each_rot_tube_membership(s, [&](dcon::rot_tube_membership_id m) {
+            auto const t = w.rot_tube_membership_get_tube(m);
             if (is_p(w.rot_tube_get_grab_chunk(t)))
                 w.rot_tube_set_grab_chunk(t, rot_prey{});
         });
-        w.for_each_rot_bulb([&](dcon::rot_bulb_id b) {
+        w.rot_system_for_each_rot_bulb_membership(s, [&](dcon::rot_bulb_membership_id m) {
+            auto const b = w.rot_bulb_membership_get_bulb(m);
             if (is_p(w.rot_bulb_get_eat_chunk(b)))
                 w.rot_bulb_set_eat_chunk(b, rot_prey{});
         });
         std::vector<dcon::rot_meal_id> gone;
-        w.for_each_rot_meal([&](dcon::rot_meal_id m) {
-            if (is_p(w.rot_meal_get_prey(m)))
-                gone.push_back(m);
+        w.rot_system_for_each_rot_meal_membership(s, [&](dcon::rot_meal_membership_id m) {
+            auto const meal = w.rot_meal_membership_get_meal(m);
+            if (is_p(w.rot_meal_get_prey(meal)))
+                gone.push_back(meal);
         });
-        for (auto const m : gone)
-            w.delete_rot_meal(m);
+        if (!gone.empty())
+            state.defer(room, [gone = std::move(gone)](sys::game_state& st) {
+                for (auto const m : gone)
+                    if (st.world.rot_meal_is_valid(m))
+                        st.world.delete_rot_meal(m);
+            });
     }
 
     void update_rope(world::rope_state& r, room_view const& room, vec2 a, vec2 b) {

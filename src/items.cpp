@@ -12,6 +12,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "rooms.hpp"
 
 namespace items {
     using rw::ivec2;
@@ -32,13 +33,14 @@ namespace items {
                 || t == item_type::bomb || t == item_type::flare_bomb || t == item_type::lilly_puck;
         }
 
-        // what goes off after the update loop (items can't be destroyed while it walks them)
+        // what goes off after the update loop (items can't be destroyed while
+        // it walks them), per thread: a room's update runs on one thread
         struct pending_blast {
             dcon::item_id item;
             vec2 at;
         };
         std::vector<pending_blast>& blasts() {
-            static std::vector<pending_blast> v;
+            static thread_local std::vector<pending_blast> v;
             return v;
         }
         void detonate(sys::game_state& state, dcon::item_id it, vec2 at) {
@@ -55,6 +57,10 @@ namespace items {
 
         dcon::room_id room_of(sys::game_state const& state, dcon::physical_object_id o) {
             return state.world.physical_object_get_room_from_object_location(o);
+        }
+        // the item's room's UnityEngine.Random
+        rw::rng& item_rng(sys::game_state& state, dcon::item_id it) {
+            return state.room_random(room_of(state, body(state, it)));
         }
 
         float room_gravity(sys::game_state const& state, dcon::room_id room) {
@@ -86,12 +92,12 @@ namespace items {
         void set_random_spin(sys::game_state& state, dcon::item_id it) {
             float const g = room_gravity(state, room_of(state, body(state, it)));
             if (is_spear(state, it)) {
-                float const sign = state.random.value() < 0.5f ? -1.f : 1.f;
-                state.world.item_set_rotation_speed(it, sign * mathf::lerp(50.f, 150.f, state.random.value()) * mathf::lerp(0.05f, 1.f, g));
+                float const sign = item_rng(state, it).value() < 0.5f ? -1.f : 1.f;
+                state.world.item_set_rotation_speed(it, sign * mathf::lerp(50.f, 150.f, item_rng(state, it).value()) * mathf::lerp(0.05f, 1.f, g));
                 state.world.item_set_spinning(it, 1);
                 return;
             }
-            state.world.item_set_rotation_speed(it, mathf::lerp(-100.f, 100.f, state.random.value()) * mathf::lerp(0.05f, 1.f, g));
+            state.world.item_set_rotation_speed(it, mathf::lerp(-100.f, 100.f, item_rng(state, it).value()) * mathf::lerp(0.05f, 1.f, g));
         }
 
         // a tile's flags in the data container (null out of bounds)
@@ -144,7 +150,7 @@ namespace items {
             if (is_spear(state, it)) {
                 if (m == weapon_mode::stuck_in_wall) {
                     if (w.item_get_stuck_cycles(it) == 0)
-                        w.item_set_stuck_cycles(it, int8_t(state.random.range(3, 7) * (w.item_get_throw_dir(it).y != 0 ? -1 : 1)));
+                        w.item_set_stuck_cycles(it, int8_t(item_rng(state, it).range(3, 7) * (w.item_get_throw_dir(it).y != 0 ? -1 : 1)));
                     bool const vertical = w.item_get_stuck_cycles(it) < 0;
                     auto const view = world::get_room_view(state, room_of(state, body(state, it)));
                     vec2 const stuck = w.item_get_stuck_pos(it);
@@ -187,23 +193,34 @@ namespace items {
             state.world.item_set_forbidden_to_player(it, 10);
         }
 
-        dcon::grasp_id grasp_in_hand(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
-            dcon::grasp_id found;
-            state.world.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
-                if (state.world.grasp_get_hand(g) == hand)
-                    found = g;
-            });
-            return found;
+        // Creature.Grasp: a hand of a player and what it holds
+        struct grasp {
+            dcon::item_id item;
+            uint32_t hand = 0;
+            explicit operator bool() const noexcept { return bool(item); }
+        };
+
+        void set_hand(sys::game_state& state, dcon::player_id p, uint32_t hand, dcon::item_id it) {
+            if (hand == 0)
+                state.world.player_set_grasp0(p, it);
+            else
+                state.world.player_set_grasp1(p, it);
+        }
+
+        grasp grasp_in_hand(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
+            auto const it = hand == 0 ? state.world.player_get_grasp0(p) : state.world.player_get_grasp1(p);
+            return grasp{it, hand};
         }
 
         // Creature.ReleaseGrasp
-        void release_grasp(sys::game_state& state, dcon::grasp_id g) {
+        void release_grasp(sys::game_state& state, dcon::player_id p, grasp g) {
             auto& w = state.world;
-            auto const o = body(state, w.grasp_get_grabbed(g));
+            auto const o = body(state, g.item);
             uint8_t& n = w.physical_object_get_grabbed_by_count(o);
             if (n > 0)
                 --n;
-            w.delete_grasp(g);
+            set_hand(state, p, g.hand, dcon::item_id{});
+            w.item_set_grabbed_by(g.item, dcon::player_id{});
         }
 
         // Player.ThrowDirection
@@ -261,9 +278,9 @@ namespace items {
         }
 
         // Player.ThrowObject, for weapons
-        void throw_object(sys::game_state& state, dcon::player_id p, dcon::grasp_id g, room_view const& room) {
+        void throw_object(sys::game_state& state, dcon::player_id p, grasp g, room_view const& room) {
             auto& w = state.world;
-            auto const it = w.grasp_get_grabbed(g);
+            auto const it = g.item;
             auto const c0 = player::body_chunk(state, p, 0);
             auto const c1 = player::body_chunk(state, p, 1);
             auto const& in = w.player_get_input(p)[0];
@@ -313,11 +330,11 @@ namespace items {
             w.body_chunk_get_vel(c0) += rw::to_vec2(dir) * 8.f;
             w.body_chunk_get_vel(c1) -= rw::to_vec2(dir) * 4.f;
 
-            player_graphics::throw_object(state, p, w.grasp_get_hand(g), it);
+            player_graphics::throw_object(state, p, g.hand, it);
             w.player_set_dont_grab_stuff(p, 15);
             // PlayerCarryableItem.Forbid
             w.item_set_forbidden_to_player(it, 40);
-            release_grasp(state, g);
+            release_grasp(state, p, g);
         }
 
         // Player.ThrowObject for a carried cicada: Player.TossObject, the
@@ -395,9 +412,8 @@ namespace items {
             int32_t const flip = w.player_get_flip_direction(p);
             dcon::item_id result;
             best = std::numeric_limits<float>::max();
-            w.for_each_item([&](dcon::item_id it) {
-                auto const o = body(state, it);
-                if (room_of(state, o) != room.id || w.item_get_forbidden_to_player(it) >= 1)
+            rooms::for_each_item(state, room.id, [&](dcon::item_id it) {
+                if (w.item_get_forbidden_to_player(it) >= 1)
                     return;
                 auto const c = chunk(state, it);
                 vec2 const ip = w.body_chunk_get_pos(c);
@@ -424,10 +440,11 @@ namespace items {
         // Player.SlugcatGrab / Creature.Grab + Weapon.Grabbed
         void grab(sys::game_state& state, dcon::player_id p, dcon::item_id it, uint32_t hand) {
             auto& w = state.world;
-            auto const g = w.try_create_grasp(p, it);
-            if (!g)
+            if (w.item_get_grabbed_by(it) || grasp_in_hand(state, p, hand))
                 return;
-            w.grasp_set_hand(g, uint8_t(hand));
+            set_hand(state, p, hand, it);
+            w.item_set_grabbed_by(it, p);
+            w.item_set_grabbed_hand(it, uint8_t(hand));
             ++w.physical_object_get_grabbed_by_count(body(state, it));
             // Spear.PickedUp: pulled out of a wall
             if (is_spear(state, it) && w.item_get_has_beam_state(it)) {
@@ -721,7 +738,7 @@ namespace items {
                         // comes to rest lying on the ground
                         w.item_set_spinning(it, 0);
                         w.item_set_rotation_speed(it, 0.f);
-                        w.item_set_rotation(it, custom::deg_to_vec(mathf::lerp(-50.f, 50.f, state.random.value()) + 180.f));
+                        w.item_set_rotation(it, custom::deg_to_vec(mathf::lerp(-50.f, 50.f, item_rng(state, it).value()) + 180.f));
                         vel *= 0.f;
                         state.play_sound(sound::sound_id::spear_stick_in_ground, room.id, pos);
                     }
@@ -737,13 +754,12 @@ namespace items {
                 // enough, and a third of the time unless thrown from up close
                 if (custom::dist_less(thrown_pos, pos, 560.f) && w.body_chunk_get_contact_point(c) == dir
                 && room.get_tile(pos).t == world::terrain::air && room.get_tile(pos + rw::to_vec2(dir) * 20.f).t == world::terrain::solid
-                && (state.random.value() < 0.33f || custom::dist_less(thrown_pos, pos, 140.f) || w.item_get_always_stick(it))) {
+                && (item_rng(state, it).value() < 0.33f || custom::dist_less(thrown_pos, pos, 140.f) || w.item_get_always_stick(it))) {
                     ivec2 const tile = room_view::get_tile_position(pos);
                     bool ok = tile.x > 0 && tile.y > 0 && tile.x < room.width - 1 && tile.y < room.height - 1;
                     // one spear per tile
-                    w.for_each_item([&](dcon::item_id other) {
+                    rooms::for_each_item(state, room.id, [&](dcon::item_id other) {
                         if (ok && other != it && w.item_get_mode(other) == weapon_mode::stuck_in_wall
-                        && room_of(state, body(state, other)) == room.id
                         && room_view::get_tile_position(w.body_chunk_get_pos(chunk(state, other))) == tile)
                             ok = false;
                     });
@@ -806,7 +822,7 @@ namespace items {
                 auto const by = w.item_get_thrown_by(it);
                 ivec2& throw_dir = w.item_get_throw_dir(it);
                 vec2& vel = w.body_chunk_get_vel(c);
-                if (w.item_get_change_dir_counter(it) > 0 && by && w.player_is_valid(by) && throw_direction(state, by) == -throw_dir.x) {
+                if (w.item_get_change_dir_counter(it) > 0 && by && w.player_is_valid(by) && rooms::reachable(state, by) && throw_direction(state, by) == -throw_dir.x) {
                     w.item_set_change_dir_counter(it, 0);
                     throw_dir = ivec2{throw_direction(state, by), 0};
                     vel.x = std::fabs(vel.x) * float(throw_dir.x);
@@ -855,7 +871,7 @@ namespace items {
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
                     auto const hit_creature = [&](auto&& violence) {
-                        auto& rng = state.random;
+                        auto& rng = state.room_random(room.id);
                         auto const type = w.item_get_type(it);
                         if (type == world::item_type::bomb || type == world::item_type::flare_bomb) {
                             detonate(state, it, pos);
@@ -937,8 +953,8 @@ namespace items {
             if (w.item_get_type(it) == world::item_type::explosive_spear && w.item_get_mode(it) == weapon_mode::stuck_in_wall)
                 detonate(state, it, w.body_chunk_get_pos(c));
             // ElectricSpear: sparks while charged
-            if (w.item_get_type(it) == world::item_type::electric_spear && w.item_get_charge(it) > 0 && state.random.value() < 0.02f)
-                particles::spawn(state, room.id, particles::kind::spark, w.body_chunk_get_pos(c), custom::deg_to_vec(state.random.value() * 360.f) * 2.f, 1.f, 0.15f, rw::vec3{0.7f, 0.85f, 1.f});
+            if (w.item_get_type(it) == world::item_type::electric_spear && w.item_get_charge(it) > 0 && state.room_random(room.id).value() < 0.02f)
+                particles::spawn(state, room.id, particles::kind::spark, w.body_chunk_get_pos(c), custom::deg_to_vec(state.room_random(room.id).value() * 360.f) * 2.f, 1.f, 0.15f, rw::vec3{0.7f, 0.85f, 1.f});
             if (auto const ex = w.item_get_extra_from_item_extra(it)) {
                 if (w.item_get_type(it) == world::item_type::explosive_spear)
                     rag_update(state, it, w.weapon_extra_get_data(ex), room);
@@ -967,8 +983,7 @@ namespace items {
     }
 
     dcon::player_id grabber(sys::game_state const& state, dcon::item_id item) noexcept {
-        auto const g = state.world.item_get_grasp_as_grabbed(item);
-        return g ? state.world.grasp_get_grabber(g) : dcon::player_id{};
+        return state.world.item_get_grabbed_by(item);
     }
 
     namespace {
@@ -985,6 +1000,7 @@ namespace items {
             auto const o = physics::create_object(state, room, d);
             physics::add_chunk(state, o, pos, 5.f, 0.07f);
             auto const it = w.create_item();
+            w.item_set_grabbed_by(it, dcon::player_id{});
             bool const pearl = type == world::item_type::data_pearl;
             w.item_set_type(it, type);
             w.item_set_mode(it, weapon_mode::free);
@@ -992,7 +1008,7 @@ namespace items {
             w.item_set_seed(it, ++state.next_issued_id);
             w.item_set_random(it, rw::rng{uint32_t(w.item_get_seed(it)) * 2654435761u | 1u});
             // the Weapon constructor's roll (DataPearl isn't a Weapon)
-            w.item_set_rotation(it, pearl ? vec2{0.f, 1.f} : custom::deg_to_vec(state.random.value() * 360.f));
+            w.item_set_rotation(it, pearl ? vec2{0.f, 1.f} : custom::deg_to_vec(state.room_random(room).value() * 360.f));
             w.item_set_last_rotation(it, w.item_get_rotation(it));
             w.item_set_rotation_speed(it, 0.f);
             w.item_set_throw_dir(it, ivec2{0, 0});
@@ -1197,8 +1213,8 @@ namespace items {
             w.delete_weapon_extra(ex);
         if (w.item_get_has_beam_state(item))
             reset_beam_state(state, item);
-        if (auto const g = w.item_get_grasp_as_grabbed(item))
-            release_grasp(state, g);
+        if (auto const by = w.item_get_grabbed_by(item))
+            release_grasp(state, by, grasp{item, w.item_get_grabbed_hand(item)});
         auto const o = body(state, item);
         w.delete_item(item);
         if (o)
@@ -1216,7 +1232,7 @@ namespace items {
         w.room_for_each_item_location(room, [&](dcon::item_location_id il) {
             auto const pi = w.item_location_get_item(il);
             bool const rock = w.placed_item_get_type(pi) == world::item_type::rock;
-            if (state.random.value() < (rock ? 0.75f : 0.6f))
+            if (state.room_random(room).value() < (rock ? 0.75f : 0.6f))
                 create_weapon(state, room, room_view::middle_of_tile(w.placed_item_get_tile(pi)), w.placed_item_get_type(pi));
         });
 
@@ -1282,7 +1298,7 @@ namespace items {
         float const spear_chance = w.room_get_random_item_spear_chance(room);
         for (int32_t n = int32_t(float(view.width) * float(view.height) * mathf::pow(density, 2.f) / 5.f); n >= 0; --n) {
             // Room.RandomTile
-            ivec2 const t{state.random.range(0, view.width), state.random.range(0, view.height)};
+            ivec2 const t{state.room_random(room).range(0, view.width), state.room_random(room).range(0, view.height)};
             if (view.get_tile(t).solid())
                 continue;
             bool ok = true;
@@ -1294,8 +1310,8 @@ namespace items {
             if (!ok)
                 continue;
             // a few of the random spears are explosive or electric (Downpour's rolls simplified)
-            if (state.random.value() < spear_chance) {
-                float const roll = state.random.value();
+            if (state.room_random(room).value() < spear_chance) {
+                float const roll = state.room_random(room).value();
                 create_weapon(state, room, room_view::middle_of_tile(t),
                     roll < 0.06f ? world::item_type::explosive_spear : roll < 0.1f ? world::item_type::electric_spear : world::item_type::spear);
             }
@@ -1306,10 +1322,7 @@ namespace items {
 
     void update_room(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
-        w.for_each_item([&](dcon::item_id it) {
-            if (room_of(state, body(state, it)) == room.id)
-                update_item(state, it, room);
-        });
+        rooms::for_each_item(state, room.id, [&](dcon::item_id it) { update_item(state, it, room); });
         // bombs and explosive spears that went off this tick
         auto pending = std::move(blasts());
         blasts().clear();
@@ -1320,13 +1333,16 @@ namespace items {
                 explosions::flash(state, room, b.at, 400.f);
             else
                 explosions::explode(state, room, b.at, explosions::desc{110.f, 7.f, 1.6f, 80.f, 45.f}, body(state, b.item));
-            destroy(state, b.item);
+            // gone at the end of the tick (Destroy: slatedForDeletion)
+            state.defer(room.id, [it = b.item](sys::game_state& s) {
+                if (s.world.item_is_valid(it))
+                    destroy(s, it);
+            });
         }
     }
 
     dcon::item_id held(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
-        auto const g = grasp_in_hand(state, p, hand);
-        return g ? state.world.grasp_get_grabbed(g) : dcon::item_id{};
+        return grasp_in_hand(state, p, hand).item;
     }
 
     void carry_update(sys::game_state& state, dcon::player_id p) {
@@ -1334,10 +1350,11 @@ namespace items {
         vec2 const main_pos = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
         vec2 const main_vel = w.body_chunk_get_vel(player::body_chunk(state, p, 0));
         float const flip = float(w.player_get_flip_direction(p));
-        w.player_for_each_grasp_as_grabber(p, [&](dcon::grasp_id g) {
-            auto const it = w.grasp_get_grabbed(g);
+        for (uint32_t hand = 0; hand < 2; ++hand) {
+            auto const it = grasp_in_hand(state, p, hand).item;
+            if (!it)
+                continue;
             auto const c = chunk(state, it);
-            uint8_t const hand = w.grasp_get_hand(g);
             w.body_chunk_set_last_pos(c, w.body_chunk_get_pos(c));
             w.body_chunk_set_pos(c, player_graphics::hand_position(state, p, hand));
             w.body_chunk_set_vel(c, main_vel);
@@ -1347,7 +1364,7 @@ namespace items {
             if (is_spear(state, it))
                 dir = custom::deg_to_vec(80.f * flip);
             w.item_set_rotation(it, dir);
-        });
+        }
         // a carried cicada (HeavyCarry)
         cicada::carry_update(state, p);
     }
@@ -1355,7 +1372,7 @@ namespace items {
     void release_all(sys::game_state& state, dcon::player_id p) {
         for (uint32_t hand = 0; hand < 2; ++hand)
             if (auto const g = grasp_in_hand(state, p, hand))
-                release_grasp(state, g);
+                release_grasp(state, p, g);
         cicada::release_player(state, p);
     }
 
@@ -1384,8 +1401,8 @@ namespace items {
             auto& w = state.world;
             if (back_spear(state, p))
                 return;
-            if (auto const g = w.item_get_grasp_as_grabbed(spear))
-                release_grasp(state, g);
+            if (auto const by = w.item_get_grabbed_by(spear))
+                release_grasp(state, by, grasp{spear, w.item_get_grabbed_hand(spear)});
             w.player_set_back_spear(p, spear);
             change_mode(state, spear, weapon_mode::on_back);
             w.player_set_back_locked(p, 1);
@@ -1418,7 +1435,7 @@ namespace items {
             if (!spear)
                 return;
             w.body_chunk_set_vel(chunk(state, spear), w.body_chunk_get_vel(player::body_chunk(state, p, 0))
-                + custom::deg_to_vec(state.random.value() * 360.f) * 3.f * state.random.value());
+                + custom::deg_to_vec(state.room_random(rooms::room_of(state, p)).value() * 360.f) * 3.f * state.room_random(rooms::room_of(state, p)).value());
             change_mode(state, spear, weapon_mode::free);
         }
 
@@ -1480,27 +1497,27 @@ namespace items {
             auto const c1 = player::body_chunk(state, p, 1);
             if (prog == 0.f) {
                 // TailSpeckles.newSpearSlot
-                w.player_set_spear_line(p, uint8_t(state.random.range(0, 2)));
-                w.player_set_spear_row(p, uint8_t(state.random.range(0, 4)));
+                w.player_set_spear_line(p, uint8_t(state.room_random(room.id).range(0, 2)));
+                w.player_set_spear_row(p, uint8_t(state.room_random(room.id).range(0, 4)));
             }
             if (prog < 0.1f) {
                 prog = mathf::lerp(prog, 0.11f, 0.1f);
             } else {
                 if (!w.player_get_spear_sound_ready(p)) {
                     w.player_set_spear_sound_ready(p, 1);
-                    state.play_sound(sound::sound_id::sm_spear_pull, room.id, w.body_chunk_get_pos(c0), 1.f, 1.f + state.random.value() * 0.5f);
+                    state.play_sound(sound::sound_id::sm_spear_pull, room.id, w.body_chunk_get_pos(c0), 1.f, 1.f + state.room_random(room.id).value() * 0.5f);
                 }
                 prog = mathf::lerp(prog, 1.f, 0.05f);
             }
             if (prog > 0.6f) {
                 auto& g = w.player_get_graphics(p);
-                g.head.vel += custom::deg_to_vec(state.random.value() * 360.f) * ((prog - 0.6f) / 0.4f) * 2.f;
+                g.head.vel += custom::deg_to_vec(state.room_random(room.id).value() * 360.f) * ((prog - 0.6f) / 0.4f) * 2.f;
             }
             if (prog > 0.95f)
                 prog = 1.f;
             if (prog < 1.f)
                 return;
-            state.play_sound(sound::sound_id::sm_spear_grab, room.id, w.body_chunk_get_pos(c0), 1.f, 0.5f + state.random.value() * 1.5f);
+            state.play_sound(sound::sound_id::sm_spear_grab, room.id, w.body_chunk_get_pos(c0), 1.f, 0.5f + state.room_random(room.id).value() * 1.5f);
             w.player_set_spear_sound_ready(p, 0);
             prog = 0.f;
             vec2 const p0 = w.body_chunk_get_pos(c0);
@@ -1513,17 +1530,24 @@ namespace items {
                 dir.x += 0.4f * float(w.player_get_flip_direction(p));
                 dir = rw::normalized(dir);
             }
-            auto const spear = create_spear(state, room.id, at);
-            auto const sc = chunk(state, spear);
-            physics::hard_set_position(state, sc, at);
-            w.body_chunk_set_vel(sc, rw::clamp_magnitude((dir * 2.f + custom::deg_to_vec(state.random.value() * 360.f) * state.random.value()) / w.body_chunk_get_mass(sc), 6.f));
-            w.item_set_needle(spear, 1);
-            for (uint32_t hand = 0; hand < 2; ++hand)
-                if (!grasp_in_hand(state, p, hand)) {
-                    grab(state, p, spear, hand);
-                    break;
-                }
+            vec2 const push = dir * 2.f + custom::deg_to_vec(state.room_random(room.id).value() * 360.f) * state.room_random(room.id).value();
             w.player_set_want_to_throw(p, 0);
+            // a new object: made after the rooms' update, straight into the free hand
+            state.defer(room.id, [p, at, push, rid = room.id](sys::game_state& s) {
+                auto& sw = s.world;
+                if (!sw.player_is_valid(p) || rooms::room_of(s, p) != rid)
+                    return;
+                auto const spear = create_spear(s, rid, at);
+                auto const sc = chunk(s, spear);
+                physics::hard_set_position(s, sc, at);
+                sw.body_chunk_set_vel(sc, rw::clamp_magnitude(push / sw.body_chunk_get_mass(sc), 6.f));
+                sw.item_set_needle(spear, 1);
+                for (uint32_t hand = 0; hand < 2; ++hand)
+                    if (!grasp_in_hand(s, p, hand)) {
+                        grab(s, p, spear, hand);
+                        break;
+                    }
+            });
         }
     }
 
@@ -1612,9 +1636,9 @@ namespace items {
                 if (auto const g = grasp_in_hand(state, p, hand)) {
                     want_pick = 0;
                     // Player.ReleaseObject
-                    state.play_sound(sound::sound_id::slugcat_lay_down_object, room.id, w.body_chunk_get_pos(chunk(state, w.grasp_get_grabbed(g))));
-                    w.item_set_forbidden_to_player(w.grasp_get_grabbed(g), 40);
-                    release_grasp(state, g);
+                    state.play_sound(sound::sound_id::slugcat_lay_down_object, room.id, w.body_chunk_get_pos(chunk(state, g.item)));
+                    w.item_set_forbidden_to_player(g.item, 40);
+                    release_grasp(state, p, g);
                     return;
                 }
         } else if (cicada_candidate) {

@@ -12,25 +12,26 @@
 //   exits/dens 2957 (8039 with Watcher) -> 16384
 //   room nodes 3393           -> 16384 (+ ~460k connectivity entries
 //     pooled, a few million with Watcher)
-//   players: co-op up to 4    -> 8
-//   palettes ~50 files        -> 128
-//   items (rocks): placed + random spawns persist in every visited room,
-//     ~3000 once all 760 rooms were visited, ~11000 with Watcher -> 32768
-//   physical objects / body chunks: players + items -> 32768 / 65536
-//   region gates ~20          -> 64
-//   music triggers ~80 (+MSC/Watcher) -> 512
-//   centipedes: a few per realised room -> 64 (17 chunks, 136 push
-//     connections each at most, within the chunk/connection bounds)
-//   dropbugs: a few per realised room -> 64 (3 chunks, 3 connections each)
-//   cicadas: a few per realised room, swarms in some -> 64 (2 chunks, 1
-//     connection each)
-//   lizards: a few per realised room, packs of yellows -> 128 (3 chunks, 3
-//     connections each); their spit in flight -> 256
-//   daddy long legs: one or two per realised room -> 32 (up to 15 chunks
-//     with a connection between every pair: 105, so 8192 connections in
-//     all), 12 tentacles each -> 512, 12 leg graphics and 14 dead legs and
-//     danglers each -> 1024 tubes; their segments, grab paths, tentacle
-//     chunks and graphic segments pooled
+//   players: co-op up to 4    -> 255 (the fuzz and the bench drive
+//     a slugcat in hundreds of rooms at once; creatures keep a player as
+//     its index + 1 in a byte)
+//   physical objects / body chunks: players + items + creatures ->
+//     65536 / 262144 (`--bench` puts one creature of each kind in every
+//     one of the 2074 Watcher rooms: ~40 chunks a room)
+//   Every room is simulated all the time, so the creature bounds are for the
+//   whole world, not the realised rooms; the bench's one of each per room
+//   needs ~2100 of each:
+//   centipedes -> 4096 (17 chunks, 136 push connections each at most)
+//   dropbugs -> 4096 (3 chunks, 3 connections each)
+//   cicadas -> 4096 (2 chunks, 1 connection each)
+//   lizards -> 4096 (3 chunks, 3 connections each); their spit in flight
+//     -> 4096
+//   daddy long legs -> 4096 (up to 15 chunks with a connection between
+//     every pair: 105), 12 tentacles each -> 65536, 12 leg graphics and
+//     14 dead legs and danglers each -> 65536 tubes (enough for ~2500);
+//     their segments, grab paths, tentacle chunks and graphic segments
+//     pooled
+//   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
@@ -156,6 +157,11 @@ object{
 	// bumped whenever tiles change at runtime (gate doors, spear beams):
 	// cached path fields of the room are rebuilt
 	property{ name{geometry_version} type{uint16_t} }
+	// UnityEngine.Random for the room's own rolls (item spawns, weapon
+	// spins, music trigger chances...): every room has its own, seeded from
+	// the world seed and its index, so rooms can tick in parallel and still
+	// roll the same numbers
+	property{ name{random} type{rw::rng} }
 }
 
 relationship{
@@ -290,7 +296,7 @@ object{
 	property{ name{fade_out} type{float} }
 	property{ name{rooms} type{int16_t} }
 	// ActiveTriggerChecker state
-	property{ name{fired} type{bitfield} }
+	property{ name{fired} type{uint8_t} }
 	property{ name{counter} type{int16_t} }
 }
 relationship{
@@ -458,7 +464,7 @@ relationship{
 object{
 	name{physical_object}
 	storage_type{erasable}
-	size{32768}
+	size{65536}
 	tag{save}
 	// PhysicalObject.gravity before the room gravity multiplier
 	property{ name{g} type{float} }
@@ -482,7 +488,7 @@ relationship{
 object{
 	name{body_chunk}
 	storage_type{erasable}
-	size{65536}
+	size{262144}
 	tag{save}
 	property{ name{pos} type{rw::vec2} }
 	property{ name{last_pos} type{rw::vec2} }
@@ -496,9 +502,9 @@ object{
 	property{ name{contact_point} type{rw::ivec2} }
 	property{ name{last_contact_point} type{rw::ivec2} }
 	property{ name{on_slope} type{int8_t} }
-	property{ name{collide_with_terrain} type{bitfield} }
-	property{ name{collide_with_slopes} type{bitfield} }
-	property{ name{go_through_floors} type{bitfield} }
+	property{ name{collide_with_terrain} type{uint8_t} }
+	property{ name{collide_with_slopes} type{uint8_t} }
+	property{ name{go_through_floors} type{uint8_t} }
 	// BodyChunk.index within its owner
 	property{ name{index} type{uint8_t} }
 }
@@ -514,7 +520,7 @@ relationship{
 relationship{
 	name{chunk_connection}
 	storage_type{erasable}
-	size{8192}
+	size{524288}
 	tag{save}
 	link{ object{body_chunk} name{chunk1} type{many} index_storage{array} }
 	link{ object{body_chunk} name{chunk2} type{many} index_storage{array} }
@@ -523,7 +529,7 @@ relationship{
 	property{ name{elasticity} type{float} }
 	property{ name{weight_symmetry} type{float} }
 	property{ name{type} type{physics::connection_type} }
-	property{ name{active} type{bitfield} }
+	property{ name{active} type{uint8_t} }
 }
 
 //
@@ -533,7 +539,7 @@ relationship{
 object{
 	name{player}
 	storage_type{erasable}
-	size{8}
+	size{255}
 	tag{save}
 	property{ name{stats} type{::player::slugcat_stats} }
 	property{ name{random} type{rw::rng} }
@@ -694,6 +700,12 @@ object{
 	property{ name{levitation_cooldown} type{float} }
 	// the warp pull zeroes the body's gravity (SetLocalGravity)
 	property{ name{warp_held} type{uint8_t} }
+	// Creature.grasps[0] and [1]: the items in its hands (plain properties
+	// rather than a relationship, so grabbing and letting go are writes to
+	// the player and the item that a room's update can do while every other
+	// room updates too)
+	property{ name{grasp0} type{item_id} }
+	property{ name{grasp1} type{item_id} }
 }
 // the physical body a player controls
 relationship{
@@ -702,17 +714,6 @@ relationship{
 	link{ object{player} name{player} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{player}
-}
-
-// Creature.Grasp of a player holding an item (grasps[hand])
-relationship{
-	name{grasp}
-	storage_type{erasable}
-	size{16}
-	tag{save}
-	link{ object{player} name{grabber} type{many} index_storage{array} }
-	link{ object{item} name{grabbed} type{unique} }
-	property{ name{hand} type{uint8_t} }
 }
 
 //
@@ -736,6 +737,9 @@ object{
 	property{ name{forbidden_to_player} type{int32_t} }
 	property{ name{override_exit_thrown_speed} type{float} }
 	property{ name{throw_mode_frames} type{int32_t} }
+	// Creature.Grasp on it: the player holding it and the hand
+	property{ name{grabbed_by} type{player_id} }
+	property{ name{grabbed_hand} type{uint8_t} }
 	// Weapon.thrownBy (invalid when not thrown by a player)
 	property{ name{thrown_by} type{player_id} }
 	property{ name{vibrate} type{int32_t} }
@@ -878,7 +882,7 @@ relationship{
 object{
 	name{centipede}
 	storage_type{erasable}
-	size{64}
+	size{4096}
 	tag{save}
 	property{ name{size} type{float} }
 	property{ name{random} type{rw::rng} }
@@ -935,7 +939,7 @@ relationship{
 object{
 	name{dropbug}
 	storage_type{erasable}
-	size{64}
+	size{4096}
 	tag{save}
 	property{ name{random} type{rw::rng} }
 	// AbstractCreature.personality.dominance
@@ -1015,7 +1019,7 @@ relationship{
 object{
 	name{cicada}
 	storage_type{erasable}
-	size{64}
+	size{4096}
 	tag{save}
 	property{ name{random} type{rw::rng} }
 	// Cicada.gender: CicadaA
@@ -1062,7 +1066,7 @@ object{
 	property{ name{idle_sit_counter} type{int32_t} }
 	property{ name{no_circle_group_counter} type{int32_t} }
 	// circleGroup: the leader's index + 1 (itself when it leads), 0 none
-	property{ name{circle_leader} type{uint8_t} }
+	property{ name{circle_leader} type{uint16_t} }
 	// order of joining, for the place in the circle
 	property{ name{circle_slot} type{uint32_t} }
 	property{ name{circle} type{::cicada::circle_group} }
@@ -1099,7 +1103,7 @@ relationship{
 object{
 	name{lizard}
 	storage_type{erasable}
-	size{128}
+	size{4096}
 	tag{save}
 	property{ name{breed} type{::lizard::breed} }
 	property{ name{random} type{rw::rng} }
@@ -1140,7 +1144,7 @@ relationship{
 object{
 	name{daddy}
 	storage_type{erasable}
-	size{32}
+	size{4096}
 	tag{save}
 	property{ name{variant} type{::daddy::variant} }
 	property{ name{random} type{rw::rng} }
@@ -1179,7 +1183,7 @@ relationship{
 object{
 	name{daddy_tentacle}
 	storage_type{erasable}
-	size{512}
+	size{65536}
 	tag{save}
 	property{ name{owner} type{uint16_t} }
 	property{ name{t} type{::daddy::tentacle} }
@@ -1193,7 +1197,7 @@ object{
 object{
 	name{daddy_tube}
 	storage_type{erasable}
-	size{1024}
+	size{65536}
 	tag{save}
 	property{ name{owner} type{uint16_t} }
 	property{ name{kind} type{::daddy::tube_kind} }
@@ -1215,7 +1219,7 @@ object{
 object{
 	name{lizard_spit}
 	storage_type{erasable}
-	size{256}
+	size{4096}
 	tag{save}
 	property{ name{room} type{uint32_t} }
 	property{ name{owner} type{uint32_t} }
@@ -1240,7 +1244,7 @@ object{
 	property{ name{cells} type{vector_pool{1048576}{world::rot_cell}} }
 	property{ name{random} type{rw::rng} }
 	// Garbage Wastes rot (no reacting to noise, black eyes on the tubes)
-	property{ name{gw_mode} type{bitfield} }
+	property{ name{gw_mode} type{uint8_t} }
 	property{ name{effect_color} type{rw::vec3} }
 	property{ name{eye_color} type{rw::vec3} }
 }
@@ -1268,11 +1272,11 @@ object{
 	property{ name{rad} type{float} }
 	property{ name{rotation} type{float} }
 	property{ name{eye_rad} type{float} }
-	property{ name{has_eye} type{bitfield} }
-	property{ name{has_black_goo} type{bitfield} }
-	property{ name{has_dot} type{bitfield} }
-	property{ name{body_in_midground} type{bitfield} }
-	property{ name{has_heard_sound} type{bitfield} }
+	property{ name{has_eye} type{uint8_t} }
+	property{ name{has_black_goo} type{uint8_t} }
+	property{ name{has_dot} type{uint8_t} }
+	property{ name{body_in_midground} type{uint8_t} }
+	property{ name{has_heard_sound} type{uint8_t} }
 	// the PassiveCorruption its CustomRotData comes from (invalid: none)
 	property{ name{custom} type{rot_placed_id} }
 	property{ name{focus} type{float} }
@@ -1378,14 +1382,14 @@ object{
 	property{ name{last_open} type{float} }
 	property{ name{fade} type{float} }
 	property{ name{last_fade} type{float} }
-	property{ name{open_triggered} type{bitfield} }
-	property{ name{closes_early} type{bitfield} }
+	property{ name{open_triggered} type{uint8_t} }
+	property{ name{closes_early} type{uint8_t} }
 	property{ name{cooldown_timer} type{float} }
 	property{ name{uses} type{int16_t} }
 	// the ripple hint rings of a warp on the other layer
 	property{ name{shockwave_timer} type{float} }
 	property{ name{shockwave_limit} type{float} }
-	property{ name{second_shockwave} type{bitfield} }
+	property{ name{second_shockwave} type{uint8_t} }
 	property{ name{triggered_by} type{player_id} }
 }
 relationship{

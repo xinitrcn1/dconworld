@@ -27,6 +27,9 @@ namespace dropbug_graphics {
 
     // the DropBugGraphics constructor (and GraphicsModule.Reset)
     void reset(sys::game_state& state, dcon::dropbug_id d);
+    // GraphicsModule.Reset when a camera looks at the creature's room again:
+    // the parts back to the body, the look (rolled at creation) kept
+    void reset_positions(sys::game_state& state, dcon::dropbug_id id);
     // DropBugGraphics.Update, once per tick after the dropbug's update
     void update(sys::game_state& state, dcon::dropbug_id d, world::room_view const& room);
     // DropBugGraphics.DrawSprites (+ ApplyPalette, RefreshColor); `alpha`

@@ -100,6 +100,20 @@ namespace dropbug_graphics {
             }
     }
 
+    void reset_positions(sys::game_state& state, dcon::dropbug_id d) {
+        auto& w = state.world;
+        auto const keep = w.dropbug_get_graphics(d);
+        reset(state, d);
+        auto& g = w.dropbug_get_graphics(d);
+        g.random = keep.random;
+        g.body_thickness = keep.body_thickness;
+        g.legs_thickness = keep.legs_thickness;
+        g.antennae_length = keep.antennae_length;
+        g.pinchers_length = keep.pinchers_length;
+        g.colored_antennae = keep.colored_antennae;
+        g.hue = keep.hue;
+    }
+
     void update(sys::game_state& state, dcon::dropbug_id d, room_view const& room) {
         auto& w = state.world;
         auto& g = w.dropbug_get_graphics(d);

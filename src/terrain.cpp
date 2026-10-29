@@ -14,7 +14,6 @@ namespace terrain {
     using sand_t = sys::game_state::sand_field;
 
     namespace {
-        constexpr uint32_t max_fields = 8;
         // sand holds slopes up to about 40 degrees
         constexpr float repose = 0.85f;
         // how fast bodies press into it, and how deep a mark gets next to its surroundings
@@ -25,10 +24,10 @@ namespace terrain {
         constexpr float storm_rate = 0.0007f;
 
         sand_t* find(sys::game_state& state, dcon::room_id room) {
-            for (auto& s : state.sands)
-                if (s.room == room)
-                    return &s;
-            return nullptr;
+            if (!state.has_runtime(room))
+                return nullptr;
+            auto& s = state.runtime(room).sand;
+            return s ? &*s : nullptr;
         }
 
         float bezier(float a, float b, float c, float d, float t) {
@@ -137,28 +136,22 @@ namespace terrain {
     }
 
     sand_t const* sand_if_built(sys::game_state const& state, dcon::room_id room) noexcept {
-        for (auto const& s : state.sands)
-            if (s.room == room)
-                return s.h.empty() ? nullptr : &s;
-        return nullptr;
+        if (!state.has_runtime(room))
+            return nullptr;
+        auto const& s = state.runtime(room).sand;
+        return s && !s->h.empty() ? &*s : nullptr;
     }
 
     sand_t const* sand(sys::game_state& state, dcon::room_id room) {
         if (sand_t* s = find(state, room); s != nullptr)
             return s->h.empty() ? nullptr : s;
-        auto& sands = state.sands;
-        sand_t* slot = nullptr;
-        if (sands.size() < max_fields)
-            slot = &sands.emplace_back();
-        else
-            slot = &*std::min_element(sands.begin(), sands.end(), [](auto const& a, auto const& b) { return a.last_used < b.last_used; });
-        if (!build(state, room, *slot)) {
+        auto& slot = state.runtime(room).sand.emplace();
+        if (!build(state, room, slot)) {
             // remembered as "no sand here"
-            *slot = sand_t{};
-            slot->room = room;
+            slot = sand_t{};
+            slot.room = room;
         }
-        slot->last_used = state.tick;
-        return slot->h.empty() ? nullptr : slot;
+        return slot.h.empty() ? nullptr : &slot;
     }
 
     float sand_height(sand_t const& s, float x) noexcept {
@@ -213,7 +206,6 @@ namespace terrain {
         // sand: slumping slopes and the storm's reshaping
         if (sand_t const* cs = sand(state, room.id); cs != nullptr) {
             sand_t& s = *find(state, room.id);
-            s.last_used = state.tick;
             float const max_step = repose * s.spacing;
             for (size_t i = 0; i + 1 < s.h.size(); ++i) {
                 float const d = s.h[i] - s.h[i + 1];
@@ -233,7 +225,7 @@ namespace terrain {
                     s.h[i] += (target - s.h[i]) * storm_rate;
                 }
                 // and blows sand through the air
-                auto& r = state.random;
+                auto& r = state.room_random(room.id);
                 for (int k = 0; k < 4; ++k) {
                     vec2 const at{r.value() * room.pixel_width(), r.value() * room.pixel_height()};
                     particles::spawn(state, room.id, particles::kind::dust, at, vec2{8.f + 6.f * r.value(), -0.5f + r.value()}, 2.f + 3.f * r.value(), 1.5f,
@@ -262,7 +254,7 @@ namespace terrain {
                         return;
                     if (last.y > top && vel.y < -3.f) {
                         for (int k = 0; k < 6; ++k)
-                            particles::spawn(state, room.id, particles::kind::drop, vec2{pos.x, top}, vec2{(state.random.value() - 0.5f) * 3.f, 1.f + 2.f * state.random.value()},
+                            particles::spawn(state, room.id, particles::kind::drop, vec2{pos.x, top}, vec2{(state.room_random(room.id).value() - 0.5f) * 3.f, 1.f + 2.f * state.room_random(room.id).value()},
                                 1.4f, 1.f, rw::vec3{0.32f, 0.22f, 0.13f}, 0.9f);
                     }
                     float const depth = mathf::clamp01((top - pos.y) / 30.f);

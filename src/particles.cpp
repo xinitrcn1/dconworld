@@ -6,6 +6,7 @@
 #include "terrain.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "rooms.hpp"
 
 namespace particles {
     using rw::vec2;
@@ -25,10 +26,10 @@ namespace particles {
         float range(rw::rng& r, float lo, float hi) { return lo + (hi - lo) * r.value(); }
 
         // the particles keep their own random numbers: cosmetic rolls must not
-        // change the gameplay's (item spawns, AI) between runs
-        rw::rng& random() {
-            static rw::rng r{0x51A5C0DEu};
-            return r;
+        // change the gameplay's (item spawns, AI) between runs. Every room
+        // has its own, rooms spawn them while updating in parallel
+        rw::rng& random(sys::game_state& state, dcon::room_id room) {
+            return state.runtime(room).cosmetic;
         }
 
         // where the water's front surface is at `x` (waves included)
@@ -39,7 +40,7 @@ namespace particles {
         }
 
         void dust(sys::game_state& state, dcon::room_id room, vec2 at, int count, float strength) {
-            auto& r = random();
+            auto& r = random(state, room);
             for (int i = 0; i < count; ++i) {
                 vec2 const v{range(r, -1.f, 1.f) * (1.f + strength), range(r, 0.f, 0.6f) * strength};
                 spawn(state, room, kind::dust, at + vec2{range(r, -6.f, 6.f), 0.f}, v, range(r, 3.f, 6.f), range(r, 0.35f, 0.7f), dust_color, 0.35f);
@@ -47,16 +48,20 @@ namespace particles {
         }
 
         void sparks(sys::game_state& state, dcon::room_id room, vec2 at, int count, float speed, vec3 color) {
-            auto& r = random();
+            auto& r = random(state, room);
             for (int i = 0; i < count; ++i)
                 spawn(state, room, kind::spark, at, rnv(r) * range(r, 0.3f, 1.f) * speed, range(r, 1.f, 2.f), range(r, 0.12f, 0.35f), color);
         }
     }
 
     void spawn(sys::game_state& state, dcon::room_id room, kind k, vec2 pos, vec2 vel, float size, float seconds, vec3 color, float alpha) {
+        // only where a camera looks
+        if (!state.viewed(room))
+            return;
         // the capacity is reserved once: update() spawns while it walks the vector
         state.particles.reserve(max_particles);
-        if (!room || state.particles.size() >= max_particles)
+        auto& out = state.parallel ? state.runtime(room).particles : state.particles;
+        if (out.size() >= max_particles)
             return;
         sys::game_state::particle p;
         p.room = room;
@@ -67,11 +72,13 @@ namespace particles {
         p.decay = 1.f / mathf::max(1.f, seconds * float(state.ticks_per_second));
         p.color = color;
         p.alpha = alpha;
-        state.particles.push_back(p);
+        out.push_back(p);
     }
 
     void splash(sys::game_state& state, dcon::room_id room, vec2 pos, float strength) {
-        auto& r = random();
+        if (!state.viewed(room))
+            return;
+        auto& r = random(state, room);
         int const n = int(mathf::min(strength * 2.5f, 28.f));
         for (int i = 0; i < n; ++i) {
             float const spread = range(r, -1.f, 1.f);
@@ -81,18 +88,22 @@ namespace particles {
     }
 
     void bubbles(sys::game_state& state, dcon::room_id room, vec2 pos, int count, float spread) {
-        auto& r = random();
+        if (!state.viewed(room))
+            return;
+        auto& r = random(state, room);
         for (int i = 0; i < count; ++i)
             spawn(state, room, kind::bubble, pos + rnv(r) * spread * r.value(), rnv(r) * 0.6f, range(r, 1.2f, 3.2f), range(r, 1.5f, 3.f), water_color, 0.8f);
     }
 
     void from_sounds(sys::game_state& state, size_t first_sound) {
-        auto& r = random();
         for (size_t i = first_sound; i < state.sounds.size(); ++i) {
             auto const& snd = state.sounds[i];
             if (snd.room == 0xFFFFFFFFu)
                 continue;
             dcon::room_id const room{dcon::room_id::value_base_t(snd.room)};
+            if (!state.viewed(room))
+                continue;
+            auto& r = random(state, room);
             vec2 const at = snd.pos;
             vec2 const feet = at - vec2{0.f, 14.f};
             switch (snd.id) {
@@ -148,7 +159,9 @@ namespace particles {
 
     void ambient(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
-        auto& r = random();
+        if (!state.viewed(room.id))
+            return;
+        auto& r = random(state, room.id);
         // RoomRain: streaks from the top of the room
         // (a storm over sand is a sandstorm, terrain.cpp blows that)
         float const rain = terrain::sand_if_built(state, room.id) ? 0.f : mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
@@ -177,8 +190,8 @@ namespace particles {
         }
         // Bubble: what a submerged slugcat breathes out (more when running out of air)
         if (room.water) {
-            w.for_each_player([&](dcon::player_id p) {
-                if (w.physical_object_get_room_from_object_location(player::body(state, p)) != room.id || w.player_get_in_shortcut(p) || w.player_get_eaten(p))
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
+                if (w.player_get_in_shortcut(p) || w.player_get_eaten(p))
                     return;
                 vec2 const head = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
                 if (!room.point_submerged(head + vec2{0.f, 8.f}))
@@ -193,7 +206,8 @@ namespace particles {
     void update(sys::game_state& state) {
         auto& ps = state.particles;
         ps.reserve(max_particles);
-        auto& r = random();
+        // a room no camera looks at any more lets its particles go
+        std::erase_if(ps, [&](auto const& p) { return !state.viewed(p.room); });
         // room views of the rooms in use
         dcon::room_id view_room;
         room_view view;
@@ -204,6 +218,7 @@ namespace particles {
                 view_room = p.room;
                 view = world::get_room_view(state, p.room);
             }
+            auto& r = random(state, p.room);
             p.last_pos = p.pos;
             p.life += p.decay;
             auto const k = kind(p.kind);

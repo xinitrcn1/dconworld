@@ -215,8 +215,8 @@ namespace outposts {
                         tiles.push_back(ivec2{j, k});
             std::vector<pending> spears;
             if (!tiles.empty())
-                for (int32_t l = state.random.range(12, 24); l >= 0; --l) {
-                    ivec2 const at = tiles[size_t(state.random.range(0, int32_t(tiles.size())))];
+                for (int32_t l = state.room_random(room).range(12, 24); l >= 0; --l) {
+                    ivec2 const at = tiles[size_t(state.room_random(room).range(0, int32_t(tiles.size())))];
                     spears.push_back(pending{world::item_type::spear, room_view::middle_of_tile(at)});
                 }
 
@@ -339,7 +339,7 @@ namespace outposts {
                 charged = 1.f;
             }
             std::vector<pending> loot;
-            auto& rng = state.random;
+            auto& rng = state.room_random(room);
             for (auto const tile : tiles) {
                 vec2 const at = room_view::middle_of_tile(tile);
                 if (!(rng.value() < mathf::inverse_lerp(rad, rad / 5.f, rw::distance(at, pos))))
@@ -373,7 +373,7 @@ namespace outposts {
         // Room.SpawnMultiplayerItem (story sessions)
         void spawn_multiplayer_item(sys::game_state& state, dcon::room_id room, dcon::placed_thing_id t) {
             auto& w = state.world;
-            if (state.random.value() > w.placed_thing_get_extra(t))
+            if (state.room_random(room).value() > w.placed_thing_get_extra(t))
                 return;
             std::string_view const kind = state.to_string_view(w.placed_thing_get_name(t));
             world::item_type type = world::item_type::rock;
@@ -462,7 +462,7 @@ namespace outposts {
                 // a pearl gone or held breaks its connections for good
                 for (uint32_t i = 0; i < n; ++i) {
                     auto const it = pearl_item(state, pearls.at(i));
-                    if (!it || items::grabber(state, it) || w.physical_object_get_room_from_object_location(items::body(state, it)) != room.id)
+                    if (!it || w.physical_object_get_room_from_object_location(items::body(state, it)) != room.id || items::grabber(state, it))
                         pearls.at(i).active = 0;
                 }
                 auto const pos = [&](uint32_t i) -> vec2& { return w.body_chunk_get_pos(items::chunk(state, pearl_item(state, pearls.at(i)))); };

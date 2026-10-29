@@ -154,11 +154,11 @@ namespace physics {
             void operator()(sys::game_state& state, dcon::body_chunk_id c, ivec2 dir, float speed, bool first) const {
                 // PhysicalObject.TerrainImpact: hard impacts are heard
                 float const mass = state.world.body_chunk_get_mass(c);
-                if (first && speed > 4.f && speed * mathf::lerp(mass, 1.f, 0.5f) > 0.5f && state.noises.size() < 64) {
+                if (first && speed > 4.f && speed * mathf::lerp(mass, 1.f, 0.5f) > 0.5f ){
                     auto const o = state.world.body_chunk_get_owner_from_chunk_ownership(c);
                     vec2 const at = state.world.body_chunk_get_pos(c) + rw::to_vec2(dir) * state.world.body_chunk_get_rad(c) * 0.9f;
                     float const strength = mathf::lerp(350.f, mathf::lerp(100.f, 1500.f, mathf::inverse_lerp(0.5f, 20.f, speed * mathf::lerp(mass, 1.f, 0.5f))), 0.5f);
-                    state.noises.push_back({state.world.physical_object_get_room_from_object_location(o), at, strength, o});
+                    state.add_noise(state.world.physical_object_get_room_from_object_location(o), at, strength, o);
                 }
                 if (fn != nullptr)
                     fn(user, state.world.body_chunk_get_owner_from_chunk_ownership(c), state.world.body_chunk_get_index(c), dir, speed, first);
