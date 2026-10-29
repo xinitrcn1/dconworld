@@ -6,23 +6,22 @@
 #include "body_parts.hpp"
 #include "lizard.hpp"
 #include "lizard_ai.hpp"
+#include "lizard_cosmetics.hpp"
 #include "player.hpp"
 
-// LizardGraphics. The cosmetics (LizardCosmetics, pass 2) hook in at three
-// places, marked "cosmetics:" below:
+// LizardGraphics. The cosmetics (LizardCosmetics, lizard_cosmetics.cpp) hook
+// in at three places, marked "cosmetics:" below:
 //   - reset: the constructor's AddCosmetic calls come between the
 //     blackSalamander roll and the blink/breath rolls (vanilla's random
-//     draws are in that order); each cosmetic's sprites start at
-//     startOfExtraSprites (SpriteTongueStart + 2 with a tongue) in the order
-//     they are added, and their Reset follows the head's
+//     draws are in that order), and Template.Reset where LizardGraphics.Reset
+//     calls it (after the limbs, before the head)
 //   - update: Template.Update for every cosmetic after the head light-up /
 //     camouflage bookkeeping and before whiteFlicker counts down
-//   - build: Template.DrawSprites after the body is drawn (and ApplyPalette
-//     with the colours here); their sprites go into the draw order by
-//     Template.spritesOverlap exactly where AddToContainer puts them:
-//     Behind first, BodySurface after the tail, BehindHead before the jaw,
-//     InFront after the eyes (HUD ones aside)
-// Their state belongs at the end of lizard::graphics_state.
+//   - build: Template.DrawSprites (and ApplyPalette) by
+//     Template.spritesOverlap exactly where AddToContainer puts them: Behind
+//     first, BodySurface after the tail, BehindHead before the jaw, InFront
+//     after the eyes, then HUD
+// Their state is lizard::graphics_state::cosmetics.
 
 namespace lizard_graphics {
     using rw::ivec2;
@@ -533,6 +532,7 @@ namespace lizard_graphics {
             h.vel = vec2{0.f, 0.f};
         }
         // cosmetics: Template.Reset
+        lizard_cosmetics::reset(state, l);
         reset_part(g.head, chunk_pos(state, l, 0));
         for (int32_t i = 0; i < p.tongue_segments && i < lizard::max_tongue; ++i)
             reset_part(g.tongue[i], chunk_pos(state, l, 0));
@@ -593,12 +593,15 @@ namespace lizard_graphics {
         // (no region here: the chance without one)
         g.black_salamander = rng.value() < 0.33333334f;
         // cosmetics: the constructor's AddCosmetic calls (and their random
-        // rolls) go here, before the blink and breath
+        // rolls), before the blink and breath
+        lizard_cosmetics::add_cosmetics(state, l);
         g.blink = rng.value();
         g.last_blink = g.blink;
         g.last_breath = g.breath;
         g.breath = rng.value();
-        g.tail_direction = custom::deg_to_vec(rng.value() * 360.f) * rng.value();
+        // C# draws left to right: the angle first, then the length
+        float const tail_angle = rng.value() * 360.f;
+        g.tail_direction = custom::deg_to_vec(tail_angle) * rng.value();
         g.override_head_graphic = -1;
         if (b == breed::caramel)
             g.override_head_graphic = rng.value() < 0.25f ? 3 : 4;
@@ -686,6 +689,7 @@ namespace lizard_graphics {
                 g.black_lizard_light_up_head *= 0.9f;
         }
         // cosmetics: Template.Update for each cosmetic
+        lizard_cosmetics::update(state, l, room);
         if (g.white_flicker > 0)
             --g.white_flicker;
 
@@ -702,8 +706,9 @@ namespace lizard_graphics {
             } else {
                 g.look_creature = false;
                 // LookAtNothing
+                float const look_angle = rng.value() * 360.f;
                 g.look_pos = g.draw_positions[0][0] + custom::dir_vec(g.draw_positions[1][0], g.draw_positions[0][0]) * 100.f
-                    + custom::deg_to_vec(rng.value() * 360.f) * 100.f * rng.value();
+                    + custom::deg_to_vec(look_angle) * 100.f * rng.value();
             }
         }
         if (z.anim == lizard::animation::prey_spotted || z.anim == lizard::animation::prey_re_spotted)
@@ -759,8 +764,10 @@ namespace lizard_graphics {
         g.last_breath = g.breath;
         if (!dead)
             g.breath += 0.0125f;
-        if (awake && rng.value() < 0.05f)
-            g.tail_direction = custom::deg_to_vec(rng.value() * 360.f) * rng.value();
+        if (awake && rng.value() < 0.05f) {
+            float const tail_angle = rng.value() * 360.f;
+            g.tail_direction = custom::deg_to_vec(tail_angle) * rng.value();
+        }
 
         // the legs
         float side = 0.f;
@@ -1180,7 +1187,9 @@ namespace lizard_graphics {
         // body mesh, the body circles, the tail, (cosmetics: BodySurface),
         // the odd legs, (cosmetics: BehindHead), the jaw, the lower teeth,
         // the tongue, (what it holds), the upper teeth, the head, the eyes,
-        // (cosmetics: InFront)
+        // (cosmetics: InFront, then HUD)
+        auto const cosmetics = [&](lizard::sprites_overlap o) { lizard_cosmetics::build(state, l, alpha, pal, o, heads[3], jitter, out); };
+        cosmetics(lizard::sprites_overlap::behind);
         auto const add_leg = [&](int32_t k) {
             if (!arm_visible[k])
                 return;
@@ -1213,8 +1222,10 @@ namespace lizard_graphics {
             else
                 sprites::long_mesh(out, tail_mesh, tail_verts, body_col);
         }
+        cosmetics(lizard::sprites_overlap::body_surface);
         for (int32_t k = 1; k < g.limb_count; k += 2)
             add_leg(k);
+        cosmetics(lizard::sprites_overlap::behind_head);
         sprites::add(out, heads[0]);
         sprites::add(out, heads[1]);
         if (tongue_verts > 0) {
@@ -1226,5 +1237,102 @@ namespace lizard_graphics {
         // (the Black lizard's eyes sprite is hidden)
         if (b != breed::black)
             sprites::add(out, heads[4]);
+        cosmetics(lizard::sprites_overlap::in_front);
+        cosmetics(lizard::sprites_overlap::hud);
+    }
+
+    namespace shared {
+        spine_frame make_spine_frame(sys::game_state const& state, dcon::lizard_id l, float alpha) {
+            auto const& g = state.world.lizard_get_graphics(l);
+            auto const& p = lizard::params_of(state, l);
+            spine_frame fr;
+            for (int32_t i = 0; i < 4; ++i)
+                fr.body[i] = body_position(g, i, alpha);
+            for (uint32_t i = 1; i < 3; ++i)
+                fr.body_rad[i] = display_rad(state, l, i);
+            fr.head = rw::lerp(g.head.last_pos, g.head.pos, alpha);
+            fr.head_rad = g.head.rad;
+            fr.fatness = g.ivars.fatness;
+            fr.tail_fatness = g.ivars.tail_fatness;
+            fr.tail_count = std::max(2, std::min(p.tail_segments, lizard::max_tail));
+            for (int32_t i = 0; i < fr.tail_count; ++i) {
+                fr.tail[i] = rw::lerp(g.tail[i].bp.last_pos, g.tail[i].bp.pos, alpha);
+                fr.tail_rad[i] = g.tail[i].bp.rad * g.tail[i].bp.stretched;
+            }
+            fr.tail_end_dir = rw::normalized(g.tail[fr.tail_count - 1].bp.pos - g.tail[fr.tail_count - 2].bp.pos);
+            fr.depth_rotation = mathf::lerp(g.last_depth_rotation, g.depth_rotation, alpha);
+            fr.log2_depth = fr.depth_rotation != 0.f ? std::log2(std::fabs(fr.depth_rotation)) : 0.f;
+            fr.tail_length = g.tail_length;
+            fr.body_length = 2.f * 17.f * p.body_length_fac * ((p.body_size_fac + 1.f) / 2.f);
+            return fr;
+        }
+
+        spine_data spine_position(spine_frame const& fr, float s) {
+            int32_t const tn = fr.tail_count;
+            float const num = fr.body_length;
+            vec2 v, a2, v2;
+            float a, b, t;
+            if (s < num / (num + fr.tail_length)) {
+                float const num2 = mathf::inverse_lerp(0.f, num / (num + fr.tail_length), s);
+                int32_t const num3 = int32_t(std::floor(num2 * 4.f - 1.f));
+                int32_t const num4 = std::min(int32_t(std::floor(num2 * 4.f)), 3);
+                if (num3 < 0) {
+                    v = rw::lerp(fr.body[0], fr.head, 0.5f);
+                    a = fr.head_rad;
+                } else {
+                    v = fr.body[num3];
+                    a = fr.body_rad[num3 < 2 ? 1 : 2] * fr.fatness;
+                }
+                a2 = num4 + 1 < 4 ? fr.body[num4 + 1] : fr.tail[0];
+                v2 = fr.body[num4];
+                b = fr.body_rad[num4 < 2 ? 1 : 2];
+                t = mathf::inverse_lerp(float(num3 + 1), float(num4 + 1), num2 * 4.f);
+            } else {
+                float const num5 = mathf::inverse_lerp(num / (num + fr.tail_length), 1.f, s);
+                int32_t const num6 = int32_t(std::floor(num5 * float(tn) - 1.f));
+                int32_t const num7 = std::min(int32_t(std::floor(num5 * float(tn))), tn - 1);
+                if (num6 < 0) {
+                    v = fr.body[3];
+                    a = fr.body_rad[2] * fr.fatness;
+                } else {
+                    v = fr.tail[num6];
+                    a = fr.tail_rad[num6] * fr.fatness * fr.tail_fatness;
+                }
+                a2 = fr.tail[std::min(num7 + 1, tn - 1)];
+                v2 = fr.tail[num7];
+                b = fr.tail_rad[num7];
+                t = mathf::inverse_lerp(float(num6 + 1), float(num7 + 1), num5 * float(tn));
+            }
+            vec2 n = rw::normalized(rw::lerp(v2 - v, a2 - v2, t));
+            if (n.x == 0.f && n.y == 0.f)
+                n = fr.tail_end_dir;
+            vec2 const perp = custom::perpendicular_vector(n);
+            float const rad = mathf::lerp(a, b, t);
+            // |depth| ^ Lerp(1.2, 0.3, s ^ 0.5), signed
+            float depth = fr.depth_rotation;
+            if (depth != 0.f)
+                depth = std::exp2(fr.log2_depth * mathf::lerp(1.2f, 0.3f, std::sqrt(s))) * mathf::sign(depth);
+            vec2 const pos = rw::lerp(v, v2, t);
+            return spine_data{s, pos, pos + perp * depth * rad, n, perp, depth, rad};
+        }
+
+        float body_and_tail_length(lizard::graphics_state const& g) {
+            return g.body_length + g.tail_length;
+        }
+        vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal) {
+            return head_color_impl(state, l, alpha, pal);
+        }
+        vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal) {
+            return body_color_impl(state, l, f, pal);
+        }
+        vec3 dynamic_body_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
+            return lizard_graphics::dynamic_body_color(state, l, pal);
+        }
+        vec3 effect_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
+            return lizard_graphics::effect_color(state, l, pal);
+        }
+        vec3 white_camo_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal) {
+            return lizard_graphics::white_camo_color(state.world.lizard_get_graphics(l), pal);
+        }
     }
 }

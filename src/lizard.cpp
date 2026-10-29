@@ -1968,7 +1968,8 @@ namespace lizard {
                 x.vel(0) += custom::dir_vec(x.pos(0), x.pos(1) + z.lounge_dir * 10.f);
                 x.g.head.pos = rw::lerp(x.g.head.pos, x.pos(0) + z.lounge_dir * 20.f, 0.25f);
                 x.g.head.vel = z.lounge_dir * 20.f;
-                for (int32_t i = 0; i < x.g.limb_count; ++i) {
+                // (limbs[0..3] only: the middle pair keeps stepping)
+                for (int32_t i = 0; i < 4; ++i) {
                     float const ahead = i < 2 ? 10.f : 20.f;
                     x.g.limbs[i].h.mode = player::limb_mode::hunt_absolute_position;
                     x.g.limbs[i].h.absolute_hunt_pos = vec2{x.pos(2).x + z.lounge_dir.x * ahead, x.pos(2).y - 15.f};

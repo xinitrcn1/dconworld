@@ -79,6 +79,7 @@ add_executable(rwcpp
     src/lizard_ai.cpp
     src/lizard_breeds.cpp
     src/lizard_graphics.cpp
+    src/lizard_cosmetics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

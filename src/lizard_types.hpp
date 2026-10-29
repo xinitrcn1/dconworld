@@ -459,8 +459,166 @@ namespace lizard {
         bool terrain_contact = false;
     };
 
-    // LizardGraphics. Cosmetics (pass 2): LizardGraphics.cosmetics and their
-    // own state belong at the end of this struct, after `random`
+    // LizardCosmetics: the Template subclasses LizardGraphics' constructor
+    // adds (Watcher's skink, basilisk, blizzard and peach ones among them)
+    enum class cosmetic_type : uint8_t {
+        none,
+        spine_spikes,
+        bump_hawk,
+        long_shoulder_scales,
+        short_body_scales,
+        tail_tuft,
+        long_head_scales,
+        axolotl_gills,
+        tail_fin,
+        tail_gecko_scales,
+        whiskers,
+        antennae,
+        jump_rings,
+        wing_scales,
+        body_stripes,
+        snow_accumulation,
+        skink_stripes,
+        skink_speckles,
+        basilisk_slow_field,
+        blizzard_halo_shine,
+        blizzard_beam,
+        blizzard_steam,
+        peach_head_stripes,
+        peach_back_fin,
+    };
+    // Template.SpritesOverlap: where AddToContainer puts its sprites
+    enum class sprites_overlap : uint8_t {
+        behind,
+        body_surface,
+        behind_head,
+        in_front,
+        hud,
+    };
+
+    // the most cosmetics one lizard gets (the Blizzard's up to 35), and the
+    // pools of BodyScales.scalesPositions and of the LongBodyScales'
+    // LizardScales they share (the most seen in 200 rolls of each breed: 301
+    // positions on a Basilisk, 164 scales on a Train lizard)
+    inline constexpr int32_t max_cosmetics = 36;
+    inline constexpr int32_t max_scale_positions = 448;
+    inline constexpr int32_t max_long_scales = 256;
+
+    // LizardScale: a scale's tip, pulled after its root on the back
+    struct lizard_scale {
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+        float length = 0.f;
+        float width = 0.f;
+        float backwards_factor = 0.f; // LongBodyScales.backwardsFactors
+    };
+
+    // one Template: its type and the fields of whichever subclass it is
+    struct cosmetic {
+        cosmetic_type type = cosmetic_type::none;
+        sprites_overlap overlap = sprites_overlap::behind;
+        int8_t graphic = 0; // the LizardScaleA/B element
+        int8_t colored = 0; // SpineSpikes' 0..2, a bool elsewhere
+        bool flag = false; // TailGeckoScales.bigScales, BumpHawk.coloredHawk
+        int16_t first = 0; // its scalesPositions in cosmetics_state::positions
+        int16_t first_scale = 0; // a LongBodyScales' LizardScales in cosmetics_state::scales
+        int16_t count = 0; // scalesPositions.Length, bumps, rows, segs
+        int16_t lines = 0; // TailGeckoScales.lines
+        float spine_length = 0.f;
+        float size_range_min = 0.f;
+        float size_range_max = 0.f;
+        float size_skew_exponent = 0.f;
+        float scale_x = 0.f;
+        float underside_size = 0.f; // TailFin
+        float rigor = 0.f; // LongBodyScales
+        float graphic_height = 1.f; // LongBodyScales (sourcePixelSize.y)
+    };
+
+    // Whiskers (Black)
+    struct whiskers_state {
+        static constexpr int32_t max_amount = 4;
+        int32_t amount = 0;
+        player::body_part whiskers[2][max_amount];
+        rw::vec2 directions[max_amount];
+        float props[max_amount][5] = {};
+        float light_up[max_amount][2][2] = {};
+    };
+    // Antennae (Yellow)
+    struct antennae_state {
+        static constexpr int32_t max_segments = 8;
+        int32_t segments = 0;
+        float length = 0.f;
+        float alpha = 0.f;
+        rw::vec3 redder_tint{0.f, 0.f, 0.f};
+        player::body_part antennae[2][max_segments];
+    };
+    // WingScales (Cyan, Zoop)
+    struct wing_scales_state {
+        int32_t per_side = 0; // scales.GetLength(1)
+        int32_t graphic = 0;
+        float graphic_length = 1.f;
+        float sturdy = 0.f;
+        float pos_squeeze = 0.f;
+        float scale_length = 0.f;
+        float front_dir = 0.f;
+        float back_dir = 0.f;
+        float air_friction = 1.f; // the GenericBodyParts'
+        player::body_part scales[2][3];
+    };
+    // SnowAccumulation (Zoop)
+    struct snow_state {
+        static constexpr int32_t n = 16;
+        uint8_t debris_name[n] = {}; // into the five debris elements
+        float debris_rotate[n] = {};
+        float debris_spine_pos[n] = {};
+        float debris_alphas[n] = {};
+        int32_t debris_revealed = 0;
+        int32_t debris_reveal_counter = 0;
+    };
+    // SkinkSpeckles (Indigo, Basilisk)
+    struct speckles_state {
+        static constexpr int32_t max_spots = 50;
+        int32_t spots = 0;
+        rw::vec3 spot_info[max_spots];
+    };
+    // the Watcher's head and HUD ones: PeachHeadStripes, BasiliskSlowField,
+    // BlizzardHaloShine, BlizzardBeam, BlizzardSteam
+    struct watcher_cosmetics_state {
+        float stripes_alpha = 0.f;
+        rw::vec3 stripes_redder_tint{0.f, 0.f, 0.f};
+        float field_intensity = 0.f;
+        float field_last_intensity = 0.f;
+        rw::vec2 field_smoothed_vel{0.f, 0.f};
+        float field_sin_counter = 0.f;
+        float halo_heat = 0.f;
+        int32_t halo_heat_wiwble = 0;
+        rw::vec2 beam_hit_pos{0.f, 0.f};
+        rw::vec2 beam_last_hit_pos{0.f, 0.f};
+        float beam_size = 0.f;
+        float beam_last_size = 0.f;
+        int32_t beam_time = 0;
+        float steam_heaters_heat[3] = {};
+    };
+
+    // LizardGraphics.cosmetics and their own state
+    struct cosmetics_state {
+        int32_t count = 0;
+        cosmetic list[max_cosmetics];
+        // BodyScales.scalesPositions: x across the back, y along the body
+        int32_t position_count = 0;
+        rw::vec2 positions[max_scale_positions];
+        int32_t scale_count = 0;
+        lizard_scale scales[max_long_scales];
+        whiskers_state whiskers;
+        antennae_state antennae;
+        wing_scales_state wings;
+        snow_state snow;
+        speckles_state speckles;
+        watcher_cosmetics_state watcher;
+    };
+
+    // LizardGraphics
     struct graphics_state {
         int32_t limb_count = 4;
         limb limbs[max_limbs];
@@ -520,6 +678,7 @@ namespace lizard {
         individual_variations ivars;
         // UnityEngine.Random as the graphics module uses it
         rw::rng random;
+        cosmetics_state cosmetics;
     };
 
     // LizardState.limbHealth

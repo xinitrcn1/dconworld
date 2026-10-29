@@ -10,13 +10,14 @@
 // LizardJaw/LowerTeeth/UpperTeeth/Head/Eyes heads in four angles, the
 // tongue) in vanilla sprite order (AddToContainer).
 //
-// The LizardCosmetics (pass 2) are not drawn yet: see the hooks in
-// lizard_graphics.cpp (the constructor's AddCosmetic calls, Update and the
+// The LizardCosmetics are lizard_cosmetics.cpp's, hooked in where vanilla
+// calls them (the constructor's AddCosmetic calls, Reset, Update and the
 // AddToContainer order).
 
 #include <vector>
 
 #include "gamestate.hpp"
+#include "lizard_types.hpp"
 #include "math.hpp"
 #include "sprites.hpp"
 #include "world.hpp"
@@ -50,4 +51,49 @@ namespace lizard_graphics {
     void creature_spotted(sys::game_state& state, dcon::lizard_id l, bool first_spot, dcon::player_id p);
     // LizardGraphics.HeadRotation
     float head_rotation(sys::game_state const& state, dcon::lizard_id l, float alpha);
+
+    // What the LizardCosmetics (lizard_cosmetics.cpp) use of LizardGraphics.
+    // `pal` is the lizard's own palette here (ApplyPalette's, which the
+    // cosmetics get, with the Blizzard's and Indigo's own blackColor)
+    namespace shared {
+        // LizardGraphics.LizardSpineData
+        struct spine_data {
+            float f = 0.f;
+            rw::vec2 pos{0.f, 0.f};
+            rw::vec2 outer_pos{0.f, 0.f};
+            rw::vec2 dir{0.f, 0.f};
+            rw::vec2 perp{0.f, 0.f};
+            float depth_rotation = 0.f;
+            float rad = 0.f;
+        };
+        // what SpinePosition reads off the lizard at one time stacker (the
+        // body positions, radii and tail), gathered once for many calls
+        struct spine_frame {
+            rw::vec2 body[4];
+            float body_rad[3] = {};
+            rw::vec2 head{0.f, 0.f};
+            float head_rad = 0.f;
+            float fatness = 1.f;
+            float tail_fatness = 1.f;
+            int32_t tail_count = 0;
+            rw::vec2 tail[lizard::max_tail];
+            float tail_rad[lizard::max_tail] = {}; // StretchedRad
+            rw::vec2 tail_end_dir{0.f, 0.f}; // the last segment's (uninterpolated) direction
+            float depth_rotation = 0.f;
+            float log2_depth = 0.f; // log2 |depth_rotation|, for its per call power
+            float tail_length = 0.f;
+            float body_length = 0.f; // bodyChunkConnections[0].distance + [1].distance
+        };
+        spine_frame make_spine_frame(sys::game_state const& state, dcon::lizard_id l, float alpha);
+        // LizardGraphics.SpinePosition: `s` along the body and tail (0..1)
+        spine_data spine_position(spine_frame const& fr, float s);
+        // LizardGraphics.BodyAndTailLength
+        float body_and_tail_length(lizard::graphics_state const& g);
+        // HeadColor, BodyColor, DynamicBodyColor, effectColor, whiteCamoColor
+        rw::vec3 head_color(sys::game_state const& state, dcon::lizard_id l, float alpha, palette const& pal);
+        rw::vec3 body_color(sys::game_state const& state, dcon::lizard_id l, float f, palette const& pal);
+        rw::vec3 dynamic_body_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
+        rw::vec3 effect_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
+        rw::vec3 white_camo_color(sys::game_state const& state, dcon::lizard_id l, palette const& pal);
+    }
 }
