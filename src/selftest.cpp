@@ -14,6 +14,8 @@
 #include "player.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
+#include "particles.hpp"
+#include "water.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
 
@@ -696,6 +698,59 @@ namespace selftest {
             r.check("ripple warp needs the ripple layer", blocked && layer && through, s.describe() + d);
             s.until(800, [&] { return !gs.warp.active; });
             gs.ripple_level = 1.f;
+        }
+        {
+            // a rock dropped into water: the surface dips and rings outwards,
+            // droplets fly, bubbles follow it down; the waves settle again
+            auto const pool = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }), 8);
+            sim s(gs, pool, feet_at(3, 12));
+            gs.particles.clear();
+            s.run(20);
+            auto const* surf = water::surface(gs, pool);
+            auto const rock = items::create_rock(gs, pool, vec2{400.f, 340.f});
+            gs.world.body_chunk_set_vel(items::chunk(gs, rock), vec2{0.f, -12.f});
+            float dip = 0.f, far_wave = 0.f;
+            size_t drops = 0, bubbles = 0;
+            for (int i = 0; i < 60; ++i) {
+                s.step();
+                surf = water::surface(gs, pool);
+                if (surf == nullptr)
+                    break;
+                dip = std::min(dip, water::height(gs, *surf, 400.f, 0.f, 1.f) - water::height(gs, *surf, 700.f, 0.f, 1.f));
+                for (auto const& p : gs.particles) {
+                    drops += p.kind == uint8_t(particles::kind::drop) ? 1 : 0;
+                    bubbles += p.kind == uint8_t(particles::kind::bubble) ? 1 : 0;
+                }
+            }
+            // the ripple reaches further out later
+            for (int i = 0; i < 40 && surf; ++i) {
+                s.step();
+                far_wave = std::max(far_wave, std::fabs(water::height(gs, *surf, 520.f, 0.f, 1.f) - water::height(gs, *surf, 520.f, 0.f, 0.f)));
+            }
+            s.run(1500);
+            float calm = 0.f;
+            for (uint32_t i = 0; surf && i < surf->h.size(); ++i)
+                calm = std::max(calm, std::fabs(surf->h[i]));
+            char d[128];
+            std::snprintf(d, sizeof(d), " surface=%d dip=%.1f moving_out=%.2f drops=%zu bubbles=%zu settled=%.2f", int(surf != nullptr), dip, far_wave, drops, bubbles, calm);
+            r.check("water splash and ripples", surf && dip < -2.f && far_wave > 0.05f && drops > 0 && bubbles > 0 && calm < 1.f, s.describe() + d);
+            items::destroy(gs, rock);
+        }
+        {
+            // a rock thrown at a wall throws sparks
+            sim s(gs, flat, feet_at(10, 1));
+            gs.particles.clear();
+            auto const rock = items::create_rock(gs, flat, feet_at(35, 3));
+            gs.world.body_chunk_set_vel(items::chunk(gs, rock), vec2{20.f, 0.f});
+            gs.world.item_set_mode(rock, world::weapon_mode::thrown);
+            size_t sparks = 0;
+            for (int i = 0; i < 20; ++i) {
+                s.step();
+                for (auto const& p : gs.particles)
+                    sparks += p.kind == uint8_t(particles::kind::spark) ? 1 : 0;
+            }
+            r.check("hits throw sparks", sparks > 0, s.describe() + " sparks=" + std::to_string(sparks));
+            items::destroy(gs, rock);
         }
         {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16

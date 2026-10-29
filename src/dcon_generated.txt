@@ -27,6 +27,7 @@
 //     6584 bulbs (806 in the worst room), 618 tubes -> 65536 / 16384;
 //     Watcher: 159 rooms, 37647 bulbs, 2199 tubes, 220k rot grid cells
 //   shortcut path tiles pooled (~6266 paths)
+//   decals: 6152 CustomDecals (vanilla + Watcher) -> 16384
 //   warp points: 85 Watcher rooms have one or two -> 1024, as many targets
 //
 // Tags: `scenario` = static world data loaded from the game files,
@@ -352,11 +353,41 @@ relationship{
 	primary_key{target}
 }
 
+// CustomDecal placed objects: an image from decals/ stretched over a quad
+// (pos and pos + handle 0..2), drawn on the level pixels whose depth lies in
+// from_depth..to_depth (0..1 of the 30 depths); uv_* are the image
+// coordinates of the quad's corners, `noise` jitters them
+object{
+	name{decal_placed}
+	storage_type{contiguous}
+	size{16384}
+	tag{scenario}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{handle_a} type{rw::vec2} }
+	property{ name{handle_b} type{rw::vec2} }
+	property{ name{handle_c} type{rw::vec2} }
+	property{ name{from_depth} type{float} }
+	property{ name{to_depth} type{float} }
+	property{ name{noise} type{float} }
+	property{ name{image} type{text_key} }
+	property{ name{uv_a} type{rw::vec2} }
+	property{ name{uv_b} type{rw::vec2} }
+	property{ name{uv_c} type{rw::vec2} }
+	property{ name{uv_d} type{rw::vec2} }
+}
+relationship{
+	name{decal_location}
+	tag{scenario}
+	link{ object{decal_placed} name{decal} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{decal}
+}
+
 // AbstractRoomNode as serialised on the connectivity line of the room file
 object{
 	name{room_node}
 	storage_type{contiguous}
-	size{16384}
+	size{32767}
 	tag{scenario}
 	property{ name{type} type{uint16_t} }
 	property{ name{shortcut_length} type{uint16_t} }

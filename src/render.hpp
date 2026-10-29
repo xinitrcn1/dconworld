@@ -81,6 +81,13 @@ namespace render {
         uint32_t warp_tear_program = 0;
         uint32_t warp_screen_program = 0;
         uint32_t scene_texture = 0;
+        // decals (decals/<name>.png, loaded on first use) and the water body
+        uint32_t decal_program = 0;
+        uint32_t water_program = 0;
+        struct decal_texture {
+            uint32_t texture = 0; // 0: missing
+        };
+        std::unordered_map<std::string, decal_texture> decal_textures;
         int scene_width = 0;
         int scene_height = 0;
         uint32_t vao = 0;

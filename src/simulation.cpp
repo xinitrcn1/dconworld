@@ -8,6 +8,8 @@
 #include "player_graphics.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
+#include "particles.hpp"
+#include "water.hpp"
 #include "shortcuts.hpp"
 #include "world.hpp"
 
@@ -82,6 +84,8 @@ namespace simulation {
     }
 
     void tick(sys::game_state& state, std::span<dcon::player_id const> players, std::span<::player::input_package const> inputs) {
+        // the sounds played from here on spawn their particles at the end
+        size_t const first_sound = state.sounds.size();
         for (size_t i = 0; i < players.size(); ++i) {
             auto const p = players[i];
             if (state.world.player_get_in_shortcut(p)) {
@@ -118,9 +122,13 @@ namespace simulation {
             items::update_room(state, view);
             rot::update_room(state, view);
             warps::update_room(state, view);
+            water::update_room(state, view);
+            particles::ambient(state, view);
             gates::update_room(state, room);
         }
         warps::update_sequence(state);
+        particles::from_sounds(state, first_sound);
+        particles::update(state);
         warps::update_ripple_rings(state);
         // noises are heard the tick they happen
         state.noises.clear();

@@ -602,6 +602,7 @@ int main(int argc, char* argv[]) {
                         audio::force_song(*sound, gs, w.room_get_region_from_region_membership(a.room));
                     break;
                 case SDLK_N: step_once = true; break;
+                case SDLK_F6: gs.storm = !gs.storm; break;
                 case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
                     // the Watcher's ripple level in half steps, any other slugcat's karma
                     int32_t const d = e.key.key == SDLK_RIGHTBRACKET ? 1 : -1;

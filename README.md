@@ -46,7 +46,7 @@ step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
 Rivulet, Spearmaster, Saint, Sofanthiel, Watcher (0 again toggles the
 Watcher's Void Weaver decorations), E holds the Watcher's ability
 (camouflage, levitation; gamepad north button), `[`/`]` lower/raise the
-Watcher's ripple level (any other slugcat's karma), M plays a song of the
+Watcher's ripple level (any other slugcat's karma), F6 toggles a rain storm, M plays a song of the
 region (again for another one; the game itself has long silent stretches),
 Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
 pick up with a free hand; Hunter stows a held spear on its back (or takes it
@@ -86,6 +86,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
+| `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
+| `src/particles.*` | cosmetic particles: rain, ceiling drips, splash droplets, hit sparks and flashes, landing dust, bubbles |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
@@ -200,6 +202,34 @@ meter, or for the Watcher a ripple meter with the camouflage charge. Not
 ported: warp sounds, the Void Weaver sealing, warp fatigue, bad warps,
 player made dynamic warps, ripple spawn and the ripple layer's other effects.
 
+### Decals, particles and water
+
+CustomDecals (`decals/<name>.png`) are stretched over their quads as grid
+meshes and painted onto the level only where its depth lies within the
+decal's range, split between the passes behind and in front of the sprites
+like the level (`assets/shaders/decal.*`). The decals' per corner values are
+not used yet.
+
+Particles are cosmetic and kept outside the data container: rain streaks
+(rooms' RainIntensity, or everywhere during an F6 storm) that burst on
+terrain and ripple water, drops forming under ceilings (CeilingDrips),
+splash droplets, sparks and flashes where weapons hit walls and creatures
+and where centipedes shock, dust where the slugcat lands hard or pushes off,
+and bubbles from swimmers (more when out of breath) and from anything
+plunging in. Hits and landings come from the sounds played that tick.
+
+The water is our own instead of vanilla's: the surface is a height field
+over x and six rows of depth with a damped wave equation, so splashes and
+wakes spread, interfere and bounce off the walls cutting through the surface,
+with three swells of different lengths and directions (from the room's wave
+settings) crossing over it. It is drawn smooth (Catmull-Rom between nodes) as
+a 3D band going back from the front edge, shaded by the slopes with the
+palette's surface and shine colours, over a body that refracts and tints the
+scene behind it, with caustics near the top (`assets/shaders/water.frag`).
+Bodies entering or leaving the water push the surface and splash; moving
+along it leaves a wake. It is cosmetic: creatures still float on the flat
+water level.
+
 ### Audio
 
 The game's loose sound and music files are empty placeholders; the real ones
@@ -263,8 +293,8 @@ torso, Spearmaster's thin body and tail speckles (eyes shut while pulling a
 needle), Artificer's mushroom scar, Rivulet's axolotl gills (sprites from the
 DressMySlugcat extras sheet), and the decorated Watcher: longer tail, gold
 feathers, gold eyes and a halo.
-The grime noise drifts very slowly. Not done yet: arms/hands, skyboxes and
-other room effects, vanilla water, `RegionGateGraphics`.
+The grime noise drifts very slowly. Not done yet: skyboxes and other room
+effects, `RegionGateGraphics`.
 
 ## License
 

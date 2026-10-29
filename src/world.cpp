@@ -161,6 +161,16 @@ namespace world {
             bool dead_end = false;
             bool bad_warp = false;
         };
+        struct parsed_decal {
+            rw::vec2 pos{0.f, 0.f};
+            rw::vec2 handles[3];
+            float from_depth = 0.f;
+            float to_depth = 1.f;
+            float noise = 0.f;
+            std::string image;
+            // CustomDecalData.vertices: image coordinates of the corners
+            rw::vec2 uv[4] = {{0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}};
+        };
         struct parsed_shortcut {
             rw::ivec2 start;
             rw::ivec2 dest;
@@ -202,6 +212,7 @@ namespace world {
             std::vector<parsed_rot> rot;
             std::vector<parsed_warp> warps;
             std::vector<parsed_warp_target> warp_targets;
+            std::vector<parsed_decal> decals;
 
             room_view view() const noexcept {
                 room_view v;
@@ -675,6 +686,22 @@ namespace world {
                 dc.warp_placed_set_seed(wid, o.seed);
                 dc.try_create_warp_placed_location(wid, rid);
             }
+            for (auto const& o : r.decals) {
+                auto const did = dc.create_decal_placed();
+                dc.decal_placed_set_pos(did, o.pos);
+                dc.decal_placed_set_handle_a(did, o.handles[0]);
+                dc.decal_placed_set_handle_b(did, o.handles[1]);
+                dc.decal_placed_set_handle_c(did, o.handles[2]);
+                dc.decal_placed_set_from_depth(did, o.from_depth);
+                dc.decal_placed_set_to_depth(did, o.to_depth);
+                dc.decal_placed_set_noise(did, o.noise);
+                dc.decal_placed_set_image(did, s.add_text(o.image));
+                dc.decal_placed_set_uv_a(did, o.uv[0]);
+                dc.decal_placed_set_uv_b(did, o.uv[1]);
+                dc.decal_placed_set_uv_c(did, o.uv[2]);
+                dc.decal_placed_set_uv_d(did, o.uv[3]);
+                dc.try_create_decal_location(did, rid);
+            }
             for (auto const& o : r.warp_targets) {
                 auto const tid = dc.create_warp_target();
                 dc.warp_target_set_pos(tid, o.pos);
@@ -1045,6 +1072,25 @@ namespace world {
                     if (w.one_way && !identified)
                         w.one_way_entrance = true;
                     r.warps.push_back(std::move(w));
+                    continue;
+                }
+                if (parts[0] == "CustomDecal") {
+                    // QuadObjectData handles, then CustomDecalData.FromString
+                    auto const d = split(parts[3], "~");
+                    if (d.size() < 12)
+                        continue;
+                    parsed_decal dc;
+                    dc.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                    for (int k = 0; k < 3; ++k)
+                        dc.handles[k] = rw::vec2{num(d[size_t(k * 2)]), num(d[size_t(k * 2 + 1)])};
+                    dc.from_depth = num(d[8]);
+                    dc.to_depth = num(d[9]);
+                    dc.noise = num(d[10]);
+                    dc.image = text::to_lowercase_native(d[11]);
+                    if (d.size() >= 20)
+                        for (int k = 0; k < 4; ++k)
+                            dc.uv[k] = rw::vec2{num(d[size_t(12 + k * 2)]), num(d[size_t(13 + k * 2)])};
+                    r.decals.push_back(std::move(dc));
                     continue;
                 }
                 if (parts[0] == "DynamicWarpTarget") {

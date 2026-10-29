@@ -113,6 +113,39 @@ namespace sys {
         };
         std::vector<path_field> path_fields;
 
+        // cosmetic state, never saved (particles.hpp, water.hpp)
+        struct particle {
+            dcon::room_id room;
+            uint8_t kind = 0;
+            rw::vec2 pos{0.f, 0.f};
+            rw::vec2 last_pos{0.f, 0.f};
+            rw::vec2 vel{0.f, 0.f};
+            float life = 0.f;   // 0..1
+            float decay = 0.f;  // life per tick
+            float size = 1.f;
+            rw::vec3 color{1.f, 1.f, 1.f};
+            float alpha = 1.f;
+        };
+        std::vector<particle> particles;
+        // everything rains like an outdoor room at full rain intensity
+        bool storm = false;
+        // a room's water surface: a height field over x and depth (z, 0 at
+        // the front), its waves, and the walls it reflects off
+        struct water_surface {
+            dcon::room_id room;
+            float x0 = 0.f;
+            float spacing = 6.f;
+            uint32_t nx = 0;
+            float level = 0.f;
+            float time = 0.f;
+            std::vector<float> h;       // nx * nz, row major in z
+            std::vector<float> last_h;
+            std::vector<float> v;
+            std::vector<uint8_t> wall;  // per column: terrain at the surface
+            uint32_t last_used = 0;
+        };
+        std::vector<water_surface> waters;
+
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;
         std::unordered_map<std::string, dcon::room_id> room_by_name;

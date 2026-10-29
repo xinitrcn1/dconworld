@@ -19,6 +19,8 @@
 #include "player_graphics.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
+#include "particles.hpp"
+#include "water.hpp"
 #include "shortcuts.hpp"
 #include "reports.hpp"
 
@@ -323,6 +325,21 @@ void main() {
             };
             r.warp_tear_program = make(tear);
             r.warp_screen_program = make(screen);
+            // the water body reuses the warp vertex shader (a_uv: room x, depth)
+            auto const water_src = read_text(fs, dir.get_single_file("water.frag"));
+            if (!water_src.empty())
+                r.water_program = make(water_src);
+            auto const dvs = read_text(fs, dir.get_single_file("decal.vert"));
+            auto const dfs = read_text(fs, dir.get_single_file("decal.frag"));
+            if (!dvs.empty() && !dfs.empty()) {
+                r.decal_program = link(compile(GL_VERTEX_SHADER, (prelude + dvs).c_str()), compile(GL_FRAGMENT_SHADER, (prelude + dfs).c_str()));
+                glUseProgram(r.decal_program);
+                glUniform1i(glGetUniformLocation(r.decal_program, "u_level"), 0);
+                glUniform1i(glGetUniformLocation(r.decal_program, "u_palette"), 1);
+                glUniform1i(glGetUniformLocation(r.decal_program, "u_decal"), 2);
+            } else {
+                reports::add_log("missing shaders/decal.vert or decal.frag, decals are not drawn");
+            }
         }
 
         // every palette object becomes one layer of a texture array (like
@@ -1160,6 +1177,270 @@ void main() {
             glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
         }
 
+        // RoomPalette.GetPixel(x, y) of the room's palette (rows count from the bottom)
+        rw::vec3 palette_texel(state const& r, sys::game_state const& s, dcon::room_id room, int x, int y) {
+            auto const palette = s.world.room_get_palette(room).id;
+            if (!palette || r.palette_pixels.empty())
+                return rw::vec3{0.f, 0.f, 0.f};
+            uint8_t const* p = r.palette_pixels.data() + (size_t(palette.index()) * palette_width * palette_height
+                + size_t(palette_height - 1 - y) * palette_width + size_t(x)) * 3;
+            return rw::vec3{float(p[0]) / 255.f, float(p[1]) / 255.f, float(p[2]) / 255.f};
+        }
+
+        uint32_t decal_texture(state& r, sys::game_state const& s, std::string const& name) {
+            auto it = r.decal_textures.find(name);
+            if (it != r.decal_textures.end())
+                return it->second.texture;
+            state::decal_texture t;
+            image im;
+            if (load_image(s.fs, s.fs.get_root().get_single_subdir("decals").get_single_file(name + ".png"), 4, im)) {
+                t.texture = make_texture_2d(im, GL_RGBA, GL_RGBA8);
+                glBindTexture(GL_TEXTURE_2D, t.texture);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            } else {
+                reports::add_log("missing decal \"" + name + "\"");
+            }
+            r.decal_textures.emplace(name, t);
+            return t.texture;
+        }
+
+        // CustomDecal: the image stretched over the quad, split into a grid
+        // (finer for bigger decals) whose inner points the decal's noise
+        // jitters, drawn once per camera image under it
+        void draw_decals(state& r, sys::game_state const& s, world::room_view const& room, glm::mat4 const& proj, int pass, std::vector<vec2> const& cams) {
+            auto const& w = s.world;
+            if (r.decal_program == 0 || cams.empty())
+                return;
+            auto const palette = w.room_get_palette(room.id).id;
+            GLuint const prog = r.decal_program;
+            auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
+            bool set_up = false;
+            w.room_for_each_decal_location(room.id, [&](dcon::decal_location_id l) {
+                auto const d = w.decal_location_get_decal(l);
+                uint32_t const tex = decal_texture(r, s, std::string{s.to_string_view(w.decal_placed_get_image(d))});
+                if (tex == 0)
+                    return;
+                vec2 const q[4] = {w.decal_placed_get_pos(d), w.decal_placed_get_pos(d) + w.decal_placed_get_handle_a(d),
+                    w.decal_placed_get_pos(d) + w.decal_placed_get_handle_b(d), w.decal_placed_get_pos(d) + w.decal_placed_get_handle_c(d)};
+                float longest = 0.f;
+                for (int k = 0; k < 4; ++k)
+                    longest = std::max(longest, rw::distance(q[k], q[(k + 1) % 4]));
+                int const div = std::clamp(int(std::lround(longest / 150.f)), 1, 20);
+                float const noise = w.decal_placed_get_noise(d);
+                uint32_t h = uint32_t(int32_t(q[0].x + q[0].y + q[1].x + q[1].y + q[2].x + q[2].y + q[3].x + q[3].y)) * 2654435761u + 1u;
+                auto const roll = [&] {
+                    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+                    return float(h & 0xFFFFFF) / 16777215.f;
+                };
+                std::vector<vertex> grid(size_t((div + 1) * (div + 1)));
+                for (int i = 0; i <= div; ++i) {
+                    float const ti = float(i) / float(div);
+                    for (int j = 0; j <= div; ++j) {
+                        float const tj = float(j) / float(div);
+                        // j runs along q0 -> q1, i along q0 -> q3
+                        vec2 const pos = rw::lerp(rw::lerp(q[0], q[3], ti), rw::lerp(q[1], q[2], ti), tj);
+                        // q0 bottom left, q1 top left, q2 top right, q3 bottom right
+                        float u = ti;
+                        float v = tj;
+                        if (noise > 0.f && i > 0 && j > 0 && i < div && j < div) {
+                            // the decal's noise roughens the image's stretch inside its edges
+                            u = mathf::clamp01(u + (roll() - 0.5f) * noise * 0.5f / float(div));
+                            v = mathf::clamp01(v + (roll() - 0.5f) * noise * 0.5f / float(div));
+                        }
+                        grid[size_t(j * (div + 1) + i)] = vertex{pos.x, pos.y, 0xFFFFFFFFu, u, v};
+                    }
+                }
+                r.batch.clear();
+                for (int j = 0; j < div; ++j)
+                    for (int i = 0; i < div; ++i) {
+                        auto const& a = grid[size_t(j * (div + 1) + i)];
+                        auto const& b = grid[size_t(j * (div + 1) + i + 1)];
+                        auto const& c = grid[size_t((j + 1) * (div + 1) + i + 1)];
+                        auto const& e = grid[size_t((j + 1) * (div + 1) + i)];
+                        r.batch.insert(r.batch.end(), {a, b, c, a, c, e});
+                    }
+                // bounds, to skip cameras it doesn't touch
+                vec2 lo = q[0], hi = q[0];
+                for (auto const& p : q) {
+                    lo = glm::min(lo, p);
+                    hi = glm::max(hi, p);
+                }
+                if (!set_up) {
+                    set_up = true;
+                    glUseProgram(prog);
+                    glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
+                    glUniform1i(loc("u_index"), palette ? palette.index() : 0);
+                    glUniform1i(loc("u_pass"), pass);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY, r.room_texture);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY, r.palette_texarray);
+                }
+                glUniform1f(loc("u_from"), w.decal_placed_get_from_depth(d));
+                glUniform1f(loc("u_to"), w.decal_placed_get_to_depth(d));
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+                for (size_t c = 0; c < cams.size(); ++c) {
+                    vec2 const o = cams[c];
+                    if (hi.x < o.x || lo.x > o.x + float(camera_width) || hi.y < o.y || lo.y > o.y + float(camera_height))
+                        continue;
+                    glUniform1i(loc("u_camera_index"), GLint(c));
+                    glUniform2f(loc("u_cam_origin"), o.x, o.y);
+                    glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
+                }
+            });
+            glActiveTexture(GL_TEXTURE0);
+        }
+
+        // particles.hpp's effects, plain shapes
+        void build_particles(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            painter p{r.batch};
+            for (auto const& pt : s.particles) {
+                if (pt.room != room.id)
+                    continue;
+                vec2 const pos = rw::lerp(pt.last_pos, pt.pos, alpha);
+                float const fade = 1.f - pt.life;
+                switch (particles::kind(pt.kind)) {
+                case particles::kind::drop: {
+                    vec2 const tail = pos - (pt.pos - pt.last_pos) * 0.8f;
+                    if (rw::distance(tail, pos) < 0.5f)
+                        p.circle(pos, 0.7f * pt.size, to_rgba(pt.color, pt.alpha));
+                    else
+                        p.line(tail, pos, 1.1f * pt.size, to_rgba(pt.color, pt.alpha));
+                    break;
+                }
+                case particles::kind::rain:
+                    p.line(pos - pt.vel * 1.4f, pos, 1.f * pt.size, to_rgba(pt.color, pt.alpha));
+                    break;
+                case particles::kind::spark:
+                    p.line(rw::lerp(pt.last_pos, pos, 0.2f) - (pt.pos - pt.last_pos) * 0.6f, pos, pt.size, to_rgba(pt.color, fade));
+                    break;
+                case particles::kind::dust:
+                    p.glow(pos, pt.size, to_rgba(pt.color, pt.alpha * fade), to_rgba(pt.color, 0.f));
+                    break;
+                case particles::kind::bubble: {
+                    // a thin ring with a glint
+                    constexpr int segs = 10;
+                    uint32_t const col = to_rgba(pt.color, pt.alpha * mathf::min(1.f, fade * 3.f));
+                    for (int k = 0; k < segs; ++k) {
+                        float const a0 = float(k) / segs * 6.2831853f, a1 = float(k + 1) / segs * 6.2831853f;
+                        vec2 const d0{std::cos(a0), std::sin(a0)}, d1{std::cos(a1), std::sin(a1)};
+                        p.tri(pos + d0 * pt.size, pos + d0 * (pt.size + 0.8f), pos + d1 * (pt.size + 0.8f), col);
+                        p.tri(pos + d0 * pt.size, pos + d1 * (pt.size + 0.8f), pos + d1 * pt.size, col);
+                    }
+                    p.circle(pos + vec2{-0.35f, 0.35f} * pt.size, 0.45f, to_rgba(rw::vec3{1.f, 1.f, 1.f}, 0.8f * fade));
+                    break;
+                }
+                case particles::kind::flash:
+                    p.glow(pos, pt.size, to_rgba(pt.color, pt.alpha * fade), to_rgba(pt.color, 0.f));
+                    break;
+                }
+            }
+        }
+
+        // the water: its body (the scene behind refracted and tinted, see
+        // water.frag) from the front edge down, then the top of the surface
+        // as a band of rows going back, shaded by their slope
+        void draw_water(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
+            if (!room.water)
+                return;
+            auto const* surf = water::surface(s, room.id);
+            float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
+            float const x0 = cam.pos.x - 20.f, x1 = cam.pos.x + view_w + 20.f;
+            float const bottom = cam.pos.y - 40.f;
+            if (surf == nullptr || r.water_program == 0) {
+                r.batch.clear();
+                painter p{r.batch};
+                p.rect(-200.f, -200.f, room.pixel_width() + 400.f, room.float_water_level + 200.f, col_water);
+                glUseProgram(r.program);
+                glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
+                glUniform1i(r.u_textured, 0);
+                upload_and_draw(r, 0, r.batch.size());
+                return;
+            }
+            float const level = surf->level;
+            if (level + 40.f < cam.pos.y || level - 60.f > cam.pos.y + view_h + 40.f)
+                return;
+            rw::vec3 const shallow = palette_texel(r, s, room.id, 4, 7);
+            rw::vec3 const deep = palette_texel(r, s, room.id, 5, 7);
+            rw::vec3 const top1 = palette_texel(r, s, room.id, 6, 7);
+            rw::vec3 const top2 = palette_texel(r, s, room.id, 7, 7);
+            rw::vec3 const shine = palette_texel(r, s, room.id, 8, 7);
+            constexpr float step = 4.f;
+            int const n = int((x1 - x0) / step) + 1;
+            auto const hgt = [&](float x, float z) { return water::height(s, *surf, x, z, alpha); };
+
+            // the body
+            grab_scene(r);
+            r.batch.clear();
+            for (int i = 0; i + 1 < n; ++i) {
+                float const xa = x0 + float(i) * step, xb = xa + step;
+                float const ya = level + hgt(xa, 0.f), yb = level + hgt(xb, 0.f);
+                vertex const ta{xa, ya, 0xFFFFFFFFu, xa, 0.f}, tb{xb, yb, 0xFFFFFFFFu, xb, 0.f};
+                vertex const ba{xa, bottom, 0xFFFFFFFFu, xa, ya - bottom}, bb{xb, bottom, 0xFFFFFFFFu, xb, yb - bottom};
+                r.batch.insert(r.batch.end(), {ta, tb, bb, ta, bb, ba});
+            }
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            GLuint const prog = r.water_program;
+            glUseProgram(prog);
+            auto const loc = [&](char const* nm) { return glGetUniformLocation(prog, nm); };
+            glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform2f(loc("u_screen"), float(r.width), float(r.height));
+            glUniform1f(loc("u_time"), seconds);
+            glUniform1f(loc("u_zoom"), cam.zoom);
+            glUniform3f(loc("u_shallow"), shallow.x, shallow.y, shallow.z);
+            glUniform3f(loc("u_deep"), deep.x, deep.y, deep.z);
+            glUniform3f(loc("u_shine"), shine.x, shine.y, shine.z);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
+            upload_and_draw(r, 0, r.batch.size());
+
+            // the surface band: lit from above and a little behind, the slopes
+            // facing the light catching the shine
+            r.batch.clear();
+            rw::vec3 const light = glm::normalize(rw::vec3{-0.35f, 0.85f, -0.4f});
+            rw::vec3 const eye = glm::normalize(rw::vec3{0.f, 0.55f, -0.85f});
+            rw::vec3 const half = glm::normalize(light + eye);
+            auto const shade = [&](float x, float z) {
+                float const dx = (hgt(x + 3.f, z) - hgt(x - 3.f, z)) / 6.f;
+                float const z0 = mathf::max(0.f, z - 0.5f), z1 = mathf::min(float(water::rows - 1), z + 0.5f);
+                float const dz = (hgt(x, z1) - hgt(x, z0)) / ((z1 - z0) * 40.f);
+                rw::vec3 const nrm = glm::normalize(rw::vec3{-dx, 1.f, -dz});
+                float const diffuse = mathf::max(0.f, glm::dot(nrm, light));
+                float const spec = std::pow(mathf::max(0.f, glm::dot(nrm, half)), 48.f);
+                float const t = z / float(water::rows - 1);
+                rw::vec3 const base = top1 + (top2 - top1) * t;
+                rw::vec3 const c = base * (0.55f + 0.45f * diffuse) + shine * spec * 1.4f;
+                // see-through enough for whatever swims at the surface
+                return to_rgba(c, mathf::lerp(0.62f, 0.4f, t) + spec * 0.3f);
+            };
+            auto const ypos = [&](float x, float z) { return level + hgt(x, z) + z / float(water::rows - 1) * water::depth_px; };
+            for (uint32_t zr = 0; zr + 1 < water::rows; ++zr) {
+                float const za = float(zr), zb = float(zr + 1);
+                for (int i = 0; i + 1 < n; ++i) {
+                    float const xa = x0 + float(i) * step, xb = xa + step;
+                    vertex const a{xa, ypos(xa, za), shade(xa, za), 0.f, 0.f};
+                    vertex const b{xb, ypos(xb, za), shade(xb, za), 0.f, 0.f};
+                    vertex const c{xb, ypos(xb, zb), shade(xb, zb), 0.f, 0.f};
+                    vertex const d{xa, ypos(xa, zb), shade(xa, zb), 0.f, 0.f};
+                    r.batch.insert(r.batch.end(), {a, b, c, a, c, d});
+                }
+            }
+            // the bright lip where the front of the surface meets the body
+            painter p{r.batch};
+            for (int i = 0; i + 1 < n; ++i) {
+                float const xa = x0 + float(i) * step, xb = xa + step;
+                p.line(vec2{xa, ypos(xa, 0.f)}, vec2{xb, ypos(xb, 0.f)}, 1.5f, to_rgba(shine, 0.55f));
+            }
+            glUseProgram(r.program);
+            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform1i(r.u_textured, 0);
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            upload_and_draw(r, 0, r.batch.size());
+        }
+
         // RegionGateGraphics, minimal: each door is a slab sliding down from
         // above its opening while closing
         void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room) {
@@ -1301,10 +1582,12 @@ void main() {
             draw_flat([&] { build_geometry(r, s, room, cam, view_w, view_h, textured_room ? 110 : 255); });
         };
 
-        if (textured_room)
+        if (textured_room) {
             draw_cameras(0);
-        else
+            draw_decals(r, s, room, proj, 0, cams);
+        } else {
             draw_geometry();
+        }
 
         // the sprite layers: rot tubes, back spears, creatures (midground), items, gate doors
         draw_flat([&] { build_rot(r, s, room, alpha, false); });
@@ -1332,23 +1615,23 @@ void main() {
 
         if (textured_room) {
             draw_cameras(1);
+            draw_decals(r, s, room, proj, 1, cams);
             if (r.show_geometry)
                 draw_geometry();
         }
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 
-        // shortcuts are drawn over the level, then water over everything below the surface
+        float const seconds = float(std::fmod(double(SDL_GetTicks()) / 1000.0, 1000.0));
+        // drops, sparks, dust and bubbles, then shortcuts over the level, then
+        // the water over everything below its surface
         draw_flat([&] {
+            build_particles(r, s, room, alpha);
             build_shortcut_glow(r, s, room, alpha);
-            if (room.water) {
-                painter p{r.batch};
-                p.rect(-200.f, -200.f, room.pixel_width() + 400.f, room.float_water_level + 200.f, col_water);
-            }
         });
+        draw_water(r, s, room, alpha, cam, proj, seconds);
 
         // the warps bend everything drawn so far
-        float const seconds = float(std::fmod(double(SDL_GetTicks()) / 1000.0, 1000.0));
         draw_warp_tears(r, s, room, alpha, cam, proj, seconds);
         draw_flat([&] { build_ripple_rings(r, s, room); });
         draw_warp_screen(r, s, room, alpha, cam, proj, seconds);

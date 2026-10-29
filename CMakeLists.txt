@@ -71,6 +71,8 @@ add_executable(rwcpp
     src/centipede.cpp
     src/rot.cpp
     src/warps.cpp
+    src/water.cpp
+    src/particles.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

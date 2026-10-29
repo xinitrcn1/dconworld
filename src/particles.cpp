@@ -1,0 +1,258 @@
+#include <algorithm>
+#include <cmath>
+
+#include "particles.hpp"
+#include "water.hpp"
+#include "physics.hpp"
+#include "player.hpp"
+
+namespace particles {
+    using rw::vec2;
+    using rw::vec3;
+    using world::room_view;
+    namespace mathf = rw::mathf;
+    using sound::sound_id;
+
+    namespace {
+        constexpr size_t max_particles = 4000;
+        constexpr vec3 water_color{0.62f, 0.72f, 0.85f};
+        constexpr vec3 dust_color{0.55f, 0.53f, 0.5f};
+        constexpr vec3 spark_color{1.f, 0.88f, 0.6f};
+        constexpr vec3 shock_color{0.7f, 0.8f, 1.f};
+
+        vec2 rnv(rw::rng& r) { return rw::custom::deg_to_vec(r.value() * 360.f); }
+        float range(rw::rng& r, float lo, float hi) { return lo + (hi - lo) * r.value(); }
+
+        // the particles keep their own random numbers: cosmetic rolls must not
+        // change the gameplay's (item spawns, AI) between runs
+        rw::rng& random() {
+            static rw::rng r{0x51A5C0DEu};
+            return r;
+        }
+
+        void dust(sys::game_state& state, dcon::room_id room, vec2 at, int count, float strength) {
+            auto& r = random();
+            for (int i = 0; i < count; ++i) {
+                vec2 const v{range(r, -1.f, 1.f) * (1.f + strength), range(r, 0.f, 0.6f) * strength};
+                spawn(state, room, kind::dust, at + vec2{range(r, -6.f, 6.f), 0.f}, v, range(r, 3.f, 6.f), range(r, 0.35f, 0.7f), dust_color, 0.35f);
+            }
+        }
+
+        void sparks(sys::game_state& state, dcon::room_id room, vec2 at, int count, float speed, vec3 color) {
+            auto& r = random();
+            for (int i = 0; i < count; ++i)
+                spawn(state, room, kind::spark, at, rnv(r) * range(r, 0.3f, 1.f) * speed, range(r, 1.f, 2.f), range(r, 0.12f, 0.35f), color);
+        }
+    }
+
+    void spawn(sys::game_state& state, dcon::room_id room, kind k, vec2 pos, vec2 vel, float size, float seconds, vec3 color, float alpha) {
+        // the capacity is reserved once: update() spawns while it walks the vector
+        state.particles.reserve(max_particles);
+        if (!room || state.particles.size() >= max_particles)
+            return;
+        sys::game_state::particle p;
+        p.room = room;
+        p.kind = uint8_t(k);
+        p.pos = p.last_pos = pos;
+        p.vel = vel;
+        p.size = size;
+        p.decay = 1.f / mathf::max(1.f, seconds * float(state.ticks_per_second));
+        p.color = color;
+        p.alpha = alpha;
+        state.particles.push_back(p);
+    }
+
+    void splash(sys::game_state& state, dcon::room_id room, vec2 pos, float strength) {
+        auto& r = random();
+        int const n = int(mathf::min(strength * 2.5f, 28.f));
+        for (int i = 0; i < n; ++i) {
+            float const spread = range(r, -1.f, 1.f);
+            vec2 const v{spread * (1.f + strength * 0.25f), range(r, 0.4f, 1.f) * (2.f + strength * 0.6f)};
+            spawn(state, room, kind::drop, pos + vec2{spread * 6.f, 1.f}, v, range(r, 0.8f, 1.6f), 2.f, water_color, 0.85f);
+        }
+    }
+
+    void bubbles(sys::game_state& state, dcon::room_id room, vec2 pos, int count, float spread) {
+        auto& r = random();
+        for (int i = 0; i < count; ++i)
+            spawn(state, room, kind::bubble, pos + rnv(r) * spread * r.value(), rnv(r) * 0.6f, range(r, 1.2f, 3.2f), range(r, 1.5f, 3.f), water_color, 0.8f);
+    }
+
+    void from_sounds(sys::game_state& state, size_t first_sound) {
+        auto& r = random();
+        for (size_t i = first_sound; i < state.sounds.size(); ++i) {
+            auto const& snd = state.sounds[i];
+            if (snd.room == 0xFFFFFFFFu)
+                continue;
+            dcon::room_id const room{dcon::room_id::value_base_t(snd.room)};
+            vec2 const at = snd.pos;
+            vec2 const feet = at - vec2{0.f, 14.f};
+            switch (snd.id) {
+            // pushing off and landing hard kick up dust
+            case sound_id::slugcat_terrain_impact_hard:
+            case sound_id::slugcat_terrain_impact_death:
+                dust(state, room, feet, 9, 2.f);
+                break;
+            case sound_id::slugcat_terrain_impact_medium:
+                dust(state, room, feet, 5, 1.2f);
+                break;
+            case sound_id::slugcat_floor_impact_standard:
+                dust(state, room, feet, 2, 0.6f);
+                break;
+            case sound_id::slugcat_rocket_jump:
+            case sound_id::slugcat_super_jump:
+            case sound_id::slugcat_belly_slide_init:
+                dust(state, room, feet, 6, 1.5f);
+                break;
+            case sound_id::slugcat_crouch_jump:
+            case sound_id::slugcat_wall_jump:
+            case sound_id::slugcat_roll_init:
+                dust(state, room, feet, 3, 1.f);
+                break;
+            // weapons hitting things throw sparks
+            case sound_id::rock_hit_wall:
+            case sound_id::spear_bounce_off_wall:
+                sparks(state, room, at, 6, 4.f, spark_color);
+                dust(state, room, at, 2, 0.5f);
+                break;
+            case sound_id::spear_stick_in_wall:
+            case sound_id::spear_stick_in_ground:
+                sparks(state, room, at, 4, 3.f, spark_color);
+                dust(state, room, at, 3, 0.7f);
+                break;
+            case sound_id::weapon_skid:
+                if (r.value() < 0.5f)
+                    sparks(state, room, at, 1, 2.f, spark_color);
+                break;
+            case sound_id::rock_hit_creature:
+                spawn(state, room, kind::flash, at, vec2{0.f, 0.f}, 6.f, 0.18f, vec3{1.f, 1.f, 1.f}, 0.9f);
+                sparks(state, room, at, 5, 3.f, vec3{1.f, 1.f, 1.f});
+                break;
+            case sound_id::centipede_shock:
+                spawn(state, room, kind::flash, at, vec2{0.f, 0.f}, 14.f, 0.3f, shock_color, 1.f);
+                sparks(state, room, at, 18, 7.f, shock_color);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    void ambient(sys::game_state& state, room_view const& room) {
+        auto& w = state.world;
+        auto& r = random();
+        // RoomRain: streaks from the top of the room
+        float const rain = mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
+        if (rain > 0.f) {
+            float const want = rain * room.pixel_width() / 260.f;
+            int n = int(want);
+            if (r.value() < want - float(n))
+                ++n;
+            for (int i = 0; i < n; ++i) {
+                vec2 const at{range(r, -40.f, room.pixel_width() + 40.f), room.pixel_height() + 20.f};
+                spawn(state, room.id, kind::rain, at, vec2{range(r, -1.5f, -0.5f), range(r, -26.f, -20.f)}, range(r, 0.8f, 1.2f), 3.f, water_color, 0.35f + 0.3f * rain);
+            }
+        }
+        // WaterDrip: drops forming under ceilings
+        float const drips = w.room_get_ceiling_drips(room.id);
+        if (drips > 0.f && r.value() < drips * 0.3f) {
+            for (int k = 0; k < 6; ++k) {
+                int32_t const x = r.range(0, room.width);
+                int32_t const y = r.range(1, room.height);
+                if (room.get_tile(x, y).solid() && !room.get_tile(x, y - 1).solid()) {
+                    vec2 const at = room_view::middle_of_tile(x, y) + vec2{range(r, -8.f, 8.f), -11.f};
+                    spawn(state, room.id, kind::drop, at, vec2{0.f, -0.5f}, 1.f, 4.f, water_color, 0.8f);
+                    break;
+                }
+            }
+        }
+        // Bubble: what a submerged slugcat breathes out (more when running out of air)
+        if (room.water) {
+            w.for_each_player([&](dcon::player_id p) {
+                if (w.physical_object_get_room_from_object_location(player::body(state, p)) != room.id || w.player_get_in_shortcut(p) || w.player_get_eaten(p))
+                    return;
+                vec2 const head = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
+                if (!room.point_submerged(head + vec2{0.f, 8.f}))
+                    return;
+                float const air = w.player_get_air_in_lungs(p);
+                if (r.value() < 0.03f + 0.12f * (1.f - air))
+                    bubbles(state, room.id, head + vec2{0.f, 4.f}, 1 + int(r.value() * 2.f), 3.f);
+            });
+        }
+    }
+
+    void update(sys::game_state& state) {
+        auto& ps = state.particles;
+        ps.reserve(max_particles);
+        auto& r = random();
+        // room views of the rooms in use
+        dcon::room_id view_room;
+        room_view view;
+        size_t const count = ps.size();
+        for (size_t i = 0; i < count; ++i) {
+            auto& p = ps[i];
+            if (p.room != view_room) {
+                view_room = p.room;
+                view = world::get_room_view(state, p.room);
+            }
+            p.last_pos = p.pos;
+            p.life += p.decay;
+            auto const k = kind(p.kind);
+            bool const wet = view.water && view.point_submerged(p.pos);
+            switch (k) {
+            case kind::drop:
+            case kind::rain: {
+                if (k == kind::drop)
+                    p.vel.y -= 0.9f * view.gravity;
+                p.pos += p.vel;
+                if (view.get_tile(p.pos).solid() || p.pos.y < -50.f) {
+                    // a drop bursting on the ground
+                    if (p.size >= 0.8f && r.value() < (k == kind::rain ? 0.35f : 0.8f)) {
+                        vec2 const at = p.last_pos;
+                        for (int j = 0; j < 2; ++j)
+                            spawn(state, p.room, kind::drop, at, vec2{range(r, -1.5f, 1.5f), range(r, 0.8f, 2.f)}, 0.5f, 0.4f, p.color, p.alpha * 0.8f);
+                    }
+                    p.life = 1.f;
+                } else if (view.water && !view.point_submerged(p.last_pos) && wet) {
+                    water::disturb(state, p.room, p.pos.x, std::fabs(p.vel.y) * 0.04f * p.size, 10.f);
+                    if (p.size >= 0.8f && r.value() < 0.3f)
+                        spawn(state, p.room, kind::drop, vec2{p.pos.x, view.float_water_level + 1.f}, vec2{range(r, -1.f, 1.f), range(r, 1.f, 2.5f)}, 0.5f, 0.3f, p.color, 0.7f);
+                    p.life = 1.f;
+                }
+                break;
+            }
+            case kind::spark:
+                p.vel *= 0.86f;
+                p.vel.y -= 0.35f;
+                p.pos += p.vel;
+                if (view.get_tile(p.pos).solid())
+                    p.life = 1.f;
+                break;
+            case kind::dust:
+                p.vel *= 0.88f;
+                p.pos += p.vel;
+                p.size += 0.25f;
+                break;
+            case kind::bubble:
+                if (!wet) {
+                    // popped at the surface
+                    if (view.water)
+                        water::disturb(state, p.room, p.pos.x, -0.15f * p.size, 6.f);
+                    p.life = 1.f;
+                    break;
+                }
+                p.vel.y += 0.12f;
+                p.vel *= 0.9f;
+                p.vel.x += std::sin(p.life * 25.f + float(i)) * 0.06f;
+                p.pos += p.vel;
+                if (view.get_tile(p.pos).solid())
+                    p.life = 1.f;
+                break;
+            case kind::flash:
+                p.size *= 1.12f;
+                break;
+            }
+        }
+        ps.erase(std::remove_if(ps.begin(), ps.end(), [](auto const& p) { return p.life >= 1.f; }), ps.end());
+    }
+}
