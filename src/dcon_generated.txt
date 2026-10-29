@@ -39,6 +39,7 @@ include{"math.hpp"}
 include{"world_types.hpp"}
 include{"physics_types.hpp"}
 include{"player_types.hpp"}
+include{"centipede_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -802,6 +803,8 @@ object{
 	// CentipedeGraphics.lightFlash
 	property{ name{light_flash} type{float} }
 	property{ name{walk_cycle} type{float} }
+	// CentipedeGraphics: legs, feelers, body rotations
+	property{ name{graphics} type{::centipede::graphics_state} }
 }
 relationship{
 	name{centipede_body}

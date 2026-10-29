@@ -3,6 +3,7 @@
 #include <string>
 
 #include "player_graphics.hpp"
+#include "body_parts.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -15,6 +16,13 @@ namespace player_graphics {
     using world::terrain;
     namespace mathf = rw::mathf;
     namespace custom = rw::custom;
+    using body_parts::connect_to_point;
+    using body_parts::find_grip;
+    using body_parts::generic_update;
+    using body_parts::push_out_of_terrain;
+    using body_parts::rotate_around_origo;
+    using custom::aim;
+    using rw::slerp;
 
     namespace {
         // GenericBodyPart / TailSegment constants (PlayerGraphics constructor)
@@ -25,18 +33,9 @@ namespace player_graphics {
         // PlayerGraphics.InitializeLongerWatcherTail
         constexpr float weaver_tail_connection_rad[4] = {6.f, 10.5f, 10.5f, 10.5f};
         // SlugcatHand: Limb(rad 3, surface friction 0.8, air friction 1, hunt speed 7, quickness 0.5)
-        constexpr float hand_rad = 3.f, hand_surface_friction = 0.8f;
-        constexpr float hand_hunt_speed = 7.f, hand_quickness = 0.5f;
+        constexpr body_parts::limb_params hand{3.f, 0.8f, 1.f, 7.f, 0.5f};
         constexpr float tail_affect_previous[4] = {1.f, 0.5f, 0.5f, 0.5f};
         constexpr float tail_surface_friction = 0.85f, tail_air_friction = 1.f;
-        constexpr ivec2 eight_directions_and_zero[9] = {
-            {0, 0}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}
-        };
-
-        // Custom.AimFromOneVectorToAnother: degrees, clockwise from up
-        float aim(vec2 a, vec2 b) {
-            return std::atan2(b.x - a.x, b.y - a.y) / 6.2831855f * 360.f;
-        }
 
         // element names with stable storage (sprites refer to them by view)
         template<size_t N>
@@ -54,100 +53,6 @@ namespace player_graphics {
         auto const legs_climbing_names = make_names<7>("LegsAClimbing");
         auto const legs_on_pole_names = make_names<7>("LegsAOnPole");
         auto const arm_names = make_names<13>("PlayerArm");
-
-        // BodyPart.ConnectToPoint
-        void connect_to_point(player::body_part& bp, vec2 pnt, float connection_rad, bool push, float elastic, vec2 host_vel, float adapt, float exaggerate) {
-            if (elastic > 0.f)
-                bp.vel += custom::dir_vec(bp.pos, pnt) * rw::distance(bp.pos, pnt) * elastic;
-            bp.vel += host_vel * exaggerate;
-            if (push || !custom::dist_less(bp.pos, pnt, connection_rad)) {
-                float const d = rw::distance(bp.pos, pnt);
-                vec2 const a = custom::dir_vec(bp.pos, pnt);
-                bp.pos -= a * (connection_rad - d);
-                bp.vel -= a * (connection_rad - d);
-            }
-            bp.vel -= host_vel;
-            bp.vel *= 1.f - adapt;
-            bp.vel += host_vel;
-        }
-
-        // BodyPart.PushOutOfTerrain (tile terrain only)
-        void push_out_of_terrain(player::body_part& bp, room_view const& room, float surface_friction) {
-            for (auto const d : eight_directions_and_zero) {
-                ivec2 const t = room_view::get_tile_position(bp.pos) + d;
-                auto const tt = room.get_terrain(t.x, t.y);
-                if (tt == terrain::solid) {
-                    vec2 const m = room_view::middle_of_tile(t);
-                    float nx = 0.f, ny = 0.f;
-                    if (bp.pos.y >= m.y - 10.f && bp.pos.y <= m.y + 10.f) {
-                        if (bp.last_pos.x < m.x) {
-                            if (bp.pos.x > m.x - 10.f - bp.rad && room.get_terrain(t.x - 1, t.y) != terrain::solid)
-                                nx = m.x - 10.f - bp.rad;
-                        } else if (bp.pos.x < m.x + 10.f + bp.rad && room.get_terrain(t.x + 1, t.y) != terrain::solid) {
-                            nx = m.x + 10.f + bp.rad;
-                        }
-                    }
-                    if (bp.pos.x >= m.x - 10.f && bp.pos.x <= m.x + 10.f) {
-                        if (bp.last_pos.y < m.y) {
-                            if (bp.pos.y > m.y - 10.f - bp.rad && room.get_terrain(t.x, t.y - 1) != terrain::solid)
-                                ny = m.y - 10.f - bp.rad;
-                        } else if (bp.pos.y < m.y + 10.f + bp.rad && room.get_terrain(t.x, t.y + 1) != terrain::solid) {
-                            ny = m.y + 10.f + bp.rad;
-                        }
-                    }
-                    if (std::fabs(bp.pos.x - nx) < std::fabs(bp.pos.y - ny) && nx != 0.f) {
-                        bp.pos.x = nx;
-                        bp.vel.x = nx - bp.pos.x;
-                        bp.vel.y *= surface_friction;
-                    } else if (ny != 0.f) {
-                        bp.pos.y = ny;
-                        bp.vel.y = ny - bp.pos.y;
-                        bp.vel.x *= surface_friction;
-                    } else {
-                        vec2 const c{mathf::clamp(bp.pos.x, m.x - 10.f, m.x + 10.f), mathf::clamp(bp.pos.y, m.y - 10.f, m.y + 10.f)};
-                        if (custom::dist_less(bp.pos, c, bp.rad)) {
-                            float const dist = rw::distance(bp.pos, c);
-                            vec2 const a = custom::dir_vec(bp.pos, c);
-                            bp.vel *= surface_friction;
-                            bp.pos -= a * (bp.rad - dist);
-                            bp.vel -= a * (bp.rad - dist);
-                        }
-                    }
-                } else if (d.x == 0 && tt == terrain::slope) {
-                    vec2 const m = room_view::middle_of_tile(t);
-                    auto const slope = room.identify_slope(t);
-                    using world::slope_direction;
-                    float target = 0.f;
-                    bool hit = false;
-                    if (slope == slope_direction::up_left) {
-                        target = m.y - (m.x - bp.pos.x) + bp.rad;
-                        hit = bp.pos.y < target;
-                    } else if (slope == slope_direction::up_right) {
-                        target = m.y + (m.x - bp.pos.x) + bp.rad;
-                        hit = bp.pos.y < target;
-                    } else if (slope == slope_direction::down_left) {
-                        target = m.y + (m.x - bp.pos.x) - bp.rad;
-                        hit = bp.pos.y > target;
-                    } else if (slope == slope_direction::down_right) {
-                        target = m.y - (m.x - bp.pos.x) - bp.rad;
-                        hit = bp.pos.y > target;
-                    }
-                    if (hit) {
-                        bp.pos.y = target;
-                        bp.vel.y = 0.f;
-                        bp.vel.x *= surface_friction;
-                    }
-                }
-            }
-        }
-
-        // GenericBodyPart.Update
-        void generic_update(player::body_part& bp, room_view const& room, float air_friction, float surface_friction) {
-            bp.last_pos = bp.pos;
-            bp.pos += bp.vel;
-            bp.vel *= air_friction;
-            push_out_of_terrain(bp, room, surface_friction);
-        }
 
         // TailSegment.Update; segment 0 hangs from `point`
         void tail_update(player::graphics_state& g, int i, vec2 point, room_view const& room) {
@@ -257,121 +162,6 @@ namespace player_graphics {
     }
 
     namespace {
-        // Custom.RotateAroundOrigo (clockwise degrees)
-        vec2 rotate_around_origo(vec2 v, float deg) {
-            float const a = deg * -0.017453292f;
-            float const c = std::cos(a), sn = std::sin(a);
-            return vec2{c * v.x - sn * v.y, sn * v.x + c * v.y};
-        }
-
-        // Vector3.Slerp for 2D vectors: angle and length interpolated
-        vec2 slerp(vec2 a, vec2 b, float t) {
-            t = mathf::clamp01(t);
-            float const la = rw::magnitude(a), lb = rw::magnitude(b);
-            if (la < 1e-5f || lb < 1e-5f)
-                return rw::lerp(a, b, t);
-            float const aa = std::atan2(a.y, a.x);
-            float da = std::atan2(b.y, b.x) - aa;
-            while (da > mathf::pi)
-                da -= 2.f * mathf::pi;
-            while (da < -mathf::pi)
-                da += 2.f * mathf::pi;
-            float const ang = aa + da * t;
-            return vec2{std::cos(ang), std::sin(ang)} * mathf::lerp(la, lb, t);
-        }
-
-        // the hand as a body part, for the shared helpers
-        template<typename F>
-        void as_body_part(player::hand_state& h, F&& f) {
-            player::body_part bp;
-            bp.pos = h.pos;
-            bp.last_pos = h.last_pos;
-            bp.vel = h.vel;
-            bp.rad = hand_rad;
-            f(bp);
-            h.pos = bp.pos;
-            h.last_pos = bp.last_pos;
-            h.vel = bp.vel;
-        }
-
-        // Limb.FindGrip: the closest point on terrain or a beam to `goal`
-        void find_grip(player::hand_state& h, room_view const& room, vec2 attached, vec2 search_from, float max_rad, vec2 goal, int forbidden_x, int forbidden_y) {
-            if (!custom::dist_less(attached, search_from, max_rad))
-                search_from = attached + custom::dir_vec(attached, search_from) * (max_rad - 1.f);
-            if (!custom::dist_less(attached, goal, max_rad))
-                goal = attached + custom::dir_vec(attached, goal) * max_rad;
-            ivec2 const tp = room_view::get_tile_position(search_from);
-            vec2 best{-100000.f, -100000.f};
-            auto const consider = [&](vec2 v) {
-                if (rw::sqr_magnitude(goal - v) < rw::sqr_magnitude(goal - best) && custom::dist_less(attached, v, max_rad))
-                    best = v;
-            };
-            for (auto const d : eight_directions_and_zero) {
-                if (d.x == forbidden_x || d.y == forbidden_y)
-                    continue;
-                ivec2 const t = tp + d;
-                vec2 const m = room_view::middle_of_tile(t);
-                vec2 v{mathf::clamp(goal.x, m.x - 10.f, m.x + 10.f), mathf::clamp(goal.y, m.y - 10.f, m.y + 10.f)};
-                auto const tile = room.get_tile(t);
-                if (tile.t == terrain::solid) {
-                    if (d.x != 0 && room.get_terrain(t.x - d.x, t.y) != terrain::solid)
-                        v.x = m.x - float(d.x) * 10.f;
-                    if (d.y != 0 && room.get_terrain(t.x, t.y - d.y) != terrain::solid)
-                        v.y = m.y - float(d.y) * 10.f;
-                    consider(v);
-                } else if (tile.t == terrain::floor) {
-                    v.y = m.y + 10.f;
-                    consider(v);
-                } else if (tile.t == terrain::slope) {
-                    auto const sl = room.identify_slope(t);
-                    if (sl == world::slope_direction::down_left || sl == world::slope_direction::up_right)
-                        v.y = m.y + 10.f - (v.x - (m.x - 10.f));
-                    else if (sl == world::slope_direction::down_right || sl == world::slope_direction::up_left)
-                        v.y = m.y - 10.f + (v.x - (m.x - 10.f));
-                    consider(v);
-                }
-                if (tile.horizontal_beam())
-                    consider(vec2{mathf::clamp(goal.x, m.x - 10.f, m.x + 10.f), m.y});
-                if (tile.vertical_beam())
-                    consider(vec2{m.x, mathf::clamp(goal.y, m.y - 10.f, m.y + 10.f)});
-            }
-            if (best.x != -100000.f && best.y != -100000.f) {
-                h.mode = player::limb_mode::hunt_absolute_position;
-                h.absolute_hunt_pos = best;
-            }
-        }
-
-        // Limb.Update
-        void limb_update(player::hand_state& h, vec2 conn, vec2 conn_vel, vec2 rotation_chunk, room_view const& room) {
-            h.last_pos = h.pos;
-            using player::limb_mode;
-            if (h.mode == limb_mode::hunt_relative_position)
-                h.absolute_hunt_pos = conn + rotate_around_origo(h.relative_hunt_pos, aim(rotation_chunk, conn));
-            if (h.mode == limb_mode::hunt_relative_position || h.mode == limb_mode::hunt_absolute_position) {
-                if (custom::dist_less(h.absolute_hunt_pos, h.pos, h.hunt_speed)) {
-                    h.vel = h.absolute_hunt_pos - h.pos;
-                    h.reached_snap_position = 1;
-                } else {
-                    h.vel = rw::lerp(h.vel, custom::dir_vec(h.pos, h.absolute_hunt_pos) * h.hunt_speed, h.quickness);
-                    h.reached_snap_position = 0;
-                }
-            } else if (h.mode == limb_mode::retracted) {
-                h.vel = conn_vel;
-                h.pos = conn;
-                h.reached_snap_position = 1;
-            } else {
-                h.reached_snap_position = 0;
-            }
-            h.quickness = hand_quickness;
-            h.hunt_speed = hand_hunt_speed;
-            if (h.mode != limb_mode::retracted) {
-                h.pos += h.vel;
-                if (h.mode == limb_mode::hunt_relative_position)
-                    h.pos += conn_vel;
-                as_body_part(h, [&](player::body_part& bp) { push_out_of_terrain(bp, room, hand_surface_friction); });
-            }
-        }
-
         // SlugcatHand.EngageInMovement: true when the hand is free to do
         // something else (hold an item, or retract)
         bool engage_in_movement(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room) {
@@ -519,8 +309,8 @@ namespace player_graphics {
             auto const b0 = player::body_chunk(state, p, 0);
             vec2 const c0 = w.body_chunk_get_pos(b0);
             vec2 const v0 = w.body_chunk_get_vel(b0);
-            limb_update(h, c0, v0, w.body_chunk_get_pos(player::body_chunk(state, p, 1)), room);
-            as_body_part(h, [&](player::body_part& bp) { connect_to_point(bp, c0, 20.f, false, 0.f, v0, 0.f, 0.f); });
+            body_parts::limb_update(h, hand, c0, v0, w.body_chunk_get_pos(player::body_chunk(state, p, 1)), room);
+            body_parts::as_body_part(h, hand.rad, [&](player::body_part& bp) { connect_to_point(bp, c0, 20.f, false, 0.f, v0, 0.f, 0.f); });
             bool flag;
             if (h.reaching_for_object) {
                 h.mode = limb_mode::hunt_absolute_position;

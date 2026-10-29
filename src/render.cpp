@@ -15,6 +15,7 @@
 #include "render.hpp"
 #include "unity_assets.hpp"
 #include "centipede.hpp"
+#include "centipede_graphics.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -687,11 +688,74 @@ void main() {
             return rgba(b(c.x), b(c.y), b(c.z), b(a));
         }
 
+        // RoomPalette.GetPixel(x, y) of the room's palette (rows count from the bottom)
+        rw::vec3 palette_texel(state const& r, sys::game_state const& s, dcon::room_id room, int x, int y) {
+            auto const palette = s.world.room_get_palette(room).id;
+            if (!palette || r.palette_pixels.empty())
+                return rw::vec3{0.f, 0.f, 0.f};
+            uint8_t const* p = r.palette_pixels.data() + (size_t(palette.index()) * palette_width * palette_height
+                + size_t(palette_height - 1 - y) * palette_width + size_t(x)) * 3;
+            return rw::vec3{float(p[0]) / 255.f, float(p[1]) / 255.f, float(p[2]) / 255.f};
+        }
+
+        // RoomPalette.blackColor and .darkness
+        rw::vec3 palette_black(state const& r, sys::game_state const& s, dcon::room_id room) {
+            return palette_texel(r, s, room, 2, 7);
+        }
+        float palette_darkness(state const& r, sys::game_state const& s, dcon::room_id room) {
+            return 1.f - palette_texel(r, s, room, 30, 7).x;
+        }
+
+        // The sprites and TriangleMesh pieces of a ported DrawSprites through an
+        // atlas (textured batch): `frame` finds an element's game_frame, or
+        // nullptr to skip it, `white_uv` is a white texel for the triangles
+        template<typename Find>
+        void emit_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, Find&& frame, float tw, float th, vec2 white_uv, float vis = 1.f) {
+            for (auto const& c : cmds) {
+                if (c.is_triangle) {
+                    uint32_t const col = to_rgba(c.color, vis);
+                    for (int k = 0; k < 3; ++k) {
+                        uint32_t const vc = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis) : col;
+                        r.batch.push_back(vertex{c.tri[k].x, c.tri[k].y, vc, white_uv.x, white_uv.y});
+                    }
+                    continue;
+                }
+                game_frame const* f = frame(c.spr.element);
+                if (f == nullptr)
+                    continue;
+                // FSprite.UpdateLocalVertices: the element's source rect around
+                // the anchor, the packed (trimmed) part placed inside it
+                float const x0 = -c.spr.anchor.x * f->source_w + f->trim_x;
+                float const y0 = -c.spr.anchor.y * f->source_h + (f->source_h - f->trim_y - f->h);
+                float const lx0 = x0 * c.spr.scale.x, lx1 = (x0 + f->w) * c.spr.scale.x;
+                float const ly0 = y0 * c.spr.scale.y, ly1 = (y0 + f->h) * c.spr.scale.y;
+                // Futile: rotation is clockwise
+                float const rad = c.spr.rotation * mathf::deg2rad;
+                float const cs = std::cos(rad), sn = std::sin(rad);
+                auto const place = [&](float lx, float ly) { return c.spr.pos + vec2{lx * cs + ly * sn, -lx * sn + ly * cs}; };
+                uint32_t corner[4]; // top left, top right, bottom right, bottom left
+                for (int k = 0; k < 4; ++k)
+                    corner[k] = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis) : to_rgba(c.spr.color, vis);
+                float const u0 = f->x / tw, u1 = (f->x + f->w) / tw;
+                float const v_top = f->y / th, v_bottom = (f->y + f->h) / th;
+                vertex const bl{place(lx0, ly0).x, place(lx0, ly0).y, corner[3], u0, v_bottom};
+                vertex const br{place(lx1, ly0).x, place(lx1, ly0).y, corner[2], u1, v_bottom};
+                vertex const tr{place(lx1, ly1).x, place(lx1, ly1).y, corner[1], u1, v_top};
+                vertex const tl{place(lx0, ly1).x, place(lx0, ly1).y, corner[0], u0, v_top};
+                r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+            }
+        }
+
+        // through the game's own atlases (game_texture)
+        void emit_game_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds) {
+            emit_cmds(r, cmds, [&](std::string_view e) { return find_game_frame(r, e); }, float(r.game_width), float(r.game_height),
+                vec2{1.f / float(r.game_width), 1.f / float(r.game_height)});
+        }
+
         // PlayerGraphics sprites through the slugcat atlas (textured batch)
         void build_slugcats(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             auto const& world = s.world;
-            static std::vector<player_graphics::draw_cmd> cmds;
-            painter p{r.batch};
+            static std::vector<sprites::draw_cmd> cmds;
             float const tw = float(r.slugcat_width);
             float const th = float(r.slugcat_height);
             auto const white_it = r.slugcat_frames.find("pixel");
@@ -707,36 +771,16 @@ void main() {
                 // the Watcher's camouflage: a plain fade out (vanilla masks it into the background)
                 float const camo = mathf::lerp(world.player_get_last_camo_progress(pid), world.player_get_camo_progress(pid), alpha);
                 float const vis = 1.f - 0.88f * camo;
-                for (auto const& c : cmds) {
-                    if (c.is_triangle) {
-                        uint32_t const col = to_rgba(c.color, vis);
-                        for (int k = 0; k < 3; ++k) {
-                            uint32_t const vc = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis) : col;
-                            r.batch.push_back(vertex{c.tri[k].x, c.tri[k].y, vc, white_uv.x, white_uv.y});
-                        }
-                        continue;
-                    }
-                    auto const it = r.slugcat_frames.find(std::string{c.spr.element});
+                game_frame tmp;
+                emit_cmds(r, cmds, [&](std::string_view e) -> game_frame const* {
+                    auto const it = r.slugcat_frames.find(std::string{e});
                     if (it == r.slugcat_frames.end())
-                        continue;
+                        return nullptr;
                     auto const& f = it->second;
-                    // Futile: rotation is clockwise, anchor relative to the element
-                    float const rad = c.spr.rotation * mathf::deg2rad;
-                    float const cs = std::cos(rad), sn = std::sin(rad);
-                    float const lx0 = -c.spr.anchor.x * f.w * c.spr.scale.x, lx1 = (1.f - c.spr.anchor.x) * f.w * c.spr.scale.x;
-                    float const ly0 = -c.spr.anchor.y * f.h * c.spr.scale.y, ly1 = (1.f - c.spr.anchor.y) * f.h * c.spr.scale.y;
-                    auto const place = [&](float lx, float ly) { return c.spr.pos + vec2{lx * cs + ly * sn, -lx * sn + ly * cs}; };
-                    uint32_t const col = to_rgba(c.spr.color, vis);
-                    float const u0 = f.x / tw, u1 = (f.x + f.w) / tw;
-                    float const v_top = f.y / th, v_bottom = (f.y + f.h) / th;
-                    vertex const bl{place(lx0, ly0).x, place(lx0, ly0).y, col, u0, v_bottom};
-                    vertex const br{place(lx1, ly0).x, place(lx1, ly0).y, col, u1, v_bottom};
-                    vertex const tr{place(lx1, ly1).x, place(lx1, ly1).y, col, u1, v_top};
-                    vertex const tl{place(lx0, ly1).x, place(lx0, ly1).y, col, u0, v_top};
-                    r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
-                }
+                    tmp = game_frame{f.x, f.y, f.w, f.h, false, 0.f, 0.f, f.w, f.h};
+                    return &tmp;
+                }, tw, th, white_uv, vis);
             });
-            (void)p;
         }
 
         // fallback when there is no slugcat atlas
@@ -766,6 +810,8 @@ void main() {
         // `behind`: only the items drawn behind creatures (Hunter's back spear),
         // else every other one
         bool draw_new_item(painter& p, sys::game_state const& s, dcon::item_id it, world::item_type type, vec2 pos, float alpha);
+        void dangle_fruit_cmds(sys::game_state const& s, dcon::item_id it, bool rotted, vec2 pos, float alpha, rw::vec3 black, float darkness,
+            std::vector<sprites::draw_cmd>& out);
 
         void build_items(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool behind) {
             auto const& world = s.world;
@@ -782,6 +828,14 @@ void main() {
                 auto const c = items::chunk(s, it);
                 vec2 const pos = rw::lerp(world.body_chunk_get_last_pos(c), world.body_chunk_get_pos(c), alpha);
                 auto const type = world.item_get_type(it);
+                // DangleFruit's own sprites (its stalk is drawn behind the creatures)
+                if (r.game_texture != 0 && (type == world::item_type::dangle_fruit || type == world::item_type::rotten_fruit)) {
+                    static std::vector<sprites::draw_cmd> cmds;
+                    cmds.clear();
+                    dangle_fruit_cmds(s, it, type == world::item_type::rotten_fruit, pos, alpha, palette_black(r, s, room.id), palette_darkness(r, s, room.id), cmds);
+                    emit_game_cmds(r, cmds);
+                    return;
+                }
                 // hanging or growing: its stalk first
                 if (auto const anchor = world.item_get_stalk(it); anchor.has_value() && world.item_get_stalk_length(it) > 0.f)
                     p.line(*anchor, pos, 1.2f, rgba(40, 52, 30));
@@ -912,7 +966,8 @@ void main() {
             }
         }
 
-        // SeedCob plants: a stalk from the ground up to the cob, swaying a little.
+        // Without the game's atlases: SeedCob plants as plain shapes, a stalk
+        // from the ground up to the cob, swaying a little.
         // Closed cobs show their rows of seeds, eaten (dead) ones only their open
         // husk, rotten ones a dark swollen pod
         void build_plants(state& r, sys::game_state const& s, world::room_view const& room, float seconds) {
@@ -975,6 +1030,349 @@ void main() {
                         p.circle(c + up * (std::sin(a) * 14.f) + across * (std::cos(a) * 5.f), 2.f, rgba(110, 40, 120));
                     }
                     break;
+                }
+            });
+        }
+
+        constexpr rw::vec3 ripple_color{0.373f, 0.11f, 0.831f}; // RainWorld.RippleColor
+
+        // DangleFruit.DrawSprites: the fruit (A) in the palette's black with its
+        // blue (B) over it; rotten ones (AbstrConsumable.rotted) add two pulsing
+        // lobes in the ripple colour. Vanilla advances the pulse timers by
+        // random steps, here they run at their average rate
+        void dangle_fruit_cmds(sys::game_state const& s, dcon::item_id it, bool rotted, vec2 pos, float alpha, rw::vec3 black, float darkness,
+            std::vector<sprites::draw_cmd>& out) {
+            auto const& w = s.world;
+            // DangleFruit<bites eaten><A|B>; nothing bites them yet, all three are left
+            constexpr std::string_view names[3][2] = {{"DangleFruit0A", "DangleFruit0B"}, {"DangleFruit1A", "DangleFruit1B"}, {"DangleFruit2A", "DangleFruit2B"}};
+            int const bites = 3;
+            auto const& name = names[rw::custom::int_clamp(3 - bites, 0, 2)];
+            // on its stalk, Stalk.Update turns it towards the rope
+            auto const anchor = w.item_get_stalk(it);
+            vec2 const rot = anchor.has_value() && w.item_get_stalk_length(it) > 0.f ? rw::custom::dir_vec(pos, *anchor)
+                                                                                    : rw::slerp(w.item_get_last_rotation(it), w.item_get_rotation(it), alpha);
+            vec2 const perp = rw::custom::perpendicular_vector(rot);
+            rw::vec3 const base = rotted ? ripple_color : rw::vec3{0.f, 0.f, 1.f};
+            rw::vec3 const color = base + (black - base) * darkness;
+            uint32_t const seed = uint32_t(it.index()) * 2654435761u;
+            float const ticks = float(s.tick) + alpha;
+            float const pulse = float(seed % 10000u) + ticks * 5.f;
+            float const left_pulse = float((seed >> 8) % 1000u) + ticks;
+            float const right_pulse = float((seed >> 16) % 1000u) + ticks;
+            vec2 offset{0.f, 0.f};
+            vec2 dir = rot;
+            int const n = rotted ? 6 : 2;
+            for (int j = 0; j < n; ++j) {
+                float scale = 1.f;
+                if (rotted) {
+                    if (j >= 4) {
+                        dir = rw::custom::deg_to_vec(rw::custom::vec_to_deg(perp) + std::sin(left_pulse / mathf::pi / 40.f + 1.5707964f) * 45.f);
+                        offset = dir * 4.f;
+                        scale = 0.65f + std::sin(pulse / mathf::pi / 40.f + 1.5707964f) * 0.25f;
+                    } else if (j >= 2) {
+                        dir = rw::custom::deg_to_vec(rw::custom::vec_to_deg(-perp) + std::sin(right_pulse / mathf::pi / 40.f + 4.712389f) * 45.f);
+                        offset = dir * 4.f;
+                        scale = 0.65f + std::sin(pulse / mathf::pi / 40.f + 4.712389f) * 0.25f;
+                    } else {
+                        scale = 0.9f + std::sin(pulse / mathf::pi / 40.f) * 0.1f;
+                    }
+                }
+                sprites::add(out, sprites::sprite{name[j % 2], pos + offset, rw::custom::vec_to_deg(dir), vec2{scale, scale}, vec2{0.5f, 0.5f},
+                    j % 2 == 0 ? black : color});
+            }
+        }
+
+        // DangleFruit.Stalk.DrawSprites: the rope from the ceiling to the fruit
+        // as a long mesh in the palette's black. Vanilla simulates the rope's
+        // segments; here they rest on the straight line they start on, with
+        // the same per segment kinks
+        void dangle_stalk_cmds(dcon::item_id it, vec2 stuck, vec2 fruit, float rope_length, rw::vec3 black, std::vector<sprites::draw_cmd>& out) {
+            int const segs = std::max(1, int(rope_length / 15.f));
+            float const conn_rad = rope_length / mathf::pow(float(segs), 1.1f);
+            rw::rng rng{uint32_t(it.index()) * 2654435761u | 1u};
+            static std::vector<vec2> v;
+            v.assign(size_t(segs) * 4, vec2{0.f, 0.f});
+            vec2 a = stuck;
+            float d = 1.5f;
+            for (int i = 0; i < segs; ++i) {
+                float const t = segs > 1 ? float(i) / float(segs - 1) : 1.f;
+                float const wid = rw::custom::lerp_map(t, 0.f, 0.5f, 1.f, 0.f) + mathf::lerp(1.f, 0.5f, std::sin(mathf::pow(t, 3.5f) * mathf::pi));
+                vec2 const disp = rw::custom::deg_to_vec(rng.value() * 360.f);
+                vec2 p = i == segs - 1 ? fruit : rw::lerp(stuck, fruit, t);
+                vec2 const dir = rw::normalized(a - p);
+                vec2 const across = rw::custom::perpendicular_vector(dir);
+                if (i < segs - 1)
+                    p += (dir * disp.y + across * disp.x) * rw::custom::lerp_map(rw::distance(a, p), conn_rad, conn_rad * 5.f, 4.f, 0.f);
+                p = vec2{std::floor(p.x) + 0.5f, std::floor(p.y) + 0.5f};
+                v[size_t(i) * 4] = a - across * d;
+                v[size_t(i) * 4 + 1] = a + across * d;
+                v[size_t(i) * 4 + 2] = p - across * wid;
+                v[size_t(i) * 4 + 3] = p + across * wid;
+                a = p;
+                d = wid;
+            }
+            sprites::long_mesh(out, v.data(), v.size(), black);
+        }
+
+        // SeedCob (PlaceInRoom, DrawSprites, ApplyPalette) at rest: the stalk
+        // from a spot on the ground below, the cob, the two halves of its
+        // husk (wide open on eaten ones, with the popped seeds inside) and the
+        // leaves at its foot. The layout is rolled with UnityEngine.Random
+        // seeded by the placed x, like vanilla
+        void seed_cob_cmds(world::room_view const& room, vec2 placed, world::thing_kind kind, rw::vec3 black, rw::vec3 plant, float darkness,
+            vec2 light_angle, float pulse, std::vector<sprites::draw_cmd>& out) {
+            namespace custom = rw::custom;
+            bool const dead = kind == world::thing_kind::dead_seed_cob;
+            bool const rotted = kind == world::thing_kind::rotten_seed_cob;
+            float const open = dead ? 1.f : 0.f;
+
+            rw::unity_random rnd{int32_t(placed.x)};
+            vec2 root{placed.x, -10.f};
+            rw::ivec2 const tp = world::room_view::get_tile_position(placed);
+            rw::ivec2 roots[3];
+            int root_count = 0;
+            for (int i = tp.x - 1; i <= tp.x + 1; ++i) {
+                // (vanilla compares the tile x, not the offset, with 0)
+                for (int j = tp.y + (i == 0 ? 0 : -2); j >= 0; --j) {
+                    if (room.get_tile(i, j - 1).solid()) {
+                        if (!room.get_tile(i, j).solid())
+                            roots[root_count++] = rw::ivec2{i, j - 1};
+                        break;
+                    }
+                }
+            }
+            if (root_count > 0) {
+                rw::ivec2 const at = roots[rnd.range(0, root_count)];
+                root = world::room_view::middle_of_tile(at) + vec2{mathf::lerp(-10.f, 10.f, rnd.value()), 10.f};
+            }
+            float const dist = mathf::lerp(60.f, rw::distance(root, placed) / 2.f, 0.3f);
+            int const leaf_count = custom::int_clamp(int(std::nearbyint(mathf::lerp(dist / 10.f, 10.f, 0.5f))), 4, 14);
+            int const seed_count = custom::int_clamp(int(std::nearbyint(dist / 2.f)), 10, 70);
+            vec2 seeds[70];
+            for (int k = 0; k < seed_count; ++k) {
+                float const t = float(k) / float(seed_count - 1);
+                seeds[k] = vec2{mathf::lerp(-1.f, 1.f, rnd.value()) * mathf::pow(std::sin(t * mathf::pi), 0.5f), t};
+            }
+            int const stalk_segments = custom::int_clamp(int(rw::distance(root, placed) / 10.f), 5, 50);
+            constexpr int cob_segments = 10;
+            vec2 const root_dir = custom::deg_to_vec(custom::aim(root, placed) + mathf::lerp(-45.f, 45.f, rnd.value()));
+            vec2 const cob_dir = custom::deg_to_vec(custom::aim(placed, root) + mathf::lerp(-25.f, 25.f, rnd.value()));
+            vec2 leaf_shape[14]; // leaves[m, 3]: x the width, y the length
+            for (int m = 0; m < leaf_count; ++m) {
+                leaf_shape[m].y = mathf::lerp(0.5f, 1.5f, rnd.value()) * dist * 0.2f;
+                float const wid = mathf::lerp(0.5f, 1.5f, rnd.value()) * mathf::lerp(dist, 100.f, 0.5f) * 0.01f;
+                leaf_shape[m].x = wid * (rnd.value() < 0.5f ? -1.f : 1.f);
+            }
+            // the two chunks where SeedCob.Update keeps them
+            vec2 const top = placed;
+            vec2 const bottom = placed + cob_dir * dist;
+
+            // ApplyPalette
+            auto const mix = [](rw::vec3 a, rw::vec3 b, float t) { return a + (b - a) * mathf::clamp01(t); };
+            rw::vec3 yellow = mix(rw::vec3{0.9f, 0.83f, 0.5f}, black, dead ? 0.95f + 0.5f * darkness : 0.18f + 0.7f * darkness);
+            rw::vec3 accent{1.f, 0.f, 0.f};
+            if (rotted)
+                yellow = accent = ripple_color;
+            rw::vec3 const light = dead ? mix(yellow, plant, 0.75f) : yellow + rw::vec3{0.3f, 0.3f, 0.3f} * mathf::lerp(1.f, 0.15f, darkness);
+
+            // StalkSprite(0) black, StalkSprite(1) the lit side, offset away from the light
+            static std::vector<vec2> stalk[2];
+            static std::vector<rw::vec4> stalk_colors;
+            for (auto& v : stalk)
+                v.assign(size_t(stalk_segments) * 4, vec2{0.f, 0.f});
+            float const span = rw::distance(root, placed);
+            float prev_w = 0.5f;
+            vec2 a = root;
+            for (int i = 0; i < stalk_segments; ++i) {
+                float const f = float(i) / float(stalk_segments - 1);
+                vec2 const p = custom::bezier(root, root + root_dir * span * 0.2f, bottom, bottom + custom::dir_vec(top, bottom) * span * 0.2f, f);
+                vec2 const n = rw::normalized(a - p);
+                vec2 const across = custom::perpendicular_vector(n);
+                float const d = rw::distance(a, p) / 5.f;
+                float const wid = mathf::lerp(dist / 14.f, 1.5f, mathf::pow(std::sin(mathf::pow(f, 2.f) * mathf::pi), 0.5f));
+                float k = 1.f;
+                vec2 shift{0.f, 0.f};
+                for (int j = 0; j < 2; ++j) {
+                    auto& v = stalk[j];
+                    v[size_t(i) * 4] = a - n * d - across * (wid + prev_w) * 0.5f * k + shift;
+                    v[size_t(i) * 4 + 1] = a - n * d + across * (wid + prev_w) * 0.5f * k + shift;
+                    v[size_t(i) * 4 + 2] = p + n * d - across * wid * k + shift;
+                    v[size_t(i) * 4 + 3] = p + n * d + across * wid * k + shift;
+                    k = 0.35f;
+                    shift += -rw::normalized(light_angle) * wid * 0.5f;
+                }
+                a = p;
+                prev_w = wid;
+            }
+            stalk_colors.resize(stalk[1].size());
+            for (size_t i = 0; i < stalk_colors.size(); ++i) {
+                float const t = float(i) / float(stalk_colors.size() - 1);
+                rw::vec3 const c = mix(black, plant, 0.4f + mathf::pow(1.f - t, 0.5f) * 0.4f);
+                stalk_colors[i] = rw::vec4{c.x, c.y, c.z, 1.f};
+            }
+            sprites::long_mesh(out, stalk[0].data(), stalk[0].size(), black);
+            sprites::long_mesh(out, stalk[1].data(), stalk_colors.data(), stalk[1].size());
+
+            // CobSprite
+            vec2 cob[cob_segments * 4];
+            a = bottom + custom::dir_vec(top, bottom);
+            prev_w = 2.f;
+            for (int k = 0; k < cob_segments; ++k) {
+                vec2 const p = rw::lerp(bottom, top, float(k) / float(cob_segments - 1));
+                vec2 const n = rw::normalized(a - p);
+                vec2 const across = custom::perpendicular_vector(n);
+                float const d = rw::distance(a, p) / 5.f;
+                cob[k * 4] = a - n * d - across * (2.f + prev_w) * 0.5f;
+                cob[k * 4 + 1] = a - n * d + across * (2.f + prev_w) * 0.5f;
+                cob[k * 4 + 2] = p + n * d - across * 2.f;
+                cob[k * 4 + 3] = p + n * d + across * 2.f;
+                a = p;
+                prev_w = 2.f;
+            }
+            sprites::long_mesh(out, cob, cob_segments * 4, yellow);
+
+            // ShellSprite(0/1): each half of the husk bends out by `open`
+            vec2 shell[2][cob_segments * 4];
+            for (int l = 0; l < 2; ++l) {
+                float const side = -1.f + float(l) * 2.f;
+                prev_w = 2.f;
+                a = top + custom::dir_vec(bottom, top) * 7.f;
+                float ang = custom::aim(top, bottom);
+                vec2 p = top;
+                for (int m = 0; m < cob_segments; ++m) {
+                    float const t = float(m) / float(cob_segments - 1);
+                    p += custom::deg_to_vec(ang + side * mathf::pow(open, mathf::lerp(1.f, 0.1f, t)) * 50.f * mathf::pow(t, 0.5f)) * (rw::distance(top, bottom) * 1.1f + 8.f) / float(cob_segments);
+                    vec2 const n = rw::normalized(a - p);
+                    vec2 const across = custom::perpendicular_vector(n);
+                    float const d = rw::distance(a, p) / 5.f;
+                    float const wid = mathf::lerp(2.f, 6.f, mathf::pow(std::sin(mathf::pow(t, 0.5f) * mathf::pi), 0.5f));
+                    shell[l][m * 4] = a - n * d - across * (wid + prev_w) * 0.5f * float(1 - l);
+                    shell[l][m * 4 + 1] = a - n * d + across * (wid + prev_w) * 0.5f * float(l);
+                    shell[l][m * 4 + 2] = p + n * d - across * wid * float(1 - l);
+                    shell[l][m * 4 + 3] = p + n * d + across * wid * float(l);
+                    a = p;
+                    prev_w = wid;
+                    ang = custom::vec_to_deg(-n);
+                }
+            }
+            rw::vec4 shell_colors[cob_segments * 4];
+            for (int k = 0; k < cob_segments * 4; ++k) {
+                float const f = 1.f - float(k) / float(cob_segments * 4 - 1);
+                rw::vec3 const c = mix(black, accent, mathf::pow(f, 2.5f) * 0.4f);
+                shell_colors[k] = rw::vec4{c.x, c.y, c.z, 1.f};
+            }
+
+            // SeedSprite(n, 0/1/2): the seeds, their light dots and their stars
+            if (open > 0.f) {
+                vec2 const along = custom::dir_vec(bottom, top);
+                vec2 const across = custom::perpendicular_vector(along);
+                sprites::sprite seed_sprites[3][70];
+                for (int n = 0; n < seed_count; ++n) {
+                    bool const popped = true; // only opened cobs are drawn open, all popped
+                    vec2 const at = bottom + along * seeds[n].y * (rw::distance(bottom, top) - 10.f) + across * seeds[n].x * 3.f;
+                    float sz = 1.f + std::sin(float(n) / float(seed_count - 1) * mathf::pi);
+                    if (dead)
+                        sz *= 0.5f;
+                    if (rotted)
+                        sz *= 0.75f + std::sin(pulse / mathf::pi / 40.f + float(n) / float(seed_count - 1) * mathf::pi) * 0.25f;
+                    vec2 out_of{0.f, 0.f};
+                    auto& star = seed_sprites[2][n];
+                    star = sprites::sprite{"pixel", at, 0.f, vec2{1.f, 1.f}, vec2{0.5f, 0.5f}, mix(accent, black, dead ? 0.6f : 0.3f)};
+                    if (popped) {
+                        out_of = across * mathf::pow(std::fabs(seeds[n].x), custom::lerp_map(sz, 1.f, 2.f, 1.f, 0.5f)) * mathf::sign(seeds[n].x) * 3.5f * sz;
+                        if (!dead)
+                            star.element = "tinyStar";
+                        star.rotation = custom::vec_to_deg(along);
+                        star.scale.x = mathf::pow(1.f - std::fabs(seeds[n].x), 0.2f);
+                    }
+                    star.pos = at + out_of;
+                    seed_sprites[0][n] = sprites::sprite{"JetFishEyeA", at, 0.f, vec2{1.f, 1.f} * (popped ? sz : 0.35f), vec2{0.5f, 0.5f}, yellow};
+                    seed_sprites[1][n] = sprites::sprite{"JetFishEyeA", at + out_of * 0.35f, 0.f, vec2{1.f, 1.f} * ((popped ? sz : 0.4f) * 0.5f), vec2{0.5f, 0.5f}, light};
+                    if (rotted) {
+                        seed_sprites[0][n].color = mix(seed_sprites[0][n].color, black, 0.7f);
+                        seed_sprites[1][n].color = mix(seed_sprites[1][n].color, black, 0.5f);
+                        star.color = mix(star.color, black, 0.9f);
+                    }
+                }
+                for (auto const& part : seed_sprites)
+                    for (int n = 0; n < seed_count; ++n)
+                        sprites::add(out, part[n]);
+            }
+            for (auto const& h : shell)
+                sprites::long_mesh(out, h, shell_colors, cob_segments * 4);
+
+            // LeafSprite: where SeedCob.Update's leaves settle, fanned out
+            // around the line of the cob
+            float const fan = custom::aim(top, bottom);
+            for (int m = 0; m < leaf_count; ++m) {
+                vec2 const tip = bottom + custom::deg_to_vec(fan + mathf::lerp(-45.f, 45.f, float(m) / float(leaf_count - 1))) * leaf_shape[m].y;
+                sprites::add(out, sprites::sprite{"CentipedeLegB", bottom, custom::aim(bottom, tip), vec2{leaf_shape[m].x, rw::distance(bottom, tip) / 26.f},
+                    vec2{0.5f, 0.f}, black});
+            }
+        }
+
+        // the seed cobs of the room through the game's atlases (Items container)
+        void build_seed_cobs(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            cmds.clear();
+            rw::vec3 const black = palette_black(r, s, room.id);
+            rw::vec3 const plant = palette_texel(r, s, room.id, 0, 5);
+            float const darkness = palette_darkness(r, s, room.id);
+            w.room_for_each_thing_location(room.id, [&](dcon::thing_location_id l) {
+                auto const t = w.thing_location_get_thing(l);
+                auto const kind = w.placed_thing_get_kind(t);
+                if (kind != world::thing_kind::seed_cob && kind != world::thing_kind::dead_seed_cob && kind != world::thing_kind::rotten_seed_cob)
+                    return;
+                float const pulse = float(uint32_t(t.index()) * 2654435761u % 10000u) + (float(s.tick) + alpha) * 5.f;
+                seed_cob_cmds(room, w.placed_thing_get_pos(t), kind, black, plant, darkness, w.room_get_light_angle(room.id), pulse, cmds);
+            });
+            emit_game_cmds(r, cmds);
+        }
+
+        // the dangle fruits' stalks through the game's atlases (Background container)
+        void build_fruit_stalks(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            cmds.clear();
+            rw::vec3 const black = palette_black(r, s, room.id);
+            w.for_each_item([&](dcon::item_id it) {
+                auto const type = w.item_get_type(it);
+                if (type != world::item_type::dangle_fruit && type != world::item_type::rotten_fruit)
+                    return;
+                auto const o = items::body(s, it);
+                if (w.physical_object_get_room_from_object_location(o) != room.id)
+                    return;
+                auto const anchor = w.item_get_stalk(it);
+                float const len = w.item_get_stalk_length(it);
+                if (!anchor.has_value() || len <= 0.f)
+                    return;
+                auto const c = items::chunk(s, it);
+                vec2 const pos = rw::lerp(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c), alpha);
+                dangle_stalk_cmds(it, *anchor, pos, len, black, cmds);
+            });
+            emit_game_cmds(r, cmds);
+        }
+
+        // Centipedes through CentipedeGraphics and the game's atlases
+        void build_centipede_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            rw::vec3 const black = palette_black(r, s, room.id);
+            float const darkness = palette_darkness(r, s, room.id);
+            painter p{r.batch};
+            w.for_each_centipede([&](dcon::centipede_id c) {
+                if (w.physical_object_get_room_from_object_location(centipede::body(s, c)) != room.id)
+                    return;
+                cmds.clear();
+                centipede_graphics::build(s, c, alpha, black, darkness, cmds);
+                emit_game_cmds(r, cmds);
+                // the LightSource of a shock
+                float const flash = w.centipede_get_light_flash(c);
+                if (flash > 0.f) {
+                    auto const k = centipede::chunk(s, c, centipede::head_index(s, c));
+                    vec2 const head = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
+                    p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
                 }
             });
         }
@@ -1042,18 +1440,7 @@ void main() {
             });
         }
 
-        // Custom.HSL2RGB
-        rw::vec3 hsl(float h, float s, float l) {
-            h = h - std::floor(h);
-            auto const f = [&](float n) {
-                float const k = std::fmod(n + h * 12.f, 12.f);
-                float const a = s * std::min(l, 1.f - l);
-                return l - a * std::max(-1.f, std::min({k - 3.f, 9.f - k, 1.f}));
-            };
-            return rw::vec3{f(0.f), f(8.f), f(4.f)};
-        }
-
-        // Centipedes, with shapes of our own: a chain of overlapping shell
+        // Without the game's atlases: centipedes with shapes of our own, a chain of overlapping shell
         // plates (dark rim, coloured plate, a lighter ridge catching the light)
         // over a pale belly line, three jointed legs a side per plate reaching
         // for the nearest surface and stepping with the walk cycle, curved
@@ -1083,9 +1470,9 @@ void main() {
                 rw::vec3 const brown{0.42f, 0.27f, 0.15f};
                 auto const earthy = [&](rw::vec3 c, float k) { return c + (brown * (0.6f + 0.8f * (c.x + c.y + c.z) / 3.f) - c) * k; };
                 rw::vec3 const chitin{0.09f, 0.065f, 0.05f};
-                rw::vec3 const plate = earthy(hsl(hue, sat, dead ? 0.28f : 0.42f), 0.5f);
-                rw::vec3 const ridge = earthy(hsl(hue, sat * 0.8f, dead ? 0.38f : 0.62f), 0.4f);
-                rw::vec3 const belly = earthy(hsl(hue + 0.05f, sat * 0.4f, 0.2f), 0.6f);
+                rw::vec3 const plate = earthy(rw::custom::hsl2rgb(hue, sat, dead ? 0.28f : 0.42f), 0.5f);
+                rw::vec3 const ridge = earthy(rw::custom::hsl2rgb(hue, sat * 0.8f, dead ? 0.38f : 0.62f), 0.4f);
+                rw::vec3 const belly = earthy(rw::custom::hsl2rgb(hue + 0.05f, sat * 0.4f, 0.2f), 0.6f);
                 float const cycle = w.centipede_get_walk_cycle(c);
                 float const scale = mathf::lerp(0.75f, 1.35f, size);
                 auto const oval = [&](vec2 ctr, vec2 d, vec2 sd, float a, float b, uint32_t col) {
@@ -1584,16 +1971,6 @@ void main() {
             glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
         }
 
-        // RoomPalette.GetPixel(x, y) of the room's palette (rows count from the bottom)
-        rw::vec3 palette_texel(state const& r, sys::game_state const& s, dcon::room_id room, int x, int y) {
-            auto const palette = s.world.room_get_palette(room).id;
-            if (!palette || r.palette_pixels.empty())
-                return rw::vec3{0.f, 0.f, 0.f};
-            uint8_t const* p = r.palette_pixels.data() + (size_t(palette.index()) * palette_width * palette_height
-                + size_t(palette_height - 1 - y) * palette_width + size_t(x)) * 3;
-            return rw::vec3{float(p[0]) / 255.f, float(p[1]) / 255.f, float(p[2]) / 255.f};
-        }
-
         uint32_t decal_texture(state& r, sys::game_state const& s, std::string const& name) {
             auto it = r.decal_textures.find(name);
             if (it != r.decal_textures.end())
@@ -2020,10 +2397,30 @@ void main() {
         }
         // the warps bend the level behind them, under the creatures
         draw_warp_tears(r, s, room, alpha, cam, proj, seconds);
-        // the ground that isn't tiles, and the plants on it
-        draw_flat([&] {
+        // through the game's atlases when they are loaded (their white corner
+        // serves the untextured shapes), else untextured
+        bool const atlas = r.game_texture != 0;
+        auto const draw_game = [&](auto&& build) {
+            r.batch.clear();
+            build();
+            if (r.batch.empty())
+                return;
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            glUseProgram(r.program);
+            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
+            glBindTexture(GL_TEXTURE_2D, r.game_texture);
+            glUniform1i(r.u_textured, atlas ? 1 : 0);
+            upload_and_draw(r, 0, r.batch.size());
+            glUniform1i(r.u_textured, 0);
+        };
+        // the ground that isn't tiles, the plants on it and the dangle fruits'
+        // stalks (the Background container)
+        draw_game([&] {
             build_sand(r, s, room, cam);
-            build_plants(r, s, room, seconds);
+            if (atlas)
+                build_fruit_stalks(r, s, room, alpha);
+            else
+                build_plants(r, s, room, seconds);
         });
 
         // the sprite layers: rot tubes, back spears, creatures (midground), items, gate doors
@@ -2036,7 +2433,13 @@ void main() {
         else
             build_slugcat_circles(r, s, room, alpha);
         size_t const bodies_end = r.batch.size();
-        build_centipedes(r, s, room, alpha);
+        // the rest of the Midground, then the Items container (seed cobs, items)
+        if (atlas) {
+            build_centipede_sprites(r, s, room, alpha);
+            build_seed_cobs(r, s, room, alpha);
+        } else {
+            build_centipedes(r, s, room, alpha);
+        }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
@@ -2047,8 +2450,10 @@ void main() {
             glUniform1i(r.u_textured, 1);
         }
         upload_and_draw(r, 0, bodies_end);
-        glUniform1i(r.u_textured, 0);
+        glBindTexture(GL_TEXTURE_2D, r.game_texture);
+        glUniform1i(r.u_textured, atlas ? 1 : 0);
         upload_and_draw(r, bodies_end, r.batch.size() - bodies_end);
+        glUniform1i(r.u_textured, 0);
 
         if (textured_room) {
             draw_cameras(1);

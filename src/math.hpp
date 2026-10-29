@@ -65,6 +65,21 @@ namespace rw {
         t = mathf::clamp01(t);
         return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t};
     }
+    // Vector3.Slerp on 2D vectors: the angle and the length interpolated
+    inline vec2 slerp(vec2 a, vec2 b, float t) noexcept {
+        t = mathf::clamp01(t);
+        float const la = magnitude(a), lb = magnitude(b);
+        if (la < 1e-5f || lb < 1e-5f)
+            return lerp(a, b, t);
+        float const aa = std::atan2(a.y, a.x);
+        float da = std::atan2(b.y, b.x) - aa;
+        while (da > mathf::pi)
+            da -= 2.f * mathf::pi;
+        while (da < -mathf::pi)
+            da += 2.f * mathf::pi;
+        float const ang = aa + da * t;
+        return vec2{std::cos(ang), std::sin(ang)} * mathf::lerp(la, lb, t);
+    }
     // Vector2.Angle, in degrees
     inline float angle(vec2 from, vec2 to) noexcept {
         float const d = std::sqrt(sqr_magnitude(from) * sqr_magnitude(to));
@@ -90,7 +105,34 @@ namespace rw {
         inline vec2 deg_to_vec(float ang) noexcept {
             return {std::sin(ang * mathf::deg2rad), std::cos(ang * mathf::deg2rad)};
         }
+        // Custom.HSL2RGB
+        inline vec3 hsl2rgb(float h, float s, float l) noexcept {
+            h = h - std::floor(h);
+            auto const f = [&](float n) {
+                float const k = std::fmod(n + h * 12.f, 12.f);
+                float const a = s * mathf::min(l, 1.f - l);
+                return l - a * mathf::max(-1.f, mathf::min(mathf::min(k - 3.f, 9.f - k), 1.f));
+            };
+            return vec3{f(0.f), f(8.f), f(4.f)};
+        }
+        inline float vec_to_deg(vec2 v) noexcept { return std::atan2(v.x, v.y) / 6.2831855f * 360.f; }
+        // AimFromOneVectorToAnother: degrees, clockwise from up
+        inline float aim(vec2 p1, vec2 p2) noexcept { return vec_to_deg(p2 - p1); }
         inline bool dist_less(vec2 a, vec2 b, float dst) noexcept { return magnitude(a - b) < dst; }
+        inline vec2 bezier(vec2 a, vec2 ca, vec2 b, vec2 cb, float f) noexcept {
+            vec2 const m = lerp(ca, cb, f);
+            ca = lerp(a, ca, f);
+            cb = lerp(cb, b, f);
+            ca = lerp(ca, m, f);
+            cb = lerp(m, cb, f);
+            return lerp(ca, cb, f);
+        }
+        // the joint of a two piece limb from `va` reaching for `vc`
+        inline vec2 inverse_kinematic(vec2 va, vec2 vc, float a, float b, float flip) noexcept {
+            float const d = distance(va, vc);
+            float const ang = std::acos(mathf::clamp((d * d + a * a - b * b) / (2.f * d * a), 0.2f, 0.98f)) * (flip * 180.f / 3.1415927f);
+            return va + deg_to_vec(aim(va, vc) + ang) * a;
+        }
         constexpr int32_t int_clamp(int32_t v, int32_t lo, int32_t hi) noexcept { return v < lo ? lo : (v > hi ? hi : v); }
         constexpr float lerp_map(float v, float from_a, float to_a, float from_b, float to_b) noexcept {
             float const t = mathf::inverse_lerp(from_a, to_a, v);
@@ -119,6 +161,29 @@ namespace rw {
         // Random.value: [0, 1]
         float value() noexcept { return float(next() >> 8) * (1.f / 16777215.f); }
         // Random.Range(int, int): [lo, hi)
+        int32_t range(int32_t lo, int32_t hi) noexcept {
+            return hi <= lo ? lo : lo + int32_t(next() % uint32_t(hi - lo));
+        }
+    };
+
+    // UnityEngine.Random itself (Xorshift128 seeded by InitState), for the
+    // cosmetic layouts vanilla rolls from a fixed seed (SeedCob.PlaceInRoom)
+    struct unity_random {
+        uint32_t s[4];
+        explicit unity_random(int32_t seed) noexcept {
+            s[0] = uint32_t(seed);
+            for (int i = 1; i < 4; ++i)
+                s[i] = s[i - 1] * 1812433253u + 1u;
+        }
+        uint32_t next() noexcept {
+            uint32_t const t = s[0] ^ (s[0] << 11);
+            s[0] = s[1];
+            s[1] = s[2];
+            s[2] = s[3];
+            s[3] = s[3] ^ (s[3] >> 19) ^ t ^ (t >> 8);
+            return s[3];
+        }
+        float value() noexcept { return float(next() & 0x7FFFFFu) * (1.f / 8388607.f); }
         int32_t range(int32_t lo, int32_t hi) noexcept {
             return hi <= lo ? lo : lo + int32_t(next() % uint32_t(hi - lo));
         }

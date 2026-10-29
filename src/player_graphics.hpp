@@ -12,30 +12,12 @@
 
 #include "gamestate.hpp"
 #include "math.hpp"
+#include "sprites.hpp"
 #include "world.hpp"
 
 namespace player_graphics {
-    // One FSprite, in room space: rotation is Futile's (degrees, clockwise),
-    // anchor is relative to the element size like FSprite.anchorX/anchorY
-    struct sprite {
-        std::string_view element;
-        rw::vec2 pos;
-        float rotation = 0.f;
-        rw::vec2 scale{1.f, 1.f};
-        rw::vec2 anchor{0.5f, 0.5f};
-        rw::vec3 color{1.f, 1.f, 1.f};
-    };
-    // A draw command, in vanilla sprite order: either a sprite or an
-    // untextured triangle (the tail TriangleMesh)
-    struct draw_cmd {
-        bool is_triangle = false;
-        sprite spr;
-        rw::vec2 tri[3];
-        rw::vec3 color{1.f, 1.f, 1.f};
-        // per vertex colours with alpha (VertexColorSprite, glows)
-        bool vertex_colors = false;
-        rw::vec4 vcol[3];
-    };
+    using sprites::sprite;
+    using sprites::draw_cmd;
     // the Watcher's Void Weaver decorations (longer tail, fluff, halo, gold eyes)
     void set_weaver(sys::game_state& state, dcon::player_id p, bool on);
     bool weaver(sys::game_state const& state, dcon::player_id p);

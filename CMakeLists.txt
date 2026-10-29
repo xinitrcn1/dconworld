@@ -68,7 +68,9 @@ add_executable(rwcpp
     src/gates.cpp
     src/simulation.cpp
     src/pathing.cpp
+    src/body_parts.cpp
     src/centipede.cpp
+    src/centipede_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

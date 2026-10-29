@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "centipede.hpp"
+#include "centipede_graphics.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
 #include "physics.hpp"
@@ -721,6 +722,7 @@ namespace centipede {
         w.centipede_set_last_seen_pos(c, at);
         w.centipede_set_light_flash(c, 0.f);
         w.centipede_set_walk_cycle(c, 0.f);
+        centipede_graphics::reset(state, c);
         return c;
     }
 
@@ -734,8 +736,10 @@ namespace centipede {
 
     void update_room(sys::game_state& state, room_view const& room) {
         state.world.for_each_centipede([&](dcon::centipede_id c) {
-            if (room_of(state, c) == room.id)
+            if (room_of(state, c) == room.id) {
                 update(state, c, room);
+                centipede_graphics::update(state, c, room);
+            }
         });
     }
 

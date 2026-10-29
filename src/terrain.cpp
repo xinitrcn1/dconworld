@@ -124,12 +124,12 @@ namespace terrain {
                 if (s.h[size_t(i)] < around - max_mark)
                     continue;
                 float const fall = 1.f - std::fabs(float(i - c)) / float(r + 1);
-                float const d = weight * press_rate * fall;
+                float const d = weight * press_rate * fall + 0.25f * push;
                 s.h[size_t(i)] -= d;
                 moved += d;
             }
             // moving bodies shove more of it ahead of them
-            float const ahead = mathf::clamp(0.5f + push * 0.1f, 0.f, 1.f);
+            float const ahead = mathf::clamp(0.5f + push, 0.f, 1.f);
             int32_t const left = std::max(0, c - r - 1), right = std::min(n - 1, c + r + 1);
             s.h[size_t(right)] += moved * ahead;
             s.h[size_t(left)] += moved * (1.f - ahead);

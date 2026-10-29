@@ -86,6 +86,8 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
+| `src/centipede_graphics.*` | `CentipedeGraphics`: gripping legs, feelers, body roll, `DrawSprites` with the game's centipede elements |
+| `src/body_parts.*`, `src/sprites.hpp` | `BodyPart`/`GenericBodyPart`/`Limb` helpers and the Futile sprite/mesh commands the graphics ports hand the renderer |
 | `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/water.*` | the water surface: a damped wave height field over x and depth, wall reflections, swells, splashes and wakes from bodies |
 | `src/particles.*` | cosmetic particles: rain, ceiling drips, splash droplets, hit sparks and flashes, landing dust, bubbles |
@@ -248,11 +250,13 @@ tossed rather than thrown: mushrooms and glowing slime mold growing where
 placed, dangle fruit and rotten fruit hanging from the ceiling on a stalk
 until picked, data pearls coloured by type (unique ones glow). The placed
 ones come from the room settings; a few random spears are explosive or
-electric. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand and
-sway. All of them, like the centipedes, are drawn with simple shapes of our
-own; centipedes are a chain of overlapping shell plates with jointed legs,
-feelers and pincers, in an earthy brown take on their colour. Eating isn't
-ported.
+electric. Corn plants (SeedCob, eaten DeadSeedCob, RottenSeedCob) stand at
+rest. Dangle fruit (with its stalk), corn plants and centipedes are drawn
+like vanilla (`DangleFruit`, `SeedCob` and `CentipedeGraphics` DrawSprites)
+with the game's own sprites, read from its Unity data at startup; the corn
+plants' layout is rolled with UnityEngine.Random's own generator and seed.
+Without the Unity data they, like the other items, fall back to simple
+shapes of our own. Eating isn't ported.
 
 The Watcher's sand is a 1D height map built from the room's TerrainHandles
 (a spline through them) the first time the room is used, kept for the
@@ -315,7 +319,10 @@ or region uses is a `palette` object in the data container and one layer of a
 palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
-anchors, plus the 4 segment tail mesh. The level is drawn in two passes split
+anchors, plus the 4 segment tail mesh. Other ported `DrawSprites` (centipedes,
+dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
+`rainworldmsc`, `uiSprites`, `uispritesmsc`) out of `resources.assets` in the
+game's `RainWorld_Data` (`--unity <dir>`; nothing of it is bundled). The level is drawn in two passes split
 on vanilla's depth threshold: background depths first, then sprites (slugcats,
 rocks, gate doors), then only the foreground depths over them, so pipes and
 foreground plants occlude the slugcat. Slugcats have their hands (`SlugcatHand` limbs: gripping poles, ledges and
