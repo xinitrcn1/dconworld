@@ -5,6 +5,7 @@
 
 in vec2 v_room;
 in vec2 v_uv;
+in float v_opacity;
 out vec4 o_color;
 
 uniform sampler2DArray u_level;    // the room's camera images
@@ -40,5 +41,5 @@ void main() {
     // deeper paint sinks into the haze, and a little into the shade
     vec3 col = c.rgb * mix(1.0, 0.75, d);
     col = mix(col, fog, (1.0 - fog_amount) * d);
-    o_color = vec4(col, c.a);
+    o_color = vec4(col, c.a * v_opacity);
 }

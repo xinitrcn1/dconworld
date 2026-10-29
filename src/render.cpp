@@ -1207,7 +1207,8 @@ void main() {
 
         // CustomDecal: the image stretched over the quad, split into a grid
         // (finer for bigger decals) whose inner points the decal's noise
-        // jitters, drawn once per camera image under it
+        // jitters, its corners' opacity blended across it, drawn once per
+        // camera image under it
         void draw_decals(state& r, sys::game_state const& s, world::room_view const& room, glm::mat4 const& proj, int pass, std::vector<vec2> const& cams) {
             auto const& w = s.world;
             if (r.decal_program == 0 || cams.empty())
@@ -1228,6 +1229,9 @@ void main() {
                     longest = std::max(longest, rw::distance(q[k], q[(k + 1) % 4]));
                 int const div = std::clamp(int(std::lround(longest / 150.f)), 1, 20);
                 float const noise = w.decal_placed_get_noise(d);
+                // CustomDecalData.vertices: per corner (opacity, smudge)
+                vec2 const cvv[4] = {w.decal_placed_get_uv_a(d), w.decal_placed_get_uv_b(d), w.decal_placed_get_uv_c(d), w.decal_placed_get_uv_d(d)};
+                float const cv[4][2] = {{cvv[0].x, cvv[0].y}, {cvv[1].x, cvv[1].y}, {cvv[2].x, cvv[2].y}, {cvv[3].x, cvv[3].y}};
                 uint32_t h = uint32_t(int32_t(q[0].x + q[0].y + q[1].x + q[1].y + q[2].x + q[2].y + q[3].x + q[3].y)) * 2654435761u + 1u;
                 auto const roll = [&] {
                     h ^= h << 13; h ^= h >> 17; h ^= h << 5;
@@ -1248,7 +1252,18 @@ void main() {
                             u = mathf::clamp01(u + (roll() - 0.5f) * noise * 0.5f / float(div));
                             v = mathf::clamp01(v + (roll() - 0.5f) * noise * 0.5f / float(div));
                         }
-                        grid[size_t(j * (div + 1) + i)] = vertex{pos.x, pos.y, 0xFFFFFFFFu, u, v};
+                        // the corners' opacity (and smudge), blended across the
+                        // quad and broken up by the noise
+                        auto const corners = [&](int k) {
+                            return mathf::lerp(mathf::lerp(cv[3][k], cv[2][k], ti), mathf::lerp(cv[0][k], cv[1][k], ti), tj);
+                        };
+                        float opacity = mathf::clamp01(corners(0));
+                        float const smudge = mathf::clamp01(corners(1));
+                        if (noise > 0.f) {
+                            opacity = std::pow(opacity, 1.f + (roll() - 0.5f) * noise);
+                            opacity = mathf::lerp(opacity, roll(), noise * std::pow(1.f - 2.f * std::fabs(smudge - 0.5f), 2.5f));
+                        }
+                        grid[size_t(j * (div + 1) + i)] = vertex{pos.x, pos.y, rgba(uint8_t(smudge * 255.f), 255, 255, uint8_t(mathf::clamp01(opacity) * 255.f + 0.5f)), u, v};
                     }
                 }
                 r.batch.clear();
@@ -1361,8 +1376,11 @@ void main() {
                 return;
             }
             float const level = surf->level;
-            if (level + 40.f < cam.pos.y || level - 60.f > cam.pos.y + view_h + 40.f)
+            // only a surface below the view leaves nothing to draw; one above
+            // it still has the view under water
+            if (level + 40.f < cam.pos.y)
                 return;
+            float const top_clip = cam.pos.y + view_h + 40.f;
             rw::vec3 const shallow = palette_texel(r, s, room.id, 4, 7);
             rw::vec3 const deep = palette_texel(r, s, room.id, 5, 7);
             rw::vec3 const top1 = palette_texel(r, s, room.id, 6, 7);
@@ -1378,7 +1396,9 @@ void main() {
             for (int i = 0; i + 1 < n; ++i) {
                 float const xa = x0 + float(i) * step, xb = xa + step;
                 float const ya = level + hgt(xa, 0.f), yb = level + hgt(xb, 0.f);
-                vertex const ta{xa, ya, 0xFFFFFFFFu, xa, 0.f}, tb{xb, yb, 0xFFFFFFFFu, xb, 0.f};
+                // clipped to the view, the depth still measured from the surface
+                float const ca = mathf::min(ya, top_clip), cb = mathf::min(yb, top_clip);
+                vertex const ta{xa, ca, 0xFFFFFFFFu, xa, ya - ca}, tb{xb, cb, 0xFFFFFFFFu, xb, yb - cb};
                 vertex const ba{xa, bottom, 0xFFFFFFFFu, xa, ya - bottom}, bb{xb, bottom, 0xFFFFFFFFu, xb, yb - bottom};
                 r.batch.insert(r.batch.end(), {ta, tb, bb, ta, bb, ba});
             }
@@ -1397,6 +1417,8 @@ void main() {
             glBindTexture(GL_TEXTURE_2D, r.scene_texture);
             upload_and_draw(r, 0, r.batch.size());
 
+            if (level - 60.f > top_clip)
+                return;
             // the surface band: lit from above and a little behind, the slopes
             // facing the light catching the shine
             r.batch.clear();

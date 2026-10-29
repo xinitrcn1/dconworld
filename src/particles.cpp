@@ -30,6 +30,13 @@ namespace particles {
             return r;
         }
 
+        // where the water's front surface is at `x` (waves included)
+        float surface_y(sys::game_state const& state, room_view const& view, float x) {
+            if (auto const* s = water::surface(state, view.id); s != nullptr)
+                return s->level + water::height(state, *s, x, 0.f, 1.f);
+            return view.float_water_level;
+        }
+
         void dust(sys::game_state& state, dcon::room_id room, vec2 at, int count, float strength) {
             auto& r = random();
             for (int i = 0; i < count; ++i) {
@@ -213,10 +220,15 @@ namespace particles {
                             spawn(state, p.room, kind::drop, at, vec2{range(r, -1.5f, 1.5f), range(r, 0.8f, 2.f)}, 0.5f, 0.4f, p.color, p.alpha * 0.8f);
                     }
                     p.life = 1.f;
-                } else if (view.water && !view.point_submerged(p.last_pos) && wet) {
+                } else if (view.water && p.last_pos.y >= surface_y(state, view, p.pos.x) && p.pos.y < surface_y(state, view, p.pos.x)) {
+                    // hit the water (it moved through the surface this tick)
+                    float const at = surface_y(state, view, p.pos.x);
                     water::disturb(state, p.room, p.pos.x, std::fabs(p.vel.y) * 0.04f * p.size, 10.f);
                     if (p.size >= 0.8f && r.value() < 0.3f)
-                        spawn(state, p.room, kind::drop, vec2{p.pos.x, view.float_water_level + 1.f}, vec2{range(r, -1.f, 1.f), range(r, 1.f, 2.5f)}, 0.5f, 0.3f, p.color, 0.7f);
+                        spawn(state, p.room, kind::drop, vec2{p.pos.x, at + 1.f}, vec2{range(r, -1.f, 1.f), range(r, 1.f, 2.5f)}, 0.5f, 0.3f, p.color, 0.7f);
+                    p.life = 1.f;
+                } else if (view.water && p.pos.y < surface_y(state, view, p.pos.x) - 4.f && k == kind::rain) {
+                    // spawned under the water: never falls through it
                     p.life = 1.f;
                 }
                 break;

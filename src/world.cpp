@@ -168,7 +168,7 @@ namespace world {
             float to_depth = 1.f;
             float noise = 0.f;
             std::string image;
-            // CustomDecalData.vertices: image coordinates of the corners
+            // CustomDecalData.vertices: per corner opacity and smudge
             rw::vec2 uv[4] = {{0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}};
         };
         struct parsed_shortcut {

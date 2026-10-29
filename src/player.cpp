@@ -7,6 +7,8 @@
 #include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
+#include "particles.hpp"
+#include "water.hpp"
 #include "shortcuts.hpp"
 
 // Port notes
@@ -2650,7 +2652,60 @@ namespace player {
             }
         }
 
-        // Player.LungUpdate (base game lung settings, no Artificer explosions)
+        // the Artificer running out of breath: its sparks go off under water
+        // (the Explosion of Player.LungUpdate): everything close is thrown
+        // back, centipedes are hurt, and it dies in a burst of bubbles
+        rw::rng& p_random(ctx& x) { return x.p.random(); }
+
+        void artificer_underwater_explosion(ctx& x) {
+            auto& state = x.state;
+            auto& w = state.world;
+            vec2 const at = x.pos(0);
+            constexpr float rad = 110.f;
+            constexpr float force = 5.f;
+            w.room_for_each_object_location(x.room.id, [&](dcon::object_location_id l) {
+                auto const o = w.object_location_get_object(l);
+                if (o == x.o)
+                    return;
+                w.physical_object_for_each_chunk_ownership_as_owner(o, [&](dcon::chunk_ownership_id co) {
+                    auto const c = w.chunk_ownership_get_chunk(co);
+                    vec2 const cp = w.body_chunk_get_pos(c);
+                    float const d = rw::distance(cp, at);
+                    if (d >= rad)
+                        return;
+                    float const k = 1.f - d / rad;
+                    w.body_chunk_get_vel(c) += custom::dir_vec(at, cp) * force * k / mathf::max(0.3f, w.body_chunk_get_mass(c));
+                });
+            });
+            w.for_each_centipede([&](dcon::centipede_id c) {
+                if (w.physical_object_get_room_from_object_location(centipede::body(state, c)) != x.room.id)
+                    return;
+                uint32_t const n = centipede::chunk_count(state, c);
+                for (uint32_t i = 0; i < n; ++i) {
+                    vec2 const cp = w.body_chunk_get_pos(centipede::chunk(state, c, i));
+                    float const d = rw::distance(cp, at);
+                    if (d < rad) {
+                        float const k = 1.f - d / rad;
+                        centipede::violence(state, c, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k);
+                        break;
+                    }
+                }
+            });
+            x.sound(sound::sound_id::fire_spear_explode);
+            if (state.noises.size() < 64)
+                state.noises.push_back({x.room.id, at, 8000.f});
+            particles::spawn(state, x.room.id, particles::kind::flash, at, vec2{0.f, 0.f}, 40.f, 0.35f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
+            auto& r = p_random(x);
+            for (int i = 0; i < 20; ++i) {
+                vec2 const d = custom::deg_to_vec(r.value() * 360.f);
+                particles::spawn(state, x.room.id, particles::kind::spark, at + d * r.value() * 40.f, d * mathf::lerp(4.f, 30.f, r.value()) * 0.5f, 1.5f, 0.3f, rw::vec3{1.f, 1.f, 1.f});
+            }
+            particles::bubbles(state, x.room.id, at, 40, 36.f);
+            water::disturb(state, x.room.id, at.x, 6.f, 80.f);
+        }
+
+        // Player.LungUpdate (base game lung settings; the Artificer blows up at
+        // a third of its breath gone, like Downpour)
         void lung_update(ctx& x) {
             pref& p = x.p;
             if (x.submersion(0) > 0.9f) {
@@ -2660,6 +2715,11 @@ namespace player {
                 }
                 bool const holding_up = x.in(0).y == 1 && x.in(0).x == 0 && p.air_in_lungs() < p.stats().drown_threshold;
                 p.air_in_lungs() -= 1.f / (40.f * (p.lungs_exhausted() ? 4.5f : 9.f) * (holding_up ? 1.5f : 1.f)) * p.stats().lungs_fac;
+                if (p.stats().name == slugcat_name::artificer && p.air_in_lungs() <= 0.65f) {
+                    artificer_underwater_explosion(x);
+                    die_impl(p);
+                    return;
+                }
                 bool near_surface = x.room.get_float_water_level(x.pos(0)) - x.pos(0).y < 200.f;
                 bool lenient = p.air_in_lungs() <= 0.f && x.in(0).y == 1 && near_surface;
                 if (lenient) {

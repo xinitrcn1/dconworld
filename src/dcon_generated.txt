@@ -355,8 +355,8 @@ relationship{
 
 // CustomDecal placed objects: an image from decals/ stretched over a quad
 // (pos and pos + handle 0..2), drawn on the level pixels whose depth lies in
-// from_depth..to_depth (0..1 of the 30 depths); uv_* are the image
-// coordinates of the quad's corners, `noise` jitters them
+// from_depth..to_depth (0..1 of the 30 depths); uv_* are the quad corners'
+// CustomDecalData.vertices (x: opacity, y: smudge), `noise` jitters them
 object{
 	name{decal_placed}
 	storage_type{contiguous}

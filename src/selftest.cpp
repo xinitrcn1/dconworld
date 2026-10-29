@@ -753,6 +753,39 @@ namespace selftest {
             items::destroy(gs, rock);
         }
         {
+            // rain stops at the water instead of falling through it
+            auto const pool = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }), 8);
+            sim s(gs, pool, feet_at(3, 12));
+            gs.particles.clear();
+            size_t under = 0, rain = 0;
+            for (int i = 0; i < 120; ++i) {
+                // a sealed test room: rain it from just under the ceiling
+                particles::spawn(gs, pool, particles::kind::rain, vec2{100.f + float(i % 30) * 20.f, 360.f}, vec2{-1.f, -24.f}, 1.f, 3.f, rw::vec3{1.f, 1.f, 1.f});
+                s.step();
+                for (auto const& p : gs.particles) {
+                    if (p.kind != uint8_t(particles::kind::rain) || p.room != pool)
+                        continue;
+                    ++rain;
+                    under += p.pos.y < s.room.float_water_level - 40.f ? 1 : 0;
+                }
+            }
+            r.check("rain stops at the water", rain > 0 && under == 0, s.describe() + " rain=" + std::to_string(rain) + " under=" + std::to_string(under));
+        }
+        {
+            // the Artificer blows up under water instead of drowning
+            auto& w = gs.world;
+            auto const pool = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }), 17);
+            sim s(gs, pool, feet_at(20, 1), player::slugcat_name::artificer);
+            bool const blew = s.until(2000, [&] { return s.dead(); });
+            float const drown = w.player_get_drown(s.p);
+            bool flash = false;
+            for (auto const& p : gs.particles)
+                flash = flash || (p.kind == uint8_t(particles::kind::flash) && p.room == pool);
+            char d[96];
+            std::snprintf(d, sizeof(d), " dead=%d drown=%.2f air=%.2f flash=%d", int(blew), drown, w.player_get_air_in_lungs(s.p), int(flash));
+            r.check("artificer explodes under water", blew && drown == 0.f && w.player_get_air_in_lungs(s.p) > 0.5f && flash, s.describe() + d);
+        }
+        {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';

@@ -39,6 +39,7 @@ namespace sound {
             "Centipede_Shock",
             "Centipede_Attach",
             "Grab_Corruption_Tube",
+            "Fire_Spear_Explode",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

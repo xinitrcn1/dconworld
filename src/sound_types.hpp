@@ -49,6 +49,7 @@ namespace sound {
         centipede_shock,
         centipede_attach,
         grab_corruption_tube,
+        fire_spear_explode,
         count
     };
     char const* to_string(sound_id id) noexcept;

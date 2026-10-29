@@ -206,9 +206,10 @@ player made dynamic warps, ripple spawn and the ripple layer's other effects.
 
 CustomDecals (`decals/<name>.png`) are stretched over their quads as grid
 meshes and painted onto the level only where its depth lies within the
-decal's range, split between the passes behind and in front of the sprites
-like the level (`assets/shaders/decal.*`). The decals' per corner values are
-not used yet.
+decal's range (never on open sky), split between the passes behind and in
+front of the sprites like the level (`assets/shaders/decal.*`), with the
+opacity of their corners blended across them and broken up by the decal's
+noise. Their per corner smudge isn't used yet.
 
 Particles are cosmetic and kept outside the data container: rain streaks
 (rooms' RainIntensity, or everywhere during an F6 storm) that burst on
@@ -225,10 +226,14 @@ with three swells of different lengths and directions (from the room's wave
 settings) crossing over it. It is drawn smooth (Catmull-Rom between nodes) as
 a 3D band going back from the front edge, shaded by the slopes with the
 palette's surface and shine colours, over a body that refracts and tints the
-scene behind it, with caustics near the top (`assets/shaders/water.frag`).
+scene behind it (`assets/shaders/water.frag`): the light fades with depth,
+and the current's shimmer and caustics are domain warped hashed noise, so
+they never repeat and still play down at the floor of the deepest pools.
 Bodies entering or leaving the water push the surface and splash; moving
 along it leaves a wake. It is cosmetic: creatures still float on the flat
-water level.
+water level. Rain and drops stop at the surface, rippling it. The
+Artificer can't drown: a third of its breath gone, it explodes under water
+(throwing everything close away, hurting centipedes).
 
 ### Audio
 
