@@ -222,6 +222,10 @@ namespace pathing {
         return proximity_map(state, room)[size_t(t.y) * size_t(width) + size_t(t.x)];
     }
 
+    std::vector<uint16_t> const& ai_terrain_proximity_map(sys::game_state& state, dcon::room_id room) {
+        return proximity_map(state, room);
+    }
+
     field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement const& m) {
         auto& fields = state.path_fields;
         uint16_t const version = state.world.room_get_geometry_version(room);

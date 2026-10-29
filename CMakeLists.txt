@@ -80,6 +80,9 @@ add_executable(rwcpp
     src/lizard_breeds.cpp
     src/lizard_graphics.cpp
     src/lizard_cosmetics.cpp
+    src/daddy.cpp
+    src/daddy_tentacle.cpp
+    src/daddy_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

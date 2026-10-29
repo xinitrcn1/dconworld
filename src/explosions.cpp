@@ -5,6 +5,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -81,6 +82,20 @@ namespace explosions {
                 if (dist < d.rad) {
                     float const k = 1.f - dist / d.rad;
                     lizard::violence(state, l, i, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k, false, true);
+                    break;
+                }
+            }
+        });
+        w.for_each_daddy([&](dcon::daddy_id dl) {
+            if (w.physical_object_get_room_from_object_location(daddy::body(state, dl)) != room.id)
+                return;
+            uint32_t const n = daddy::chunk_count(state, dl);
+            for (uint32_t i = 0; i < n; ++i) {
+                vec2 const cp = w.body_chunk_get_pos(daddy::chunk(state, dl, i));
+                float const dist = rw::distance(cp, at);
+                if (dist < d.rad) {
+                    float const k = 1.f - dist / d.rad;
+                    daddy::violence(state, dl, daddy::hit_part{int32_t(i)}, custom::dir_vec(at, cp) * d.force * k, d.damage * k, d.stun * k, true);
                     break;
                 }
             }

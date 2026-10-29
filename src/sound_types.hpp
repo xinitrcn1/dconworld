@@ -108,6 +108,12 @@ namespace sound {
         lizard_voice_pink_e,
         lizard_voice_green_a,
         lizard_voice_blue_a,
+        daddy_and_bro_tentacle_grab_terrain,
+        daddy_and_bro_tentacle_release_terrain,
+        daddy_and_bro_tentacle_grab_creature,
+        daddy_and_bro_tentacle_release_creature,
+        daddy_digestion_init,
+        bro_digestion_init,
         count
     };
     char const* to_string(sound_id id) noexcept;

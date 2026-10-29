@@ -158,7 +158,7 @@ namespace physics {
                     auto const o = state.world.body_chunk_get_owner_from_chunk_ownership(c);
                     vec2 const at = state.world.body_chunk_get_pos(c) + rw::to_vec2(dir) * state.world.body_chunk_get_rad(c) * 0.9f;
                     float const strength = mathf::lerp(350.f, mathf::lerp(100.f, 1500.f, mathf::inverse_lerp(0.5f, 20.f, speed * mathf::lerp(mass, 1.f, 0.5f))), 0.5f);
-                    state.noises.push_back({state.world.physical_object_get_room_from_object_location(o), at, strength});
+                    state.noises.push_back({state.world.physical_object_get_room_from_object_location(o), at, strength, o});
                 }
                 if (fn != nullptr)
                     fn(user, state.world.body_chunk_get_owner_from_chunk_ownership(c), state.world.body_chunk_get_index(c), dir, speed, first);

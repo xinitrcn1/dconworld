@@ -54,4 +54,11 @@ namespace rot {
     // TubeGraphic.OneDimensionalTubePos: a point `float_pos` (0..1) along the
     // drawn tube, `alpha` interpolating between ticks
     rw::vec2 tube_graphic_pos(sys::game_state const& state, dcon::rot_tube_id tube, float float_pos, float alpha);
+
+    // Rope.Update: moves the ends to `a`, `b`, wrapping around the solid
+    // tile corners in between (the daddy long legs' tentacle chunks use it)
+    void update_rope(world::rope_state& r, world::room_view const& room, rw::vec2 a, rw::vec2 b);
+    // Rope.AConnect / Rope.BConnect
+    inline rw::vec2 rope_a_connect(world::rope_state const& r) noexcept { return r.bend_count == 0 ? r.b : r.bends[0].pos; }
+    inline rw::vec2 rope_b_connect(world::rope_state const& r) noexcept { return r.bend_count == 0 ? r.a : r.bends[r.bend_count - 1].pos; }
 }

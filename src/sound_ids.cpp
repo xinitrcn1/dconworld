@@ -98,6 +98,12 @@ namespace sound {
             "Lizard_Voice_Pink_E",
             "Lizard_Voice_Green_A",
             "Lizard_Voice_Blue_A",
+            "Daddy_And_Bro_Tentacle_Grab_Terrain",
+            "Daddy_And_Bro_Tentacle_Release_Terrain",
+            "Daddy_And_Bro_Tentacle_Grab_Creature",
+            "Daddy_And_Bro_Tentacle_Release_Creature",
+            "Daddy_Digestion_Init",
+            "Bro_Digestion_Init",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

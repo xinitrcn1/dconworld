@@ -26,6 +26,11 @@
 //     connection each)
 //   lizards: a few per realised room, packs of yellows -> 128 (3 chunks, 3
 //     connections each); their spit in flight -> 256
+//   daddy long legs: one or two per realised room -> 32 (up to 15 chunks
+//     with a connection between every pair: 105, so 8192 connections in
+//     all), 12 tentacles each -> 512, 12 leg graphics and 14 dead legs and
+//     danglers each -> 1024 tubes; their segments, grab paths, tentacle
+//     chunks and graphic segments pooled
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
@@ -48,6 +53,7 @@ include{"centipede_types.hpp"}
 include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
 include{"lizard_types.hpp"}
+include{"daddy_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -504,7 +510,7 @@ relationship{
 relationship{
 	name{chunk_connection}
 	storage_type{erasable}
-	size{4096}
+	size{8192}
 	tag{save}
 	link{ object{body_chunk} name{chunk1} type{many} index_storage{array} }
 	link{ object{body_chunk} name{chunk2} type{many} index_storage{array} }
@@ -1024,6 +1030,84 @@ relationship{
 	link{ object{lizard} name{lizard} type{unique} }
 	link{ object{physical_object} name{body} type{unique} }
 	primary_key{lizard}
+}
+
+//
+// Creatures: Daddy long legs (DaddyLongLegs.cs + DaddyAI + DaddyTentacle +
+// DaddyGraphics) in its four templates; the body is a physical_object of 4
+// to 15 chunks held together by a connection between every pair
+//
+object{
+	name{daddy}
+	storage_type{erasable}
+	size{32}
+	tag{save}
+	property{ name{variant} type{::daddy::variant} }
+	property{ name{random} type{rw::rng} }
+	// DaddyLongLegs.graphicsSeed (the DaddyGraphics layout's seed)
+	property{ name{graphics_seed} type{int32_t} }
+	// SizeClass, colorClass, HDmode
+	property{ name{size_class} type{uint8_t} }
+	property{ name{color_class} type{uint8_t} }
+	property{ name{hd} type{uint8_t} }
+	property{ name{effect_color} type{rw::vec3} }
+	property{ name{eye_color} type{rw::vec3} }
+	// Creature / DaddyState
+	property{ name{stun} type{int32_t} }
+	property{ name{dead} type{uint8_t} }
+	property{ name{health} type{float} }
+	property{ name{tentacle_health} type{::daddy::tentacle_health} }
+	// DaddyLongLegs: movement, eyes, digestion, the eat list
+	property{ name{core} type{::daddy::body_state} }
+	// DaddyAI and its modules
+	property{ name{ai} type{::daddy::ai_state} }
+	// DaddyGraphics: eyes, the Hunter's dummy, the reactions
+	property{ name{graphics} type{::daddy::graphics_state} }
+	// its daddy_tentacle and daddy_tube objects
+	property{ name{parts} type{::daddy::part_list} }
+}
+relationship{
+	name{daddy_body}
+	tag{save}
+	link{ object{daddy} name{daddy} type{unique} }
+	link{ object{physical_object} name{body} type{unique} }
+	primary_key{daddy}
+}
+
+// DaddyTentacle: Tentacle's tile segments, grab path and chunks (each with
+// its Rope); `owner` is the daddy's index
+object{
+	name{daddy_tentacle}
+	storage_type{erasable}
+	size{512}
+	tag{save}
+	property{ name{owner} type{uint16_t} }
+	property{ name{t} type{::daddy::tentacle} }
+	property{ name{segments} type{vector_pool{65536}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{131072}{rw::ivec2}} }
+	property{ name{chunks} type{vector_pool{16384}{::daddy::tentacle_chunk}} }
+}
+
+// DaddyTubeGraphic: a leg graphic (`index` its tentacle), a dead leg or a
+// dangler, with its RopeGraphic segments, bumps and GenericBodyParts
+object{
+	name{daddy_tube}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	property{ name{owner} type{uint16_t} }
+	property{ name{kind} type{::daddy::tube_kind} }
+	property{ name{index} type{uint8_t} }
+	property{ name{segments} type{vector_pool{131072}{::daddy::rope_segment}} }
+	property{ name{bumps} type{vector_pool{65536}{::daddy::bump}} }
+	property{ name{parts} type{vector_pool{32768}{player::body_part}} }
+	// DaddyDeadLeg: its chunk (bodyParts[].connection), secondaryChunk, deadness
+	property{ name{chunk} type{uint8_t} }
+	property{ name{secondary_chunk} type{uint8_t} }
+	property{ name{deadness} type{float} }
+	// DaddyDangleTube.Acon/Bcon
+	property{ name{a_con} type{::daddy::dangle_connection} }
+	property{ name{b_con} type{::daddy::dangle_connection} }
 }
 
 // LizardSpit: Red's and Caramel's gobs, in flight or stuck to something;

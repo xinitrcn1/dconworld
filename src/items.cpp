@@ -6,6 +6,7 @@
 #include "dropbug.hpp"
 #include "explosions.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -598,6 +599,8 @@ namespace items {
                     dcon::dropbug_id hit_bug;
                     dcon::cicada_id hit_cicada;
                     dcon::lizard_id hit_lizard;
+                    dcon::daddy_id hit_daddy;
+                    daddy::hit_part hit_part;
                     uint32_t hit_chunk = 0;
                     float const rad = w.body_chunk_get_rad(c) + (by ? 5.f : 0.f);
                     // the creature it hit: Creature.Violence(momentum, damage, stun bonus)
@@ -645,6 +648,9 @@ namespace items {
                         // a Rock turns a lizard around (Lizard.Violence)
                         bool const rock = w.item_get_type(it) == world::item_type::rock;
                         hit_creature([&](vec2 m, float dmg, float st) { lizard::violence(state, hit_lizard, hit_chunk, m, dmg, st, rock); });
+                    } else if (daddy::trace(state, room.id, pos, pos + vel, rad, hit_daddy, hit_part)) {
+                        // a body chunk or a tentacle (an appendage)
+                        hit_creature([&](vec2 m, float dmg, float st) { daddy::violence(state, hit_daddy, hit_part, m, dmg, st); });
                     }
                 }
                 break;

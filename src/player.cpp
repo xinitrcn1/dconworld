@@ -7,6 +7,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "items.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
@@ -490,6 +491,7 @@ namespace player {
         centipede::release_player(state, id);
         dropbug::release_player(state, id);
         lizard::release_player(state, id);
+        daddy::release_player(state, id);
         auto const o = body(state, id);
         state.world.delete_player(id);
         if (o)
@@ -501,6 +503,7 @@ namespace player {
         centipede::release_player(state, id);
         dropbug::release_player(state, id);
         lizard::release_player(state, id);
+        daddy::release_player(state, id);
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -2758,6 +2761,20 @@ namespace player {
                     if (d < rad) {
                         float const k = 1.f - d / rad;
                         lizard::violence(state, l, i, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k, false, true);
+                        break;
+                    }
+                }
+            });
+            w.for_each_daddy([&](dcon::daddy_id dl) {
+                if (w.physical_object_get_room_from_object_location(daddy::body(state, dl)) != x.room.id)
+                    return;
+                uint32_t const n = daddy::chunk_count(state, dl);
+                for (uint32_t i = 0; i < n; ++i) {
+                    vec2 const cp = w.body_chunk_get_pos(daddy::chunk(state, dl, i));
+                    float const d = rw::distance(cp, at);
+                    if (d < rad) {
+                        float const k = 1.f - d / rad;
+                        daddy::violence(state, dl, daddy::hit_part{int32_t(i)}, custom::dir_vec(at, cp) * force * k, 1.1f * k, 60.f * k, true);
                         break;
                     }
                 }

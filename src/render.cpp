@@ -22,6 +22,8 @@
 #include "dropbug_graphics.hpp"
 #include "lizard.hpp"
 #include "lizard_graphics.hpp"
+#include "daddy.hpp"
+#include "daddy_graphics.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "physics.hpp"
@@ -1573,6 +1575,100 @@ void main() {
             });
         }
 
+        // the room's palette as DaddyGraphics.ApplyPalette reads it
+        daddy_graphics::palette daddy_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            daddy_graphics::palette pal;
+            pal.black = palette_black(r, s, room);
+            return pal;
+        }
+
+        // Daddy long legs through DaddyGraphics and the game's atlases
+        void build_daddy_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            auto const pal = daddy_palette(r, s, room.id);
+            w.for_each_daddy([&](dcon::daddy_id d) {
+                if (w.physical_object_get_room_from_object_location(daddy::body(s, d)) != room.id)
+                    return;
+                cmds.clear();
+                daddy_graphics::build(s, d, alpha, pal, cmds);
+                emit_game_cmds(r, cmds);
+            });
+        }
+
+        // Without the game's atlases: daddy long legs with shapes of our own
+        // over the simulated DaddyGraphics parts: every tube (legs, dead legs,
+        // danglers) a line along its graphic segments in the tube colours with
+        // its bumps as dots, the body chunks as discs with an eye slit each
+        // in the eye colour (closed: the body's), the Hunter's dummy as a
+        // pale body and head
+        void build_daddies(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            painter p{r.batch};
+            auto const pal = daddy_palette(r, s, room.id);
+            w.for_each_daddy([&](dcon::daddy_id d) {
+                if (w.physical_object_get_room_from_object_location(daddy::body(s, d)) != room.id)
+                    return;
+                rw::vec3 const body = daddy_graphics::body_color(s, d, pal);
+                rw::vec3 const effect = w.daddy_get_effect_color(d);
+                float const width = w.daddy_get_size_class(d) ? 4.f : 3.4f;
+                for (uint32_t i = 0; i < daddy::tube_count(s, d); ++i) {
+                    auto const t = daddy::tube_of(s, d, i);
+                    uint32_t const n = w.daddy_tube_get_segments(t).size();
+                    vec2 prev = daddy_graphics::tube_pos(s, t, 0.f, alpha);
+                    for (uint32_t k = 1; k <= 2 * n; ++k) {
+                        float const f = float(k) / float(2 * n);
+                        vec2 const q = daddy_graphics::tube_pos(s, t, f, alpha);
+                        p.line(prev, q, width, to_rgba(daddy_graphics::tube_color(s, d, t, mathf::inverse_lerp(0.3f, 1.f, f), pal)));
+                        prev = q;
+                    }
+                    for (auto const& b : w.daddy_tube_get_bumps(t)) {
+                        vec2 const c = daddy_graphics::on_tube_pos(s, t, b.pos, alpha);
+                        float const rad = mathf::lerp(2.f, 6.f, b.size);
+                        p.circle(c, rad, to_rgba(daddy_graphics::tube_color(s, d, t, b.pos.y, pal)));
+                        if (b.eye_size > 0.f)
+                            p.circle(c, rad * b.eye_size, to_rgba(w.daddy_get_color_class(d) ? effect : body));
+                    }
+                }
+                auto const& g = w.daddy_get_graphics(d);
+                uint32_t const n = std::min(daddy::chunk_count(s, d), daddy::max_chunks);
+                vec2 const middle = daddy::middle_of_body(s, d);
+                for (uint32_t j = 0; j < n; ++j) {
+                    auto const k = daddy::chunk(s, d, j);
+                    vec2 const c = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
+                    float const rad = w.body_chunk_get_rad(k);
+                    p.circle(c, rad * 1.1f + 2.f, to_rgba(body));
+                    if (w.daddy_get_hd(d) && j < 2)
+                        continue;
+                    auto const& e = g.eyes[j];
+                    float const open = 1.f - mathf::lerp(e.last_closed, e.closed, alpha);
+                    rw::vec3 const eye = w.daddy_get_eye_color(d) + (rw::vec3{1.f, 1.f, 1.f} - w.daddy_get_eye_color(d)) * mathf::clamp01(e.light * 0.5f + e.flash);
+                    vec2 const look = c + rw::lerp(e.last_dir, e.dir, alpha) * rad * 0.5f;
+                    vec2 const dir = rw::custom::deg_to_vec(rw::custom::aim(c, middle) + e.rotats[0]);
+                    vec2 const side = rw::custom::perpendicular_vector(dir);
+                    p.line(look - dir * rad * 0.8f, look + dir * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
+                    p.line(look - side * rad * 0.8f, look + side * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
+                }
+                if (w.daddy_get_hd(d)) {
+                    auto const& m = g.dummy;
+                    rw::vec3 const hunter = daddy_graphics::body_color(s, d, pal);
+                    vec2 const head = rw::lerp(m.head.last_pos, m.head.pos, alpha);
+                    vec2 const hips = rw::lerp(m.draw_pos[1][1], m.draw_pos[1][0], alpha);
+                    vec2 const chest = rw::lerp(m.draw_pos[0][1], m.draw_pos[0][0], alpha);
+                    vec2 prev = hips;
+                    for (auto const& t : m.tail) {
+                        vec2 const q = rw::lerp(t.last_pos, t.pos, alpha);
+                        p.line(prev, q, mathf::max(1.f, t.rad * 1.6f), to_rgba(hunter));
+                        prev = q;
+                    }
+                    p.line(chest, hips, 12.f, to_rgba(hunter));
+                    p.circle(hips, 7.f, to_rgba(hunter));
+                    p.circle(chest, 7.f, to_rgba(hunter));
+                    p.circle(head, 7.f, to_rgba(hunter));
+                }
+            });
+        }
+
         // the room's palette as LizardGraphics.ApplyPalette reads it, and what
         // the White lizard picks up from behind it (RoomCamera.PixelColorAtCoordinate:
         // the level image isn't sampled, the palette's colour for the walls
@@ -2776,12 +2872,14 @@ void main() {
             build_dropbug_sprites(r, s, room, alpha);
             build_cicada_sprites(r, s, room, alpha);
             build_lizard_sprites(r, s, room, alpha, cam);
+            build_daddy_sprites(r, s, room, alpha);
             build_seed_cobs(r, s, room, alpha);
         } else {
             build_centipedes(r, s, room, alpha);
             build_dropbugs(r, s, room, alpha);
             build_cicadas(r, s, room, alpha);
             build_lizards(r, s, room, alpha);
+            build_daddies(r, s, room, alpha);
         }
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);

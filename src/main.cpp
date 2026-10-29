@@ -16,6 +16,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "dropbug.hpp"
 #include "config.h"
 #include "gamestate.hpp"
@@ -71,6 +72,8 @@ namespace {
             "  --lizard <x,y[,breed]>  spawn a lizard (default green): pink green blue yellow white\n"
             "                      red black salamander cyan caramel (spit) eel zoop train\n"
             "                      blizzard basilisk indigo peach (repeatable)\n"
+            "  --daddy <x,y[,variant]>  spawn a daddy long legs (default daddy): daddy\n"
+            "                      brother mother (TerrorLongLegs) hunter (repeatable)\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -83,7 +86,8 @@ namespace {
             "          ceiling above the cursor (Ctrl+V removes them all), Q a white\n"
             "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
             "          Y a lizard at the cursor, the next breed each time (Shift+Y the same\n"
-            "          breed again, Ctrl+Y removes them all),\n"
+            "          breed again, Ctrl+Y removes them all), H a daddy long legs at the\n"
+            "          cursor (Shift+H the next variant, Ctrl+H removes them all),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
@@ -320,6 +324,7 @@ int main(int argc, char* argv[]) {
     std::vector<vec2> spawn_dropbugs;
     std::vector<rw::vec3> spawn_cicadas; // x, y, 1 for a CicadaA
     std::vector<std::pair<vec2, lizard::breed>> spawn_lizards;
+    std::vector<std::pair<vec2, daddy::variant>> spawn_daddies;
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
@@ -375,6 +380,15 @@ int main(int argc, char* argv[]) {
                 if (!lizard::parse_breed(name, b))
                     std::fprintf(stderr, "unknown lizard breed %s, a green one instead\n", name);
                 spawn_lizards.push_back({vec2{x, y}, b});
+            }
+        } else if (a == "--daddy") {
+            float x = 0.f, y = 0.f;
+            char name[32] = "daddy";
+            auto v = daddy::variant::daddy;
+            if (std::sscanf(next().c_str(), "%f,%f,%31s", &x, &y, name) >= 2) {
+                if (!daddy::parse_variant(name, v))
+                    std::fprintf(stderr, "unknown daddy long legs %s, a daddy instead\n", name);
+                spawn_daddies.push_back({vec2{x, y}, v});
             }
         } else if (a == "--ticks") {
             screenshot_ticks = uint32_t(std::atoi(next().c_str()));
@@ -443,6 +457,8 @@ int main(int argc, char* argv[]) {
         cicada::create(gs, start, vec2{c.x, c.y}, c.z != 0.f);
     for (auto const& [at, b] : spawn_lizards)
         lizard::create(gs, start, at, b);
+    for (auto const& [at, v] : spawn_daddies)
+        daddy::create(gs, start, at, v);
     if (start_pos) {
         a.spawn = *start_pos;
         player::reset(gs, a.players[0], start, *start_pos);
@@ -519,6 +535,19 @@ int main(int argc, char* argv[]) {
                 + " legs " + std::to_string(w.lizard_get_graphics(l).legs_grabbing) + (lizard::grasped(gs, l) ? " holding the slugcat" : "")
                 + (w.lizard_get_tongue(l).state != lizard::tongue_state::hidden ? " tongue out" : "")
                 + (w.lizard_get_dead(l) ? " dead" : ""));
+        });
+        gs.world.for_each_daddy([&](dcon::daddy_id d) {
+            auto const& w = gs.world;
+            vec2 const mp = daddy::middle_of_body(gs, d);
+            bool held = false, eating = false;
+            w.for_each_player([&](dcon::player_id p) {
+                held = held || daddy::holds(gs, d, p);
+                eating = eating || daddy::eating(gs, d, p);
+            });
+            reports::add_log(std::string{daddy::to_string(w.daddy_get_variant(d))} + " long legs at " + std::to_string(int(mp.x)) + "," + std::to_string(int(mp.y))
+                + " behavior " + std::to_string(int(w.daddy_get_ai(d).current)) + " chunks " + std::to_string(daddy::chunk_count(gs, d))
+                + " legs " + std::to_string(daddy::legs_gripping(gs, d)) + "/" + std::to_string(w.daddy_get_parts(d).tentacle_count)
+                + (held ? " holding the slugcat" : "") + (eating ? " eating the slugcat" : "") + (w.daddy_get_dead(d) ? " dead" : ""));
         });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
@@ -713,6 +742,24 @@ int main(int argc, char* argv[]) {
                     SDL_GetMouseState(&mx, &my);
                     lizard::create(gs, a.room, render::screen_to_room(r, a.cam, mx, my), b);
                     reports::add_log(std::string{lizard::to_string(b)} + " lizard");
+                    break;
+                }
+                case SDLK_H: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        std::vector<dcon::daddy_id> all;
+                        w.for_each_daddy([&](dcon::daddy_id d) { all.push_back(d); });
+                        for (auto const d : all)
+                            daddy::destroy(gs, d);
+                        break;
+                    }
+                    // Shift: on to the next variant
+                    static uint32_t variant = 0;
+                    if ((e.key.mod & SDL_KMOD_SHIFT) != 0)
+                        variant = (variant + 1) % daddy::variant_count;
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    daddy::create(gs, a.room, render::screen_to_room(r, a.cam, mx, my), daddy::variant(variant));
+                    reports::add_log(std::string{daddy::to_string(daddy::variant(variant))} + " long legs");
                     break;
                 }
                 case SDLK_I: {

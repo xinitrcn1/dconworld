@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "gamestate.hpp"
 #include "math.hpp"
@@ -42,6 +43,9 @@ namespace pathing {
     // one), uncapped, -1 outside the room. Kept per room in
     // sys::game_state::terrain_proximity_cache
     int32_t ai_terrain_proximity(sys::game_state& state, dcon::room_id room, rw::ivec2 t);
+    // the whole map (row major), for callers asking about many tiles at a
+    // time; valid until another room's map is built
+    std::vector<uint16_t> const& ai_terrain_proximity_map(sys::game_state& state, dcon::room_id room);
 
     // The field to `goal`, built if no fresh one exists. An inaccessible goal
     // (a slugcat in mid air) is approached through the accessible tiles near it

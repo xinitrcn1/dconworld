@@ -12,6 +12,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "items.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
@@ -735,6 +736,124 @@ namespace selftest {
             gs.sounds.clear();
         }
         {
+            // a daddy long legs over a slugcat standing still: its tentacles
+            // feel it, hunt it, grab it and drag it to the body, which eats it
+            auto const hall = make_room(gs, region, box(30, 14, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(15, 1));
+            auto const d = daddy::create(gs, hall, world::room_view::middle_of_tile(15, 6), daddy::variant::daddy);
+            bool gripped = false, hunted = false, held = false, eating = false;
+            bool const eaten = s.until(4000, [&] {
+                gripped = gripped || daddy::legs_gripping(gs, d) > 0;
+                hunted = hunted || gs.world.daddy_get_ai(d).current == daddy::behavior::hunt;
+                held = held || daddy::holds(gs, d, s.p);
+                eating = eating || daddy::eating(gs, d, s.p);
+                return gs.world.player_get_eaten(s.p) != 0;
+            });
+            char dd[128];
+            std::snprintf(dd, sizeof(dd), " gripped=%d hunted=%d held=%d eating=%d eaten=%d dead=%d", int(gripped), int(hunted), int(held), int(eating), int(eaten), int(s.dead()));
+            r.check("daddy long legs eats slugcat", gripped && hunted && held && eating && eaten && s.dead(), s.describe() + dd);
+            daddy::destroy(gs, d);
+            gs.sounds.clear();
+        }
+        {
+            // one sent to the far side of a wall finds its way over it on a
+            // real-time distance field, the tentacles reaching for grips
+            auto const hall = make_room(gs, region, box(60, 22, [](int32_t x, int32_t y) {
+                if (x == 30 && y <= 14)
+                    return '#';
+                if ((x == 4 && y <= 3) || (y == 3 && x <= 4))
+                    return '#'; // the slugcat's sealed pocket, out of reach
+                return ' ';
+            }));
+            sim s(gs, hall, feet_at(2, 1));
+            auto const d = daddy::create(gs, hall, world::room_view::middle_of_tile(46, 8), daddy::variant::daddy);
+            ivec2 const target{12, 10};
+            uint32_t const builds = pathing::builds();
+            bool over = false;
+            bool const arrived = s.until(6000, [&] {
+                auto& ai = gs.world.daddy_get_ai(d);
+                ai.destination = target;
+                ai.new_idle_pos_counter = 1000000;
+                vec2 const m = daddy::middle_of_body(gs, d);
+                over = over || (m.x < 30.f * 20.f && m.y > 14.f * 20.f);
+                return rw::distance(m, world::room_view::middle_of_tile(target)) < 80.f;
+            });
+            char dd[128];
+            vec2 const m = daddy::middle_of_body(gs, d);
+            std::snprintf(dd, sizeof(dd), " body=(%.0f,%.0f) over=%d arrived=%d fields=%u", m.x, m.y, int(over), int(arrived), pathing::builds() - builds);
+            r.check("daddy long legs climbs over", over && arrived && pathing::builds() > builds, s.describe() + dd);
+            daddy::destroy(gs, d);
+            gs.sounds.clear();
+        }
+        {
+            // a brother long legs hit by a spear is hurt and stunned, a rock
+            // on a tentacle stuns that tentacle
+            auto const hall = make_room(gs, region, box(40, 16, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(3, 1));
+            auto const d = daddy::create(gs, hall, world::room_view::middle_of_tile(25, 4), daddy::variant::brother);
+            s.run(60);
+            vec2 const m = daddy::middle_of_body(gs, d);
+            auto const spear = items::create_spear(gs, hall, m - vec2{60.f, 0.f});
+            gs.world.body_chunk_set_vel(items::chunk(gs, spear), vec2{40.f, 0.f});
+            gs.world.item_set_mode(spear, world::weapon_mode::thrown);
+            gs.world.item_set_throw_dir(spear, ivec2{1, 0});
+            gs.world.item_set_throw_mode_frames(spear, -1);
+            bool stunned = false;
+            for (int i = 0; i < 6; ++i) {
+                s.step();
+                stunned = stunned || gs.world.daddy_get_stun(d) > 0;
+            }
+            float const health = gs.world.daddy_get_health(d);
+            // rocks thrown across tentacle segments away from the body (one
+            // the projectile trace says it would hit), until one is stunned
+            bool limp = false;
+            std::vector<dcon::item_id> rocks;
+            for (int attempt = 0; attempt < 8 && !limp; ++attempt) {
+                vec2 const mid = daddy::middle_of_body(gs, d);
+                vec2 at{0.f, 0.f};
+                float side = 1.f;
+                bool found = false;
+                for (uint32_t k = 0; k < gs.world.daddy_get_parts(d).tentacle_count && !found; ++k) {
+                    auto const cs = gs.world.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, d, k));
+                    for (uint32_t i = 1 + uint32_t(attempt) % 2; i < cs.size() && !found; ++i) {
+                        vec2 const c = (cs.at(i - 1).pos + cs.at(i).pos) * 0.5f;
+                        float const sd = c.x > mid.x ? 1.f : -1.f;
+                        dcon::daddy_id hd;
+                        daddy::hit_part hp;
+                        if (std::fabs(c.x - mid.x) > 60.f && c.y > 50.f && daddy::trace(gs, hall, c + vec2{sd * 30.f, 0.f}, c - vec2{sd * 30.f, 0.f}, 5.f, hd, hp) && hp.tentacle >= 0) {
+                            at = c;
+                            side = sd;
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    s.run(10);
+                    continue;
+                }
+                auto const rock = items::create_rock(gs, hall, at + vec2{side * 20.f, 0.f});
+                rocks.push_back(rock);
+                gs.world.body_chunk_set_vel(items::chunk(gs, rock), vec2{-side * 35.f, 0.f});
+                gs.world.item_set_mode(rock, world::weapon_mode::thrown);
+                gs.world.item_set_throw_dir(rock, ivec2{int32_t(-side), 0});
+                gs.world.item_set_throw_mode_frames(rock, -1);
+                for (int i = 0; i < 6; ++i) {
+                    s.step();
+                    auto const& parts = gs.world.daddy_get_parts(d);
+                    for (uint32_t k = 0; k < parts.tentacle_count; ++k)
+                        limp = limp || gs.world.daddy_tentacle_get_t(daddy::tentacle_of(gs, d, k)).stun > 0;
+                }
+            }
+            char dd[96];
+            std::snprintf(dd, sizeof(dd), " stunned=%d health=%.3f tentacle_stunned=%d", int(stunned), health, int(limp));
+            r.check("daddy long legs hit", stunned && health < 1.f && limp, s.describe() + dd);
+            items::destroy(gs, spear);
+            for (auto const rk : rocks)
+                items::destroy(gs, rk);
+            daddy::destroy(gs, d);
+            gs.sounds.clear();
+        }
+        {
             // a rot vine across a tall room: dropping onto it holding up grabs
             // it, climbing moves along it, jumping lets go
             auto const room = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
@@ -1079,6 +1198,9 @@ namespace selftest {
         rw::rng lizard_rng{0x112A2Du};
         uint32_t lizard_breed = 0, lizards = 0, lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
         bool lizard_hunted = false, lizard_bit = false, lizard_tongued = false, lizard_jumped = false, lizard_spat = false, lizard_swam = false;
+        rw::rng daddy_rng{0xDADD1u};
+        uint32_t daddy_variant = 0, daddies = 0, daddies_gripped = 0, daddies_hunted = 0, daddies_held = 0, daddies_ate = 0, daddies_lost = 0;
+        bool daddy_gripped = false, daddy_hunted = false, daddy_held = false, daddy_ate = false;
         w.for_each_room([&](dcon::room_id rid) {
             auto const room = world::get_room_view(gs, rid);
             vec2 near{0.f, 0.f};
@@ -1120,6 +1242,16 @@ namespace selftest {
             }
             if (liz)
                 ++lizards;
+            // and a daddy long legs in the open, the next variant in every room
+            dcon::daddy_id dll;
+            auto const variant = daddy::variant(daddy_variant++ % daddy::variant_count);
+            for (int k = 0; k < 50 && !dll; ++k) {
+                ivec2 const t{daddy_rng.range(1, std::max(2, room.width - 1)), daddy_rng.range(1, std::max(2, room.height - 1))};
+                if (pathing::accessible(room, t, pathing::daddy) && pathing::terrain_proximity(room, t) > 1)
+                    dll = daddy::create(gs, rid, world::room_view::middle_of_tile(t), variant);
+            }
+            if (dll)
+                ++daddies;
             int32_t ix = 0, iy = 0;
             bool jmp = false;
             for (uint32_t t = 0; t < ticks_per_room; ++t) {
@@ -1172,6 +1304,19 @@ namespace selftest {
                     lizard_jumped = lizard_jumped || w.lizard_get_core(liz).anim == lizard::animation::jumping;
                     lizard_spat = lizard_spat || w.lizard_get_core(liz).anim == lizard::animation::spit;
                     lizard_swam = lizard_swam || w.lizard_get_core(liz).swim > 0.5f;
+                }
+                if (dll) {
+                    for (uint32_t i = 0; i < daddy::chunk_count(gs, dll); ++i) {
+                        vec2 const q = w.body_chunk_get_pos(daddy::chunk(gs, dll, i));
+                        finite = finite && std::isfinite(q.x) && std::isfinite(q.y);
+                    }
+                    for (uint32_t k = 0; k < w.daddy_get_parts(dll).tentacle_count; ++k)
+                        for (auto const& c : w.daddy_tentacle_get_chunks(daddy::tentacle_of(gs, dll, k)))
+                            finite = finite && std::isfinite(c.pos.x) && std::isfinite(c.pos.y);
+                    daddy_gripped = daddy_gripped || daddy::legs_gripping(gs, dll) > 0;
+                    daddy_hunted = daddy_hunted || w.daddy_get_ai(dll).current == daddy::behavior::hunt;
+                    daddy_held = daddy_held || daddy::holds(gs, dll, p);
+                    daddy_ate = daddy_ate || daddy::eating(gs, dll, p);
                 }
                 if (!finite) {
                     std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), t);
@@ -1230,6 +1375,20 @@ namespace selftest {
                 lizard_hunted = lizard_bit = lizard_tongued = lizard_jumped = lizard_spat = lizard_swam = false;
                 lizard::destroy(gs, liz);
             }
+            if (dll) {
+                vec2 const hp = daddy::middle_of_body(gs, dll);
+                if (hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f) {
+                    ++daddies_lost;
+                    if (daddies_lost <= 5)
+                        std::printf("  %s long legs left %s at (%.0f, %.0f)\n", daddy::to_string(variant), std::string{gs.to_string_view(w.room_get_name(rid))}.c_str(), hp.x, hp.y);
+                }
+                daddies_gripped += daddy_gripped ? 1 : 0;
+                daddies_hunted += daddy_hunted ? 1 : 0;
+                daddies_held += daddy_held ? 1 : 0;
+                daddies_ate += daddy_ate ? 1 : 0;
+                daddy_gripped = daddy_hunted = daddy_held = daddy_ate = false;
+                daddy::destroy(gs, dll);
+            }
             if (w.player_get_eaten(p))
                 ++eaten;
             else if (w.player_get_dead(p))
@@ -1245,6 +1404,8 @@ namespace selftest {
             cicadas_sat, cicadas_charged, cicadas_held, cicadas_carried, cicadas_lost);
         std::printf("lizards: %u (one per room, every breed in turn), %u hunted, %u bit the slugcat, %u shot a tongue, %u jumped, %u spat, %u swam, %u fell out of their room\n",
             lizards, lizards_hunted, lizards_bit, lizards_tongued, lizards_jumped, lizards_spat, lizards_swam, lizards_lost);
+        std::printf("daddy long legs: %u (one per room, every variant in turn), %u gripped the terrain, %u hunted, %u held the slugcat, %u ate it, %u fell out of their room\n",
+            daddies, daddies_gripped, daddies_hunted, daddies_held, daddies_ate, daddies_lost);
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
             auto const k = w.rot_tube_get_kind(t);

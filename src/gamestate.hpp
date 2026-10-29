@@ -48,6 +48,8 @@ namespace sys {
             dcon::room_id room;
             rw::vec2 pos;
             float strength;
+            // InGameNoise.sourceObject, when it is a physical object
+            dcon::physical_object_id source{};
         };
         std::vector<noise> noises;
 

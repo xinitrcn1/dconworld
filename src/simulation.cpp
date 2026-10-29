@@ -4,6 +4,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "dropbug.hpp"
 #include "gates.hpp"
 #include "items.hpp"
@@ -130,6 +131,8 @@ namespace simulation {
             cicada::collide(state, view);
             lizard::update_room(state, view);
             lizard::collide(state, view);
+            daddy::update_room(state, view);
+            daddy::collide(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
             warps::update_room(state, view);

@@ -39,4 +39,7 @@ namespace pathing {
     // walls on top of 1; here up to 10 on top of 1, so long paths stay inside
     // the fields' 16 bit costs)
     inline constexpr movement cicada{{10, 10, 10, 10, 10, 10, 0}, 0, 10};
+    // DaddyLongLegs (and the templates inheriting it): Air at 1, so every
+    // open tile at 1; its tentacles find the grips to get there
+    inline constexpr movement daddy{{10, 10, 10, 10, 10, 10, 0}, 0, 0};
 }

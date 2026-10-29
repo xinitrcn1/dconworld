@@ -9,6 +9,7 @@
 #include "centipede.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -997,6 +998,7 @@ namespace rot {
                 centipede::release_player(state, pl);
                 dropbug::release_player(state, pl);
                 lizard::release_player(state, pl);
+                daddy::release_player(state, pl);
                 release_player(state, pl);
                 player::die(state, pl);
                 w.player_set_eaten(pl, 1);
@@ -1287,6 +1289,10 @@ namespace rot {
         });
         for (auto const m : gone)
             w.delete_rot_meal(m);
+    }
+
+    void update_rope(world::rope_state& r, room_view const& room, vec2 a, vec2 b) {
+        rope_update(r, room, a, b);
     }
 
     vec2 tube_graphic_pos(sys::game_state const& state, dcon::rot_tube_id t, float float_pos, float alpha) {

@@ -42,7 +42,8 @@ cursor (Shift+K a big one, Ctrl+K removes them all), V spawns a dropwig on the
 ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada at
 the cursor (Shift+Q a dark one, Ctrl+Q removes them all), Y spawns a lizard at the
 cursor, the next breed each time (Shift+Y the same breed again, Ctrl+Y removes them
-all), R respawn, left click teleports
+all), H spawns a daddy long legs at the cursor (Shift+H the next variant: daddy,
+brother, mother, hunter; Ctrl+H removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
@@ -105,6 +106,9 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/particles.*` | cosmetic particles: rain, ceiling drips, splash droplets, hit sparks and flashes, landing dust, bubbles |
 | `src/terrain.*` | the Watcher's sand (a deformable height map from the TerrainHandles, sandstorms) and mud pits |
 | `src/explosions.*` | bombs, explosive spears, the Artificer: blast, damage, flash; FlareBomb's blinding flash |
+| `src/daddy.*`, `src/daddy_types.hpp` | `DaddyLongLegs`/`DaddyAI`: the four templates, support from gripping tentacles, path following, eating, `Violence` on body and tentacles, a one slugcat `Tracker` and the `NoiseTracker` |
+| `src/daddy_tentacle.cpp` | `Tentacle`/`DaddyTentacle`: tile segments, grab paths (`FindTentaclePath`), pulling, growing, chunks on `Rope`s, climbing, hunting, grabbing, examining noises |
+| `src/daddy_graphics.*` | `DaddyGraphics`: leg graphics (`RopeGraphic`), dead legs, danglers, bumps, the eyes, the Hunter's dummy, `DrawSprites` with the game's elements |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
@@ -245,6 +249,37 @@ only Pink, Green and Blue have voices without Remix), the Blizzard's beam,
 the Basilisk's poison field, the Indigo's mud, burrowing in the Watcher's
 sand, rot, `LizardBubble`s, light sources and the CyanLizardSmoke,
 drowning, AImap visibility in the idle and lurk scores, Safari control.
+
+Daddy long legs (`--daddy x,y[,variant]`, H) follow `DaddyLongLegs`,
+`DaddyAI`, `DaddyTentacle` and `Tentacle` in the four templates that run
+that code: the Daddy, the Brother, Downpour's Mother (`TerrorLongLegs`,
+superSizeMe) and the Hunter long legs (`HunterDaddy`, HDmode). The
+constructor's rolls (chunk count and sizes, tentacle count and lengths,
+the graphics layout) come from `rw::unity_random` in vanilla order. The
+body is 4 to 15 chunks tied in every pair; each tentacle is a list of
+room tiles grown, pulled straight and searched around terrain with
+Tentacle's own tile path code (`FindTentaclePath`), with chunks following
+them on Ropes that wrap the tile corners and stick to the terrain. The
+gripping tentacles carry the body along a distance field from
+`pathing.hpp` (its TileTypeResistances: every open tile), the rest reach
+for grips ahead (`Climb`), examine noises and hunt. A daddy is blind: its
+tentacles' touch tells the Tracker of the slugcat, a hunting tentacle that
+brushes it with its tip grabs it and drags it in, and touching the body
+starts eating it (it dies half way and is gone at the end). It hears
+noises (`NoiseTracker`), its eyes turning to them and to what the
+tentacles feel. Spears and rocks hit the body or a tentacle (stunning and
+hurting that tentacle), explosions hurt it a lot more. `DaddyGraphics`
+draws the leg graphics, dead legs and danglers with their bumps and little
+eyes, the eye bulbs with their slits and the Hunter's slugcat dummy with
+the game's elements. Not ported: shortcuts (squeezing and the
+BigCreatureShortCutSqueeze), rain and dens, other creatures as prey or
+being touched (slugcats only), daddies eating each other, the timeline
+rule that makes a Brother a Daddy before Artificer's time, `stuckPos`,
+Safari control, `DaddyBubble`s and `DaddyRipple`, the digestion sound loop
+(and the react sounds, which have no entry in `sounds.txt`), pulling the
+eaten slugcat's graphics in, the Tracker's ghosts (it guesses the slugcat
+is where it last felt it), the JaggedCircle and RippleBasic shaders (a
+jagged disc and plain triangles).
 
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
@@ -413,7 +448,7 @@ palette texture array; `effectcolors.png` provides effect colours A/B and
 grime. Slugcats use vanilla element names (`BodyA`, `HipsA`, `HeadA0-17`,
 `FaceA/B0-8`, `LegsA*`) from a DressMySlugcat style atlas with the vanilla
 anchors, plus the 4 segment tail mesh. Other ported `DrawSprites` (centipedes,
-dropwigs, squidcadas, lizards, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
+dropwigs, squidcadas, lizards, daddy long legs, dangle fruit, corn plants) use the game's own Futile atlases (`rainWorld`,
 `rainworldmsc`, `uiSprites`, `uispritesmsc`) out of `resources.assets` in the
 game's `RainWorld_Data` (`--unity <dir>`) and the Watcher's
 `mods/watcher/atlases/rainworldwatcher` from the install; nothing of it is bundled. The level is drawn in two passes split

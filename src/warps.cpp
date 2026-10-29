@@ -7,6 +7,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "lizard.hpp"
+#include "daddy.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -150,6 +151,7 @@ namespace warps {
                 dropbug::release_player(state, p);
                 cicada::release_player(state, p);
                 lizard::release_player(state, p);
+                daddy::release_player(state, p);
                 w.player_set_warp_point_cooldown(p, 80);
                 if (rw::distance(pos, main_chunk(state, p)) >= pull_radius && p != w.warp_point_get_triggered_by(wp))
                     return;
@@ -227,6 +229,13 @@ namespace warps {
                 if (w.physical_object_get_room_from_object_location(o) != room)
                     return;
                 w.lizard_set_stun(l, std::max(w.lizard_get_stun(l), 20));
+                swirl(o);
+            });
+            w.for_each_daddy([&](dcon::daddy_id dl) {
+                auto const o = daddy::body(state, dl);
+                if (w.physical_object_get_room_from_object_location(o) != room)
+                    return;
+                w.daddy_set_stun(dl, std::max(w.daddy_get_stun(dl), 20));
                 swirl(o);
             });
             w.for_each_player([&](dcon::player_id p) {
