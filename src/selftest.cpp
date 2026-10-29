@@ -13,6 +13,7 @@
 #include "pathing.hpp"
 #include "player.hpp"
 #include "rot.hpp"
+#include "warps.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
 
@@ -89,6 +90,33 @@ namespace selftest {
             gs.world.rot_placed_set_handle(o, handle);
             gs.world.rot_placed_set_custom(o, custom);
             gs.world.try_create_rot_placed_location(o, room);
+        }
+
+        // a Watcher warp point, as if read from the room's settings
+        struct warp_desc {
+            vec2 pos;
+            dcon::room_id dest;
+            vec2 dest_pos;
+            bool one_way = false;
+            bool one_way_entrance = false;
+            bool ripple = false;
+            int16_t uses = -1; // limited use when >= 0
+        };
+        void add_warp(sys::game_state& gs, dcon::room_id room, warp_desc const& d) {
+            auto& w = gs.world;
+            auto const o = w.create_warp_placed();
+            w.warp_placed_set_pos(o, d.pos);
+            if (d.dest) {
+                w.warp_placed_set_dest_room(o, w.room_get_name(d.dest));
+                w.warp_placed_set_dest_pos(o, d.dest_pos);
+            }
+            w.warp_placed_set_one_way(o, d.one_way);
+            w.warp_placed_set_one_way_entrance(o, d.one_way_entrance);
+            w.warp_placed_set_ripple_warp(o, d.ripple);
+            w.warp_placed_set_limited_use(o, d.uses >= 0);
+            w.warp_placed_set_uses(o, d.uses);
+            w.warp_placed_set_effect(o, world::warp_effect{});
+            w.try_create_warp_placed_location(o, room);
         }
 
         struct sim {
@@ -560,6 +588,114 @@ namespace selftest {
             char d[96];
             std::snprintf(d, sizeof(d), " eaten=%d tendrils=%u legs=%u", int(gs.world.player_get_eaten(s.p)), tendrils, legs);
             r.check("passive rot doesn't eat", !gs.world.player_get_eaten(s.p) && !s.dead() && tendrils > 0 && legs == 0, s.describe() + d);
+        }
+        {
+            // the Watcher standing in a warp is carried to the paired warp of
+            // another room, a rock lying next to it comes along at once
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(15, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}});
+            add_warp(gs, b, {feet_at(10, 1) + vec2{0.f, 20.f}, a, feet_at(15, 1) + vec2{0.f, 20.f}});
+            gs.ripple_level = 1.f;
+            sim s(gs, a, feet_at(15, 1), player::slugcat_name::watcher);
+            auto const rock = items::create_rock(gs, a, feet_at(18, 1));
+            bool const opened = s.until(300, [&] {
+                bool open = false;
+                w.room_for_each_warp_point_location(a, [&](dcon::warp_point_location_id l) { open = open || warps::openness(gs, w.warp_point_location_get_point(l), 1.f) > 0.5f; });
+                return open;
+            });
+            bool const started = s.until(600, [&] { return gs.warp.active; });
+            bool const arrived = s.until(400, [&] { return simulation::player_room(gs, s.p) == b; });
+            bool const rock_too = w.physical_object_get_room_from_object_location(items::body(gs, rock)) == b;
+            float const dist = rw::distance(s.pos(1), feet_at(10, 1) + vec2{0.f, 20.f});
+            // floating out of the exit while the transition clears
+            bool const hovered = s.until(100, [&] { return w.player_get_levitation_active(s.p) != 0; });
+            bool const done = s.until(600, [&] { return !gs.warp.active; });
+            // the gravity comes back once out
+            s.run(120);
+            bool const landed = s.contact(1).y == -1;
+            char d[160];
+            std::snprintf(d, sizeof(d), " opened=%d started=%d arrived=%d rock=%d dist=%.0f hovered=%d done=%d landed=%d", int(opened), int(started), int(arrived),
+                int(rock_too), dist, int(hovered), int(done), int(landed));
+            r.check("watcher warps, items come along", opened && started && arrived && rock_too && dist < 60.f && hovered && done && landed, s.describe() + d);
+            items::destroy(gs, rock);
+            // the arrival warp needs cooling down before taking the Watcher back
+            s.run(200);
+            r.check("no warping straight back", simulation::player_room(gs, s.p) == b && !gs.warp.active, s.describe());
+        }
+        {
+            // only the Watcher can use warps
+            auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(15, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1)});
+            sim s(gs, a, feet_at(15, 1), player::slugcat_name::white);
+            s.run(900);
+            r.check("survivor can't warp", simulation::player_room(gs, s.p) == a && !gs.warp.active, s.describe());
+        }
+        {
+            // a one way warp's exit never takes anyone anywhere, its entrance
+            // works once and closes (limited use)
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(15, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}, true, true, false, 1});
+            add_warp(gs, b, {feet_at(10, 1) + vec2{0.f, 20.f}, a, feet_at(15, 1) + vec2{0.f, 20.f}, true, false});
+            sim s(gs, a, feet_at(15, 1), player::slugcat_name::watcher);
+            bool const there = s.until(1200, [&] { return simulation::player_room(gs, s.p) == b; });
+            s.until(800, [&] { return !gs.warp.active; });
+            s.run(1500);
+            bool const stayed = simulation::player_room(gs, s.p) == b;
+            world::warp_state entrance = world::warp_state::ready;
+            w.room_for_each_warp_point_location(a, [&](dcon::warp_point_location_id l) { entrance = w.warp_point_get_state(w.warp_point_location_get_point(l)); });
+            char d[96];
+            std::snprintf(d, sizeof(d), " through=%d stayed_at_exit=%d entrance_closed=%d", int(there), int(stayed), int(entrance == world::warp_state::closed));
+            r.check("one way warp", there && stayed && entrance == world::warp_state::closed, s.describe() + d);
+        }
+        {
+            // holding the ability key: camouflage after 80 ticks, and from
+            // ripple level 3 the Watcher floats while holding it
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            gs.ripple_level = 3.f;
+            sim s(gs, room, feet_at(10, 1), player::slugcat_name::watcher);
+            s.run(40);
+            float const y0 = s.pos(1).y;
+            float peak = y0;
+            auto hold = player::make_input(0.f, 0.f, false, false, false);
+            hold.spec = true;
+            for (int i = 0; i < 100; ++i) {
+                simulation::tick(gs, std::span{&s.p, 1}, std::span{&hold, 1});
+                peak = std::max(peak, s.pos(1).y);
+            }
+            bool const camo = w.player_get_is_camo(s.p) != 0;
+            float const fade = w.player_get_camo_progress(s.p);
+            s.run(200);
+            bool const down = s.contact(1).y == -1;
+            char d[128];
+            std::snprintf(d, sizeof(d), " camo=%d fade=%.2f lift=%.0fpx back_down=%d", int(camo), fade, peak - y0, int(down));
+            r.check("camouflage and levitation", camo && fade > 0.5f && peak - y0 > 15.f && down, s.describe() + d);
+        }
+        {
+            // a ripple warp only works from the ripple layer (camouflaged at ripple level 5)
+            auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(15, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}, false, false, true});
+            gs.ripple_level = 5.f;
+            sim s(gs, a, feet_at(15, 1), player::slugcat_name::watcher);
+            s.run(700);
+            bool const blocked = simulation::player_room(gs, s.p) == a && !gs.warp.active;
+            auto hold = player::make_input(0.f, 0.f, false, false, false);
+            hold.spec = true;
+            for (int i = 0; i < 85; ++i)
+                simulation::tick(gs, std::span{&s.p, 1}, std::span{&hold, 1});
+            bool const layer = warps::active_ripple_layer(gs) == 1;
+            bool const through = s.until(1500, [&] { return simulation::player_room(gs, s.p) == b; });
+            char d[96];
+            std::snprintf(d, sizeof(d), " blocked_outside=%d ripple_layer=%d through=%d", int(blocked), int(layer), int(through));
+            r.check("ripple warp needs the ripple layer", blocked && layer && through, s.describe() + d);
+            s.until(800, [&] { return !gs.warp.active; });
+            gs.ripple_level = 1.f;
         }
         {
             // RegionGate: floor at y < 8, doors at x 14/23/32, rows 8..16

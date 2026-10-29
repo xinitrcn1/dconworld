@@ -18,6 +18,7 @@
 #include "physics.hpp"
 #include "player_graphics.hpp"
 #include "rot.hpp"
+#include "warps.hpp"
 #include "shortcuts.hpp"
 #include "reports.hpp"
 
@@ -302,6 +303,28 @@ void main() {
             glUniform1i(loc("u_texture2"), 2);
         }
 
+        // the warp shaders (assets/shaders/warp.vert, warp_common.glsl, warp_tear.frag, warp_screen.frag)
+        void load_warp_shaders(state& r, layered_fs::filesystem const& fs) {
+            auto const dir = fs.get_root().get_single_subdir("shaders");
+            auto const vs_src = read_text(fs, dir.get_single_file("warp.vert"));
+            auto const common = read_text(fs, dir.get_single_file("warp_common.glsl"));
+            auto const tear = read_text(fs, dir.get_single_file("warp_tear.frag"));
+            auto const screen = read_text(fs, dir.get_single_file("warp_screen.frag"));
+            if (vs_src.empty() || common.empty() || tear.empty() || screen.empty()) {
+                reports::add_log("missing warp shaders, warps are drawn without their effects");
+                return;
+            }
+            std::string const prelude = "#version 330 core\n";
+            auto const make = [&](std::string const& frag) {
+                GLuint const prog = link(compile(GL_VERTEX_SHADER, (prelude + vs_src).c_str()), compile(GL_FRAGMENT_SHADER, (prelude + common + frag).c_str()));
+                glUseProgram(prog);
+                glUniform1i(glGetUniformLocation(prog, "u_scene"), 0);
+                return prog;
+            };
+            r.warp_tear_program = make(tear);
+            r.warp_screen_program = make(screen);
+        }
+
         // every palette object becomes one layer of a texture array (like
         // anthiel), plus the global effectcolors.png table
         void load_palettes(state& r, sys::game_state const& s) {
@@ -370,6 +393,7 @@ void main() {
         load_room_shader(r, s.fs);
         load_palettes(r, s);
         load_slugcat_atlas(r, s.fs);
+        load_warp_shaders(r, s.fs);
     }
 
     // Camera images of the room as one texture array, replacing the last one
@@ -530,11 +554,14 @@ void main() {
                     return;
                 cmds.clear();
                 player_graphics::build(s, pid, alpha, cmds);
+                // the Watcher's camouflage: a plain fade out (vanilla masks it into the background)
+                float const camo = mathf::lerp(world.player_get_last_camo_progress(pid), world.player_get_camo_progress(pid), alpha);
+                float const vis = 1.f - 0.88f * camo;
                 for (auto const& c : cmds) {
                     if (c.is_triangle) {
-                        uint32_t const col = to_rgba(c.color);
+                        uint32_t const col = to_rgba(c.color, vis);
                         for (int k = 0; k < 3; ++k) {
-                            uint32_t const vc = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w) : col;
+                            uint32_t const vc = c.vertex_colors ? to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis) : col;
                             r.batch.push_back(vertex{c.tri[k].x, c.tri[k].y, vc, white_uv.x, white_uv.y});
                         }
                         continue;
@@ -549,7 +576,7 @@ void main() {
                     float const lx0 = -c.spr.anchor.x * f.w * c.spr.scale.x, lx1 = (1.f - c.spr.anchor.x) * f.w * c.spr.scale.x;
                     float const ly0 = -c.spr.anchor.y * f.h * c.spr.scale.y, ly1 = (1.f - c.spr.anchor.y) * f.h * c.spr.scale.y;
                     auto const place = [&](float lx, float ly) { return c.spr.pos + vec2{lx * cs + ly * sn, -lx * sn + ly * cs}; };
-                    uint32_t const col = to_rgba(c.spr.color);
+                    uint32_t const col = to_rgba(c.spr.color, vis);
                     float const u0 = f.x / tw, u1 = (f.x + f.w) / tw;
                     float const v_top = f.y / th, v_bottom = (f.y + f.h) / th;
                     vertex const bl{place(lx0, ly0).x, place(lx0, ly0).y, col, u0, v_bottom};
@@ -916,6 +943,223 @@ void main() {
             });
         }
 
+        // RippleRing: thin violet rings spreading out
+        void build_ripple_rings(state& r, sys::game_state const& s, world::room_view const& room) {
+            painter p{r.batch};
+            for (auto const& ring : s.ripple_rings) {
+                if (ring.room != room.id)
+                    continue;
+                float const e = 1.f - (1.f - ring.life) * (1.f - ring.life);
+                float const rad = ring.rad * e;
+                float const width = 1.f + 3.f * (1.f - ring.life);
+                uint32_t const col = to_rgba(rw::vec3{0.62f, 0.56f, 1.f}, mathf::clamp01(ring.intensity) * (1.f - ring.life) * 0.9f);
+                constexpr int segs = 48;
+                for (int k = 0; k < segs; ++k) {
+                    float const a0 = float(k) / segs * 6.2831853f, a1 = float(k + 1) / segs * 6.2831853f;
+                    vec2 const d0{std::cos(a0), std::sin(a0)}, d1{std::cos(a1), std::sin(a1)};
+                    vec2 const i0 = ring.pos + d0 * rad, o0 = ring.pos + d0 * (rad + width);
+                    vec2 const i1 = ring.pos + d1 * rad, o1 = ring.pos + d1 * (rad + width);
+                    p.tri(i0, o0, o1, col);
+                    p.tri(i0, o1, i1, col);
+                }
+            }
+        }
+
+        // copies the frame drawn so far into scene_texture (Unity's GrabPass)
+        void grab_scene(state& r) {
+            if (r.scene_texture == 0)
+                glGenTextures(1, &r.scene_texture);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
+            if (r.scene_width != r.width || r.scene_height != r.height) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, r.width, r.height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                r.scene_width = r.width;
+                r.scene_height = r.height;
+            }
+            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, r.width, r.height);
+        }
+
+        // the far side palette of a warp: ripple warps, limited use (bad) warps, the Outer Rim's
+        float warp_variant(sys::game_state const& s, dcon::warp_placed_id placed, dcon::room_id room) {
+            auto const& w = s.world;
+            if (w.warp_placed_get_ripple_warp(placed))
+                return 1.f;
+            auto const region = w.room_get_region_from_region_membership(room);
+            if (region && s.to_string_view(w.region_get_name(region)) == "wora")
+                return 3.f;
+            if (w.warp_placed_get_limited_use(placed))
+                return 2.f;
+            return 0.f;
+        }
+
+        // WarpTear for every warp point of the room
+        void draw_warp_tears(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
+            auto const& w = s.world;
+            if (r.warp_tear_program == 0)
+                return;
+            bool grabbed = false;
+            w.room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
+                auto const wp = w.warp_point_location_get_point(l);
+                dcon::warp_placed_id const placed = w.warp_point_get_placed(wp);
+                float const fade = mathf::lerp(w.warp_point_get_last_fade(wp), w.warp_point_get_fade(wp), alpha);
+                if (fade <= 0.f)
+                    return;
+                vec2 const c = w.warp_placed_get_pos(placed);
+                float const rad = warps::tear_radius;
+                // off screen: nothing to bend
+                float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
+                if (c.x + rad * 0.5f < cam.pos.x || c.x - rad * 0.5f > cam.pos.x + view_w || c.y + rad * 0.5f < cam.pos.y || c.y - rad * 0.5f > cam.pos.y + view_h)
+                    return;
+                if (!grabbed) {
+                    grab_scene(r);
+                    grabbed = true;
+                }
+                float const open = mathf::lerp(w.warp_point_get_last_open(wp), w.warp_point_get_open(wp), alpha);
+                r.batch.clear();
+                vertex const bl{c.x - rad, c.y - rad, 0xFFFFFFFFu, -1.f, -1.f};
+                vertex const br{c.x + rad, c.y - rad, 0xFFFFFFFFu, 1.f, -1.f};
+                vertex const tr{c.x + rad, c.y + rad, 0xFFFFFFFFu, 1.f, 1.f};
+                vertex const tl{c.x - rad, c.y + rad, 0xFFFFFFFFu, -1.f, 1.f};
+                r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+                GLuint const prog = r.warp_tear_program;
+                glUseProgram(prog);
+                auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
+                glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
+                glUniform2f(loc("u_screen"), float(r.width), float(r.height));
+                glUniform1f(loc("u_radius_px"), rad * cam.zoom);
+                glUniform1f(loc("u_open"), open);
+                glUniform1f(loc("u_fade"), fade);
+                glUniform1f(loc("u_time"), seconds);
+                glUniform1f(loc("u_seed"), float(placed.index() % 97) * 0.173f);
+                glUniform1f(loc("u_variant"), warp_variant(s, placed, room.id));
+                glUniform1f(loc("u_ghost"), warps::other_layer(s, wp) ? 1.f : 0.f);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, r.scene_texture);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            });
+        }
+
+        // RoomCamera.warpPointTimer's screen effect: winding into the warp,
+        // then out of the destination's
+        void draw_warp_screen(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
+            auto const& seq = s.warp;
+            if (!seq.active || r.warp_screen_program == 0)
+                return;
+            bool const second_half = seq.transferred;
+            if ((second_half ? seq.to_room : seq.from_room) != room.id)
+                return;
+            float const progress = mathf::lerp(seq.last_progress, seq.progress, alpha) / seq.duration;
+            vec2 const at = second_half ? seq.to_pos : seq.from_pos;
+            grab_scene(r);
+            float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
+            r.batch.clear();
+            vertex const bl{cam.pos.x, cam.pos.y, 0xFFFFFFFFu, 0.f, 0.f};
+            vertex const br{cam.pos.x + view_w, cam.pos.y, 0xFFFFFFFFu, 1.f, 0.f};
+            vertex const tr{cam.pos.x + view_w, cam.pos.y + view_h, 0xFFFFFFFFu, 1.f, 1.f};
+            vertex const tl{cam.pos.x, cam.pos.y + view_h, 0xFFFFFFFFu, 0.f, 1.f};
+            r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            GLuint const prog = r.warp_screen_program;
+            glUseProgram(prog);
+            auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
+            glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform2f(loc("u_screen"), float(r.width), float(r.height));
+            glUniform2f(loc("u_center"), (at.x - cam.pos.x) * cam.zoom, (at.y - cam.pos.y) * cam.zoom);
+            glUniform1f(loc("u_progress"), progress);
+            glUniform1f(loc("u_time"), seconds);
+            glUniform1f(loc("u_variant"), seq.ripple ? 1.f : 0.f);
+            auto const knob = [&](char const* n, uint8_t v) { glUniform1f(loc(n), float(v) / 15.f); };
+            knob("u_vignette", seq.effect.vignette);
+            knob("u_darkness", seq.effect.darkness);
+            knob("u_spiral_gap", seq.effect.spiral_gap);
+            knob("u_swirl", seq.effect.swirl);
+            knob("u_lensing", seq.effect.lensing);
+            knob("u_noise", seq.effect.noise);
+            knob("u_twist", seq.effect.twist);
+            knob("u_agitation", seq.effect.agitation);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        // ring of `n` arc pieces from angle a0 to a1 (radians, clockwise from the top in screen space)
+        void arc(painter& p, vec2 c, float rad, float width, float a0, float a1, uint32_t col) {
+            int const segs = std::max(2, int(std::fabs(a1 - a0) * 12.f));
+            for (int k = 0; k < segs; ++k) {
+                float const t0 = a0 + (a1 - a0) * float(k) / float(segs);
+                float const t1 = a0 + (a1 - a0) * float(k + 1) / float(segs);
+                vec2 const d0{std::sin(t0), -std::cos(t0)}, d1{std::sin(t1), -std::cos(t1)};
+                p.tri(c + d0 * rad, c + d0 * (rad + width), c + d1 * (rad + width), col);
+                p.tri(c + d0 * rad, c + d1 * (rad + width), c + d1 * rad, col);
+            }
+        }
+
+        // The karma meter (any slugcat) or the ripple meter (the Watcher) in
+        // the bottom left corner, screen space. Plain shapes: karma is a ring
+        // of ten notches lit up to the karma level, the cap's notches faint;
+        // the ripple level is a set of nested rings, half levels as half
+        // rings, with the camouflage charge left as an arc around them
+        void draw_meters(state& r, sys::game_state const& s) {
+            auto const& w = s.world;
+            dcon::player_id p0;
+            w.for_each_player([&](dcon::player_id p) {
+                if (!p0)
+                    p0 = p;
+            });
+            if (!p0)
+                return;
+            r.batch.clear();
+            painter p{r.batch};
+            vec2 const c{58.f, float(r.height) - 58.f};
+            p.glow(c, 46.f, rgba(0, 0, 0, 150), rgba(0, 0, 0, 0));
+            if (warps::is_watcher(s, p0)) {
+                float const level = s.ripple_level;
+                bool const layer = warps::active_ripple_layer(s) == 1;
+                uint32_t const lit = layer ? rgba(255, 214, 120) : rgba(170, 156, 255);
+                uint32_t const dim = rgba(90, 84, 130, 110);
+                for (int i = 0; i < 5; ++i) {
+                    float const rad = 7.f + float(i) * 5.f;
+                    float const fill = mathf::clamp01(level - float(i));
+                    arc(p, c, rad, 2.f, 0.f, 6.2831853f, dim);
+                    if (fill > 0.f)
+                        arc(p, c, rad, 2.f, 0.f, 6.2831853f * fill, lit);
+                }
+                p.circle(c, 3.f, level > 0.f ? lit : dim);
+                // camouflage charge still available, and a glow while camouflaged
+                float const left = 1.f - w.player_get_camo_charge(p0) / (level >= 5.f ? 4800.f : level >= 4.f ? 3600.f : level >= 2.f ? 2400.f : 1600.f);
+                arc(p, c, 36.f, 3.f, 0.f, 6.2831853f * mathf::clamp01(left), rgba(220, 220, 240, 170));
+                float const camo = w.player_get_camo_progress(p0);
+                if (camo > 0.f)
+                    p.glow(c, 44.f, to_rgba(rw::vec3{0.65f, 0.6f, 1.f}, 0.35f * camo), to_rgba(rw::vec3{0.65f, 0.6f, 1.f}, 0.f));
+            } else {
+                for (int i = 0; i < 10; ++i) {
+                    float const a = float(i) / 10.f * 6.2831853f;
+                    vec2 const d{std::sin(a), -std::cos(a)};
+                    uint32_t const col = i <= s.karma ? rgba(240, 236, 220) : i <= s.karma_cap ? rgba(140, 136, 128, 170) : rgba(70, 68, 64, 90);
+                    float const len = i <= s.karma ? 12.f : 8.f;
+                    p.line(c + d * 18.f, c + d * (18.f + len), 3.f, col);
+                }
+                arc(p, c, 14.f, 2.f, 0.f, 6.2831853f, rgba(240, 236, 220, 200));
+                // the level itself: as many dots as karma above the first
+                for (int i = 0; i < s.karma; ++i) {
+                    float const a = float(i) / float(std::max(1, s.karma)) * 6.2831853f;
+                    p.circle(c + vec2{std::sin(a), -std::cos(a)} * 7.f, 1.6f, rgba(240, 236, 220));
+                }
+                p.circle(c, 2.5f, rgba(240, 236, 220));
+            }
+            glm::mat4 const proj = glm::ortho(0.f, float(r.width), float(r.height), 0.f);
+            glUseProgram(r.program);
+            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
+            glUniform1i(r.u_textured, 0);
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+            glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
+        }
+
         // RegionGateGraphics, minimal: each door is a slab sliding down from
         // above its opening while closing
         void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room) {
@@ -1103,6 +1347,14 @@ void main() {
             }
         });
 
+        // the warps bend everything drawn so far
+        float const seconds = float(std::fmod(double(SDL_GetTicks()) / 1000.0, 1000.0));
+        draw_warp_tears(r, s, room, alpha, cam, proj, seconds);
+        draw_flat([&] { build_ripple_rings(r, s, room); });
+        draw_warp_screen(r, s, room, alpha, cam, proj, seconds);
+
+        if (r.show_hud)
+            draw_meters(r, s);
         if (r.show_hud && r.font_texture != 0 && !hud.empty())
             draw_hud(r, hud);
     }

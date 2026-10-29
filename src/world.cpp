@@ -2,6 +2,8 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -140,6 +142,25 @@ namespace world {
             rw::vec2 handle{0.f, 100.f};
             rot_custom_data custom;
         };
+        struct parsed_warp {
+            rw::vec2 pos{0.f, 0.f};
+            std::string dest_room; // lowercase, empty: dynamic
+            std::optional<rw::vec2> dest_pos;
+            warp_effect effect;
+            bool one_way = false;
+            bool one_way_entrance = false;
+            bool ripple_warp = false;
+            bool limited_use = false;
+            int16_t uses = 0;
+            bool any_slugcat = false;
+            uint32_t seed = 0;
+        };
+        struct parsed_warp_target {
+            rw::vec2 pos{0.f, 0.f};
+            float ripple_requirement = 0.f;
+            bool dead_end = false;
+            bool bad_warp = false;
+        };
         struct parsed_shortcut {
             rw::ivec2 start;
             rw::ivec2 dest;
@@ -179,6 +200,8 @@ namespace world {
             parsers::room_template settings;
             std::vector<parsed_trigger> triggers;
             std::vector<parsed_rot> rot;
+            std::vector<parsed_warp> warps;
+            std::vector<parsed_warp_target> warp_targets;
 
             room_view view() const noexcept {
                 room_view v;
@@ -636,6 +659,30 @@ namespace world {
                 dc.rot_placed_set_custom(oid, o.custom);
                 dc.try_create_rot_placed_location(oid, rid);
             }
+            for (auto const& o : r.warps) {
+                auto const wid = dc.create_warp_placed();
+                dc.warp_placed_set_pos(wid, o.pos);
+                if (!o.dest_room.empty())
+                    dc.warp_placed_set_dest_room(wid, s.add_text(o.dest_room));
+                dc.warp_placed_set_dest_pos(wid, o.dest_pos);
+                dc.warp_placed_set_effect(wid, o.effect);
+                dc.warp_placed_set_one_way(wid, o.one_way);
+                dc.warp_placed_set_one_way_entrance(wid, o.one_way_entrance);
+                dc.warp_placed_set_ripple_warp(wid, o.ripple_warp);
+                dc.warp_placed_set_limited_use(wid, o.limited_use);
+                dc.warp_placed_set_uses(wid, o.uses);
+                dc.warp_placed_set_any_slugcat(wid, o.any_slugcat);
+                dc.warp_placed_set_seed(wid, o.seed);
+                dc.try_create_warp_placed_location(wid, rid);
+            }
+            for (auto const& o : r.warp_targets) {
+                auto const tid = dc.create_warp_target();
+                dc.warp_target_set_pos(tid, o.pos);
+                dc.warp_target_set_ripple_requirement(tid, o.ripple_requirement);
+                dc.warp_target_set_dead_end(tid, o.dead_end);
+                dc.warp_target_set_bad_warp(tid, o.bad_warp);
+                dc.try_create_warp_target_location(tid, rid);
+            }
             for (auto const& it : r.items) {
                 auto const iid = dc.create_placed_item();
                 dc.placed_item_set_tile(iid, it.tile);
@@ -764,6 +811,23 @@ namespace world {
                     line.remove_suffix(1);
                 if (!line.empty())
                     add(text::to_lowercase_native(line), false);
+            }
+            // mods add regions through modify/world/regions.txt ("[ADD]WARA"),
+            // every root's own copy counts (the modify merge system isn't
+            // ported beyond this)
+            for (auto it = s.fs.roots.rbegin(); it != s.fs.roots.rend(); ++it) {
+                // modify/ folders aren't indexed (they are patches, not files to layer)
+                std::ifstream in(it->root + "/modify/world/regions.txt");
+                if (!in)
+                    continue;
+                std::string line;
+                while (std::getline(in, line)) {
+                    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r'))
+                        line.pop_back();
+                    constexpr std::string_view tag = "[ADD]";
+                    if (line.size() > tag.size() && std::string_view{line}.substr(0, tag.size()) == tag)
+                        add(text::to_lowercase_native(line.substr(tag.size())), false);
+                }
             }
             // gates and shared shelters live in their own folders, expose them
             // as pseudo regions so they can be browsed like any other room
@@ -904,10 +968,12 @@ namespace world {
 
         // The "PlacedObjects:" line of a room settings file
         // (RoomSettings.LoadPlacedObjects): ", " separated objects of
-        // "<type><x><y><data>" with ResizableObjectData "<handle x>~<handle y>"
-        // (CustomRotData appends its fields). Only the rot objects are kept;
-        // slugcat filters aren't applied.
-        void parse_placed_rot(std::string_view text, std::vector<parsed_rot>& out) {
+        // "<type><x><y><data>", the data '~' separated. Only the rot objects
+        // (ResizableObjectData "<handle x>~<handle y>", CustomRotData appends
+        // its fields) and the Watcher's warps are kept; slugcat filters
+        // aren't applied.
+        void parse_placed_objects(std::string_view text, parsed_room& r) {
+            auto& out = r.rot;
             constexpr std::string_view key = "PlacedObjects: ";
             size_t at = text.find(key);
             while (at != std::string_view::npos && at != 0 && text[at - 1] != '\n')
@@ -935,6 +1001,63 @@ namespace world {
                 auto const parts = split(entry, "><");
                 if (parts.size() < 4)
                     continue;
+                if (parts[0] == "WarpPoint") {
+                    // WarpPointData.FromString
+                    auto const d = split(parts[3], "~");
+                    if (d.size() < 10)
+                        continue;
+                    parsed_warp w;
+                    w.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                    if (d[5] != "NULL" && !d[5].empty())
+                        w.dest_room = text::to_lowercase_native(d[5]);
+                    if (d[6] != "NULL" && d[7] != "NULL")
+                        w.dest_pos = rw::vec2{num(d[6]), num(d[7])};
+                    // the uuid seeds the dynamic target picks
+                    for (char const c : d[8])
+                        w.seed = w.seed * 31u + uint8_t(c);
+                    w.any_slugcat = d[9] == "AnySlugcat";
+                    auto const knob = [&](size_t i, uint8_t& v) {
+                        if (d.size() > i)
+                            v = uint8_t(std::clamp(int(num(d[i])), 0, 15));
+                    };
+                    knob(10, w.effect.vignette);
+                    knob(11, w.effect.darkness);
+                    knob(12, w.effect.spiral_gap);
+                    knob(13, w.effect.swirl);
+                    knob(14, w.effect.lensing);
+                    knob(15, w.effect.noise);
+                    knob(16, w.effect.twist);
+                    knob(17, w.effect.agitation);
+                    knob(18, w.effect.spaghettification);
+                    if (d.size() > 19)
+                        w.effect.trigger_duration = uint16_t(std::clamp(int(num(d[19])), 0, 10000));
+                    if (d.size() > 20)
+                        w.effect.active_duration = uint16_t(std::clamp(int(num(d[20])), 0, 10000));
+                    auto const flag = [&](size_t i) { return d.size() > i && d[i] == "true"; };
+                    w.one_way = flag(24);
+                    w.ripple_warp = flag(25);
+                    w.one_way_entrance = flag(26);
+                    bool const identified = flag(27);
+                    w.limited_use = flag(28);
+                    if (d.size() > 29)
+                        w.uses = int16_t(num(d[29]));
+                    // WarpPoint(): an unidentified one way warp is the entrance
+                    if (w.one_way && !identified)
+                        w.one_way_entrance = true;
+                    r.warps.push_back(std::move(w));
+                    continue;
+                }
+                if (parts[0] == "DynamicWarpTarget") {
+                    auto const d = split(parts[3], "~");
+                    parsed_warp_target t;
+                    t.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                    if (d.size() > 2)
+                        t.ripple_requirement = num(d[2]);
+                    t.dead_end = d.size() > 3 && d[3] == "true";
+                    t.bad_warp = d.size() > 4 && d[4] == "true";
+                    r.warp_targets.push_back(t);
+                    continue;
+                }
                 parsed_rot o;
                 if (parts[0] == "Corruption") o.kind = rot_kind::corruption;
                 else if (parts[0] == "PassiveCorruption") o.kind = rot_kind::passive_corruption;
@@ -981,7 +1104,7 @@ namespace world {
             r.err.filename = f.path;
             auto const t = parse_template(s, of->to_string_view(), r.err);
             parse_triggers(of->to_string_view(), r.triggers);
-            parse_placed_rot(of->to_string_view(), r.rot);
+            parse_placed_objects(of->to_string_view(), r);
             auto const lname = text::to_lowercase_native(t.template_);
             if (lname == "none") {
                 // explicitly no template

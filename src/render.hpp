@@ -76,6 +76,13 @@ namespace render {
         int slugcat_width = 1;
         int slugcat_height = 1;
         std::unordered_map<std::string, atlas_frame> slugcat_frames;
+        // warp effects (assets/shaders/warp_*): the tears and the full screen
+        // transition, both reading a copy of the frame drawn so far
+        uint32_t warp_tear_program = 0;
+        uint32_t warp_screen_program = 0;
+        uint32_t scene_texture = 0;
+        int scene_width = 0;
+        int scene_height = 0;
         uint32_t vao = 0;
         uint32_t vbo = 0;
         std::vector<vertex> batch;

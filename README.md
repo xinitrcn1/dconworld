@@ -44,7 +44,9 @@ between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
 step, T slow motion, 1-9/0 Survivor, Monk, Hunter, Gourmand, Artificer,
 Rivulet, Spearmaster, Saint, Sofanthiel, Watcher (0 again toggles the
-Watcher's Void Weaver decorations), M plays a song of the
+Watcher's Void Weaver decorations), E holds the Watcher's ability
+(camouflage, levitation; gamepad north button), `[`/`]` lower/raise the
+Watcher's ripple level (any other slugcat's karma), M plays a song of the
 region (again for another one; the game itself has long silent stretches),
 Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
 pick up with a free hand; Hunter stows a held spear on its back (or takes it
@@ -83,6 +85,7 @@ chunks of an object, body of a player...) is modelled with relationships.
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of players, vessels, creatures, items and gates of the occupied rooms |
 | `src/centipede.*` | `Centipede`/`CentipedeAI`: crawling on any surface, grabbing, shocking, utility AI |
+| `src/warps.*` | Watcher `WarpPoint`s: trigger, pull, transfer, one way/ripple/limited use warps, dynamic targets, the transition timer, ripple rings |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand, shared distance fields stored in the data container |
 | `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
@@ -146,7 +149,7 @@ and hunting from a simplified tracker (sight and contact).
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
 (reverse Dijkstra with vanilla's connection costs: steps, open diagonals,
-drops) kept in a `path_field` object. Fields are shared by every creature
+drops) kept in `game_state::path_fields`, a cache outside the data container (never saved). Fields are shared by every creature
 heading to the same tile, reused until the room's `geometry_version`
 changes (gate doors, spear beams) and recycled least recently used; following
 one is a neighbour lookup.
@@ -171,6 +174,31 @@ ragged bulbs over the level foreground (vanilla's Water container), tubes and
 bumps with the region's corruption colours, a soft blot for black goo and
 CorruptionDarkness. Not ported: DaddyBubbles/ripples, StuckDaddy restraints,
 RotFlyPaper, the Watcher's sentient rot, slugcat filters on placed objects.
+
+### Watcher warps
+
+Watcher regions are added from every root's `modify/world/regions.txt`
+(`[ADD]` lines only; the rest of the modify merge system isn't ported), so
+`--root <StreamingAssets>/mods/watcher --root <StreamingAssets>` loads all
+2074 rooms. `WarpPoint` and `DynamicWarpTarget` placed objects are read
+from the room settings. A warp's tear opens as the Watcher comes close;
+standing in it (still, for a faster trigger) starts the warp: gravity drops
+to zero around it, the Watcher is drawn into its middle and nearby items
+and creatures spiral in. Halfway through the transition the Watcher and
+everything the pull held appear at the destination's warp at once (vanilla
+lets them out one by one), the Watcher hovering out until the transition
+clears. Only the Watcher can warp. One way warps work from their entrance
+only, limited use warps close when used up, ripple warps only work from the
+ripple layer (camouflaged at ripple level 5) and show as faint ripples from
+the other layer; warps without a destination pick a DynamicWarpTarget of
+another region the ripple level allows. Holding the ability key toggles the
+camouflage after a moment (drawn as a plain fade, not vanilla's mask), with
+a charge that runs out, and from ripple level 3 lifts the Watcher off the
+ground. The tears and the screen wide transition are GLSL shaders of our own
+(`assets/shaders/warp_*`) going for the vanilla look; the HUD shows a karma
+meter, or for the Watcher a ripple meter with the camouflage charge. Not
+ported: warp sounds, the Void Weaver sealing, warp fatigue, bad warps,
+player made dynamic warps, ripple spawn and the ripple layer's other effects.
 
 ### Audio
 

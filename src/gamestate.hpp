@@ -19,6 +19,7 @@
 #include "dcon_generated.hpp"
 #include "layered_fs.hpp"
 #include "sound_types.hpp"
+#include "world_types.hpp"
 
 namespace sys {
     struct game_state {
@@ -49,11 +50,68 @@ namespace sys {
         };
         std::vector<noise> noises;
 
+        // story progress the warps and the HUD care about (SaveState's
+        // deathPersistentSaveData): karma 0..9 under its cap, and the
+        // Watcher's ripple level 0..5 in half steps
+        int32_t karma = 0;
+        int32_t karma_cap = 4;
+        float ripple_level = 1.f;
+        // dynamic warps taken so far (seeds the next pick)
+        uint32_t dynamic_warps_taken = 0;
+
+        // RoomCamera.warpPointTimer: the whole screen warp transition, from
+        // the warp point the Watcher stepped into to where it comes out
+        struct warp_sequence {
+            bool active = false;
+            dcon::warp_point_id origin;
+            dcon::room_id from_room;
+            rw::vec2 from_pos{0.f, 0.f};
+            dcon::room_id to_room;
+            rw::vec2 to_pos{0.f, 0.f};
+            float duration = 400.f;
+            float progress = 0.f;
+            float last_progress = 0.f;
+            // the transfer happened (the second half plays in to_room)
+            bool transferred = false;
+            bool ripple = false;
+            world::warp_effect effect;
+            // objects the pull took hold of (objectsToRestoreGravityTo), they
+            // travel along and get their gravity back on the other side
+            std::vector<dcon::physical_object_id> pulled;
+            std::vector<float> pulled_gravity;
+        };
+        warp_sequence warp;
+
+        // RippleRing: expanding rings of the ripple layer (warp hints, the
+        // Watcher's ability)
+        struct ripple_ring {
+            dcon::room_id room;
+            rw::vec2 pos;
+            float rad;       // final radius
+            float life;      // 0..1
+            float speed;     // life per tick
+            float intensity;
+        };
+        std::vector<ripple_ring> ripple_rings;
+
         // Room.PlaySound
         void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {
             if (sounds.size() < 256)
                 sounds.push_back(sound::sound_request{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch});
         }
+
+        // pathing.hpp's distance fields: a cache derived from the rooms (it is
+        // never saved), at most 32, recycled least recently used
+        struct path_field {
+            dcon::room_id room;
+            rw::ivec2 goal{0, 0};
+            uint8_t movement = 0;
+            uint16_t geometry_version = 0;
+            uint32_t last_used = 0;
+            // travel cost to the goal per tile (row major), 0xFFFF unreachable
+            std::vector<uint16_t> distance;
+        };
+        std::vector<path_field> path_fields;
 
         // text storage, indexed by dcon::text_key
         std::vector<std::string> text;

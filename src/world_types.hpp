@@ -197,6 +197,32 @@ namespace world {
         constexpr bool same_creature(rot_prey o) const noexcept { return kind == o.kind && id == o.id; }
     };
 
+    // WarpPoint.WarpPointData.EffectSettings: 4 bit cosmetic knobs of the
+    // warp transition, and how long triggering and activating take
+    struct warp_effect {
+        uint8_t vignette = 0;
+        uint8_t darkness = 6;
+        uint8_t spiral_gap = 8;
+        uint8_t swirl = 4;
+        uint8_t lensing = 8;
+        uint8_t noise = 4;
+        uint8_t twist = 4;
+        uint8_t agitation = 4;
+        uint8_t spaghettification = 7;
+        uint16_t trigger_duration = 150;
+        uint16_t active_duration = 150;
+    };
+
+    // WarpPoint.State
+    enum class warp_state : uint8_t {
+        ready,       // ReadyForWarp: waiting for the Watcher to stand in it
+        enter,       // EnterWarp: pulling everything in
+        exit,        // ExitWarp: the Watcher arrived here, floating out
+        spawn_items, // SpawnItems
+        cool_down,   // CoolDown
+        closed,      // Closed: used up
+    };
+
     // One entry of AbstractRoomNode.connectivity[template, node]
     struct node_connectivity {
         int16_t distance = -1;

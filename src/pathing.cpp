@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <queue>
 #include <vector>
 
@@ -105,52 +106,44 @@ namespace pathing {
         return cap;
     }
 
-    dcon::path_field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement m) {
-        auto& w = state.world;
-        uint16_t const version = w.room_get_geometry_version(room);
-        dcon::path_field_id best;
-        dcon::path_field_id oldest;
-        w.for_each_path_field([&](dcon::path_field_id f) {
-            if (w.path_field_get_in_use(f) && w.path_field_get_room(f) == room && w.path_field_get_goal(f) == goal
-            && w.path_field_get_movement(f) == uint8_t(m) && w.path_field_get_geometry_version(f) == version)
-                best = f;
-            if (!oldest || w.path_field_get_last_used(f) < w.path_field_get_last_used(oldest))
+    field_id field_to(sys::game_state& state, dcon::room_id room, ivec2 goal, movement m) {
+        auto& fields = state.path_fields;
+        uint16_t const version = state.world.room_get_geometry_version(room);
+        field_id oldest = 0;
+        for (field_id f = 0; f < fields.size(); ++f) {
+            auto& pf = fields[f];
+            if (pf.room == room && pf.goal == goal && pf.movement == uint8_t(m) && pf.geometry_version == version) {
+                pf.last_used = state.tick;
+                return f;
+            }
+            if (pf.last_used < fields[oldest].last_used)
                 oldest = f;
-        });
-        if (best) {
-            w.path_field_set_last_used(best, state.tick);
-            return best;
         }
-        dcon::path_field_id f = w.path_field_size() < 32 ? w.create_path_field() : oldest;
-        static std::vector<uint16_t> dist;
-        build(world::get_room_view(state, room), m, goal, dist);
+        field_id const f = fields.size() < 32 ? field_id(fields.size()) : oldest;
+        if (f == fields.size())
+            fields.emplace_back();
+        auto& pf = fields[f];
+        build(world::get_room_view(state, room), m, goal, pf.distance);
         ++build_count;
-        w.path_field_set_room(f, room);
-        w.path_field_set_goal(f, goal);
-        w.path_field_set_movement(f, uint8_t(m));
-        w.path_field_set_geometry_version(f, version);
-        w.path_field_set_last_used(f, state.tick);
-        w.path_field_set_in_use(f, true);
-        auto stored = w.path_field_get_distance(f);
-        stored.resize(uint32_t(dist.size()));
-        for (uint32_t i = 0; i < dist.size(); ++i)
-            stored[i] = dist[i];
+        pf.room = room;
+        pf.goal = goal;
+        pf.movement = uint8_t(m);
+        pf.geometry_version = version;
+        pf.last_used = state.tick;
         return f;
     }
 
-    uint16_t distance(sys::game_state const& state, dcon::path_field_id f, ivec2 t) noexcept {
-        auto const& w = state.world;
-        auto const room = w.path_field_get_room(f);
-        int32_t const width = w.room_get_width(room);
-        int32_t const height = w.room_get_height(room);
+    uint16_t distance(sys::game_state const& state, field_id f, ivec2 t) noexcept {
+        auto const& pf = state.path_fields[f];
+        int32_t const width = state.world.room_get_width(pf.room);
+        int32_t const height = state.world.room_get_height(pf.room);
         if (t.x < 0 || t.y < 0 || t.x >= width || t.y >= height)
             return unreachable;
-        auto const d = w.path_field_get_distance(f);
         uint32_t const i = uint32_t(t.y * width + t.x);
-        return i < d.size() ? d[i] : unreachable;
+        return i < pf.distance.size() ? pf.distance[i] : unreachable;
     }
 
-    std::optional<ivec2> next_step(sys::game_state const& state, dcon::path_field_id f, ivec2 from) noexcept {
+    std::optional<ivec2> next_step(sys::game_state const& state, field_id f, ivec2 from) noexcept {
         uint16_t const here = distance(state, f, from);
         std::optional<ivec2> best;
         uint16_t best_d = here;
@@ -164,8 +157,7 @@ namespace pathing {
         if (best)
             return best;
         // a drop: the field is lower somewhere below an open column
-        auto const& w = state.world;
-        auto const room = world::get_room_view(state, w.path_field_get_room(f));
+        auto const room = world::get_room_view(state, state.path_fields[f].room);
         for (int32_t k = 1; k < room.height; ++k) {
             ivec2 const t = from - ivec2{0, k};
             if (room.get_tile(t).solid())

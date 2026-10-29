@@ -3,8 +3,8 @@
 // On demand pathfinding. Vanilla bakes per creature-template connectivity
 // maps and runs an incremental A* per creature (PathFinder, AImap). Here a
 // creature asks for a distance field to its goal tile instead: one reverse
-// Dijkstra over the room's tiles, stored in a `path_field` data container
-// object. Fields are keyed by (room, goal tile, movement kind) and shared by
+// Dijkstra over the room's tiles, kept in sys::game_state::path_fields (a
+// cache, not game state: it can always be rebuilt). Fields are keyed by (room, goal tile, movement kind) and shared by
 // every creature heading to the same tile (a pack hunting the slugcat builds
 // one field per tile the slugcat stands on), recycled least recently used,
 // and rebuilt when the room's geometry_version changes (gate doors, spear
@@ -25,6 +25,8 @@ namespace pathing {
     };
 
     inline constexpr uint16_t unreachable = 0xFFFF;
+    // a field: its index in sys::game_state::path_fields
+    using field_id = uint32_t;
     // TileConnectionResistance, in tenths: standard step, open diagonal, drop
     inline constexpr uint16_t step_cost = 10;
     inline constexpr uint16_t diagonal_cost = 30;
@@ -37,11 +39,11 @@ namespace pathing {
 
     // The field to `goal`, built if no fresh one exists. An inaccessible goal
     // (a slugcat in mid air) is approached through the accessible tiles near it
-    dcon::path_field_id field_to(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement m);
+    field_id field_to(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement m);
     // travel cost from `t` to the field's goal (unreachable out of the room)
-    uint16_t distance(sys::game_state const& state, dcon::path_field_id f, rw::ivec2 t) noexcept;
+    uint16_t distance(sys::game_state const& state, field_id f, rw::ivec2 t) noexcept;
     // The neighbour of `from` to step to, none when there is no way on
-    std::optional<rw::ivec2> next_step(sys::game_state const& state, dcon::path_field_id f, rw::ivec2 from) noexcept;
+    std::optional<rw::ivec2> next_step(sys::game_state const& state, field_id f, rw::ivec2 from) noexcept;
 
     // fields built since start (statistics, tests)
     uint32_t builds() noexcept;

@@ -70,6 +70,7 @@ add_executable(rwcpp
     src/pathing.cpp
     src/centipede.cpp
     src/rot.cpp
+    src/warps.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

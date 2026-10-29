@@ -6,6 +6,7 @@
 #include "centipede.hpp"
 #include "items.hpp"
 #include "rot.hpp"
+#include "warps.hpp"
 #include "shortcuts.hpp"
 
 // Port notes
@@ -260,7 +261,26 @@ namespace player {
     X(vine_grab_delay) \
     X(vine_climb_cursor) \
     X(zero_g_pole_grab_dir) \
-    X(eaten)
+    X(eaten) \
+    X(warp_point_cooldown) \
+    X(warp_protection) \
+    X(is_camo) \
+    X(camo_progress) \
+    X(last_camo_progress) \
+    X(camo_charge) \
+    X(camo_recharge_penalty) \
+    X(activate_camo_timer) \
+    X(performing_activation_timer) \
+    X(cancel_camo_cooldown) \
+    X(camo_inputs_need_reset) \
+    X(start_camo_state) \
+    X(ripple_ring_delay) \
+    X(levitation_active) \
+    X(levitation_needs_cooldown) \
+    X(levitation_gravity) \
+    X(levitation_air_resistance) \
+    X(levitation_cooldown) \
+    X(warp_held)
 
         // Reference accessors into the data container for one player, so the
         // port reads like the C# ("this.canJump" -> p.can_jump())
@@ -332,6 +352,7 @@ namespace player {
         void jump(ctx& x);
         void wall_jump(ctx& x, int32_t direction);
         void lung_update(ctx& x);
+        void watcher_update(ctx& x);
 
         void stun_impl(pref& p, int32_t st) {
             // Player.Stun then Creature.Stun
@@ -406,6 +427,10 @@ namespace player {
             p.state.world.player_set_vessel_shortcut(p.id, dcon::shortcut_id{});
             p.state.world.player_set_vine(p.id, dcon::rot_tube_id{});
             p.air_in_lungs() = 1.f;
+            p.levitation_gravity() = 0.9f;
+            p.levitation_air_resistance() = 0.999f;
+            p.levitation_cooldown() = 1.f;
+            p.start_camo_state() = -1;
             p.flip_direction() = 1;
             p.last_flip_direction() = 1;
         }
@@ -484,6 +509,9 @@ namespace player {
             state.world.body_chunk_set_last_contact_point(c, ivec2{0, 0});
         }
         state.world.physical_object_set_surface_friction(o, 0.5f);
+        state.world.physical_object_set_g(o, 0.9f);
+        state.world.physical_object_set_air_friction(o, 0.999f);
+        p.stats() = make_stats(p.stats().name);
     }
 
     // Player.Update, the parts that matter to movement, in vanilla order
@@ -655,6 +683,7 @@ namespace player {
         // being sucked into a shortcut replaces the physics and movement
         if (shortcuts::update_entering(state, id, room))
             return;
+        watcher_update(x);
         // PhysicalObject.Update
         physics::update_object(state, room, x.o, &terrain_impact, &x);
 
@@ -662,6 +691,179 @@ namespace player {
         if (p.stun() < 1 && !p.dead()) {
             movement_update(x);
             items::grab_update(state, id, room);
+        }
+    }
+}
+
+namespace player {
+    namespace {
+        // Player.camoLimit: how long the camouflage holds at this ripple level
+        float camo_limit(float ripple) {
+            if (ripple >= 5.f)
+                return 4800.f;
+            if (ripple >= 4.f)
+                return 3600.f;
+            if (ripple >= 2.f)
+                return 2400.f;
+            return 1600.f;
+        }
+
+        // Player.RippleAbilityActivationButtonCondition: holding the ability key
+        bool ability_held(ctx& x) {
+            pref& p = x.p;
+            auto const a = p.animation();
+            bool const free_anim = a != animation_index::belly_slide && a != animation_index::crawl_turn && a != animation_index::corridor_turn
+                && a != animation_index::flip && a != animation_index::roll && a != animation_index::grappling_swing && a != animation_index::rocket_jump;
+            return x.in(0).spec && x.consious() && p.camo_charge() < camo_limit(x.state.ripple_level) && p.cancel_camo_cooldown() <= 0
+                && !p.camo_inputs_need_reset() && free_anim && (x.state.ripple_level < 5.f || !x.state.warp.active);
+        }
+
+        // Player.ToggleCamo (at ripple level 5 this crosses into the ripple
+        // layer, which can't happen while a warp is going off)
+        void toggle_camo(ctx& x) {
+            pref& p = x.p;
+            if (x.state.ripple_level >= 5.f && x.state.warp.active)
+                return;
+            p.is_camo() = !p.is_camo() && x.consious();
+        }
+
+        // Player.TickLevitation: floating in place, a little upwards while
+        // the ability is held, gravity coming back slowly after
+        void tick_levitation(ctx& x, bool up, bool held) {
+            pref& p = x.p;
+            if (p.performing_activation_timer() > 0 || held) {
+                p.levitation_active() = 1;
+                p.levitation_needs_cooldown() = 1;
+            }
+            float const ripple = x.state.ripple_level;
+            float air = 0.7f, lift = 2.f, run = 1.f;
+            if (ripple >= 5.f) {
+                air = 0.999f;
+                lift = 2.5f;
+                run = 2.f;
+            } else if (ripple >= 4.5f) {
+                air = 0.9f;
+                lift = 2.35f;
+                run = 1.7f;
+            } else if (ripple >= 4.f) {
+                air = 0.825f;
+                lift = 2.2f;
+                run = 1.4f;
+            } else if (ripple >= 3.5f) {
+                air = 0.75f;
+                lift = 2.1f;
+                run = 1.2f;
+            }
+            if (p.levitation_active()) {
+                p.levitation_gravity() = mathf::lerp(p.levitation_gravity(), 0.f, up ? 0.25f : 1.f);
+                p.levitation_air_resistance() = mathf::lerp(p.levitation_air_resistance(), air, up ? 0.25f : 1.f);
+                p.levitation_cooldown() = 0.7f;
+            } else {
+                p.levitation_cooldown() = mathf::lerp(p.levitation_cooldown(), 1.f, 0.04f);
+                p.levitation_gravity() = mathf::lerp(p.levitation_gravity(), 0.9f, 0.04f);
+                p.levitation_air_resistance() = mathf::lerp(p.levitation_air_resistance(), 0.999f, 0.04f);
+            }
+            if (!p.levitation_needs_cooldown())
+                return;
+            auto& w = x.state.world;
+            w.physical_object_set_air_friction(x.o, p.levitation_air_resistance());
+            w.physical_object_set_g(x.o, p.levitation_gravity());
+            float const base_run = make_stats(p.stats().name).runspeed_fac;
+            if (p.levitation_active()) {
+                for (int i = 0; i < 2; ++i) {
+                    x.vel(i).y = up ? std::fabs(std::sin(float(p.activate_camo_timer()) / 40.f)) * lift - 0.75f : 0.f;
+                    if (i == 1)
+                        x.vel(i).x = 0.f;
+                }
+                p.stats().runspeed_fac = p.can_jump() <= 0 ? run : base_run;
+            } else {
+                p.stats().runspeed_fac = base_run;
+            }
+            if (!p.levitation_active() && p.levitation_cooldown() >= 0.99f) {
+                w.physical_object_set_air_friction(x.o, 0.999f);
+                w.physical_object_set_g(x.o, 0.9f);
+                p.levitation_needs_cooldown() = 0;
+            }
+        }
+
+        // Player.WatcherUpdate / CamoUpdate: holding the ability key a moment
+        // toggles the camouflage (and lifts the Watcher off the ground from
+        // ripple level 3), each hold sends ripples out; the camouflage wears
+        // the Watcher out once its charge runs full
+        void watcher_update(ctx& x) {
+            pref& p = x.p;
+            if (p.warp_point_cooldown() > 0)
+                --p.warp_point_cooldown();
+            if (p.stats().name != slugcat_name::watcher)
+                return;
+            auto& state = x.state;
+            float const ripple = state.ripple_level;
+            if (!x.in(0).spec)
+                p.camo_inputs_need_reset() = 0;
+            if (p.warp_protection() > 0)
+                --p.warp_protection();
+            bool const held = ability_held(x);
+            // the warp's pull owns the body's gravity while it holds it
+            if (!p.warp_held() && (ripple >= 3.f || p.levitation_needs_cooldown()))
+                tick_levitation(x, ripple >= 3.f, ripple >= 3.f && held);
+            if (ripple >= 0.5f && (p.performing_activation_timer() > 0 || held)) {
+                if (--p.ripple_ring_delay() <= 0 && p.camo_progress() <= 0.2f) {
+                    warps::spawn_ripple_ring(state, x.room.id, x.pos(0), 90.f + 30.f * ripple, 0.1f + ripple * 0.15f, 2.f + ripple * 0.2f);
+                    p.ripple_ring_delay() = 20;
+                }
+                if (p.start_camo_state() == -1)
+                    p.start_camo_state() = p.is_camo() ? 1 : 0;
+                ++p.activate_camo_timer();
+                if (p.activate_camo_timer() == (p.start_camo_state() == 0 ? 80 : 40) && p.performing_activation_timer() == 0)
+                    toggle_camo(x);
+                if (p.performing_activation_timer() > 0) {
+                    if (++p.performing_activation_timer() >= 90) {
+                        p.performing_activation_timer() = 0;
+                        p.cancel_camo_cooldown() = 120;
+                        p.camo_inputs_need_reset() = 1;
+                    }
+                } else if (p.activate_camo_timer() >= 80) {
+                    p.performing_activation_timer() = 1;
+                }
+            } else {
+                if (p.activate_camo_timer() > 0) {
+                    if (ripple >= 1.f && p.activate_camo_timer() > 20 && p.camo_progress() < 0.5f)
+                        warps::spawn_ripple_ring(state, x.room.id, x.pos(0), 90.f + 30.f * ripple, 0.1f + ripple * 0.15f, 2.f + ripple * 0.2f);
+                    p.activate_camo_timer() = 0;
+                    p.performing_activation_timer() = 0;
+                    p.levitation_active() = 0;
+                    p.can_jump() = 0;
+                    p.want_to_jump() = 0;
+                    p.cancel_camo_cooldown() = 120;
+                    p.camo_inputs_need_reset() = 1;
+                }
+                if (p.cancel_camo_cooldown() > 0)
+                    --p.cancel_camo_cooldown();
+                if (p.can_jump() > 0 || p.body_mode() == body_mode_index::climbing_on_beam)
+                    p.cancel_camo_cooldown() = 0;
+                else if (p.cancel_camo_cooldown() > 40 && (p.body_mode() == body_mode_index::corridor_climb || p.body_mode() == body_mode_index::swimming))
+                    p.cancel_camo_cooldown() = 40;
+                p.start_camo_state() = -1;
+            }
+            // CamoUpdate
+            if (p.is_camo() && !x.consious())
+                toggle_camo(x);
+            float const limit = camo_limit(ripple);
+            if (p.is_camo()) {
+                p.camo_charge() = mathf::min(p.camo_charge() + 1.f, limit);
+                if (p.camo_charge() >= limit) {
+                    p.camo_recharge_penalty() = 400;
+                    stun_impl(p, 80);
+                    p.is_camo() = 0;
+                }
+            } else if (p.camo_recharge_penalty() <= 0) {
+                p.camo_charge() = mathf::max(p.camo_charge() - 1.f, 0.f);
+            }
+            if (p.camo_recharge_penalty() > 0)
+                --p.camo_recharge_penalty();
+            // a plain fade in and out instead of vanilla's masked camouflage
+            p.last_camo_progress() = p.camo_progress();
+            p.camo_progress() = p.is_camo() ? mathf::min(1.f, p.camo_progress() + 1.f / 30.f) : mathf::max(0.f, p.camo_progress() - 1.f / 30.f);
         }
     }
 }

@@ -21,6 +21,7 @@
 #include "player_graphics.hpp"
 #include "render.hpp"
 #include "rot.hpp"
+#include "warps.hpp"
 #include "reports.hpp"
 #include "selftest.hpp"
 #include "shortcuts.hpp"
@@ -264,7 +265,10 @@ namespace {
         bool const jmp = keys[SDL_SCANCODE_Z] || keys[SDL_SCANCODE_SPACE];
         bool const thrw = keys[SDL_SCANCODE_X] || keys[SDL_SCANCODE_J];
         bool const pckp = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_L];
-        return player::make_input(ax, ay, jmp, thrw, pckp);
+        auto in = player::make_input(ax, ay, jmp, thrw, pckp);
+        // the Watcher's ability (camouflage, levitation)
+        in.spec = keys[SDL_SCANCODE_E];
+        return in;
     }
 
     player::input_package gamepad_input(SDL_Gamepad* pad) {
@@ -278,8 +282,11 @@ namespace {
         if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) ax = 1.f;
         if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) ay = -1.f;
         if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_UP)) ay = 1.f;
-        return player::make_input(ax, ay, SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH),
+        auto in = player::make_input(ax, ay, SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH),
             SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_WEST), SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST));
+        in.spec = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
+        in.gamepad = true;
+        return in;
     }
 }
 
@@ -416,7 +423,7 @@ int main(int argc, char* argv[]) {
             std::string const tok = script.substr(pos, end - pos);
             pos = end + 1;
             float ax = 0.f, ay = 0.f;
-            bool jmp = false, thrw = false, pckp = false;
+            bool jmp = false, thrw = false, pckp = false, spec = false;
             size_t i = 0;
             for (; i < tok.size() && std::isalpha(static_cast<unsigned char>(tok[i])); ++i) {
                 switch (tok[i]) {
@@ -427,12 +434,16 @@ int main(int argc, char* argv[]) {
                 case 'J': jmp = true; break;
                 case 'X': thrw = true; break;
                 case 'P': pckp = true; break;
+                case 'E': spec = true; break;
                 default: break;
                 }
             }
             int const n = i < tok.size() ? std::atoi(tok.c_str() + i) : 1;
-            for (int k = 0; k < n; ++k)
-                step(player::make_input(ax, ay, jmp, thrw, pckp));
+            for (int k = 0; k < n; ++k) {
+                auto in = player::make_input(ax, ay, jmp, thrw, pckp);
+                in.spec = spec;
+                step(in);
+            }
         }
         gs.world.for_each_centipede([&](dcon::centipede_id c) {
             vec2 const hp = gs.world.body_chunk_get_pos(centipede::chunk(gs, c, centipede::head_index(gs, c)));
@@ -454,6 +465,18 @@ int main(int argc, char* argv[]) {
             reports::add_log("rot: " + std::to_string(bulbs) + " bulbs (" + std::to_string(eyes) + " eyes), " + std::to_string(legs) + " legs, "
                 + std::to_string(tendrils) + " tendrils, " + std::to_string(vines) + " vines, " + std::to_string(meals) + " meals"
                 + (w.player_get_eaten(a.players[0]) ? ", the slugcat was eaten" : ""));
+        }
+        {
+            auto const& w = gs.world;
+            std::string line = "warps: ripple " + std::to_string(gs.ripple_level).substr(0, 3) + " layer " + std::to_string(warps::active_ripple_layer(gs));
+            if (gs.warp.active)
+                line += ", warping " + std::to_string(int(gs.warp.progress)) + "/" + std::to_string(int(gs.warp.duration));
+            w.room_for_each_warp_point_location(a.room, [&](dcon::warp_point_location_id l) {
+                auto const wp = w.warp_point_location_get_point(l);
+                line += ", state " + std::to_string(int(w.warp_point_get_state(wp))) + " open " + std::to_string(w.warp_point_get_open(wp)).substr(0, 4)
+                    + " fade " + std::to_string(w.warp_point_get_fade(wp)).substr(0, 4);
+            });
+            reports::add_log(line);
         }
         render::use_room(r, gs, a.room);
         a.update_camera(float(r.width), float(r.height));
@@ -579,6 +602,17 @@ int main(int argc, char* argv[]) {
                         audio::force_song(*sound, gs, w.room_get_region_from_region_membership(a.room));
                     break;
                 case SDLK_N: step_once = true; break;
+                case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
+                    // the Watcher's ripple level in half steps, any other slugcat's karma
+                    int32_t const d = e.key.key == SDLK_RIGHTBRACKET ? 1 : -1;
+                    if (warps::is_watcher(gs, a.players[0])) {
+                        gs.ripple_level = std::clamp(gs.ripple_level + 0.5f * float(d), 0.f, 5.f);
+                    } else {
+                        gs.karma = std::clamp(gs.karma + d, 0, 9);
+                        gs.karma_cap = std::max(gs.karma_cap, gs.karma);
+                    }
+                    break;
+                }
                 case SDLK_T: slow = !slow; break;
                 case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: case SDLK_5:
                 case SDLK_6: case SDLK_7: case SDLK_8: case SDLK_9: case SDLK_0: {

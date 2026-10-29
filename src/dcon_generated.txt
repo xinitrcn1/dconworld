@@ -3,30 +3,31 @@
 // Sizes are hard bounds (DataContainer allocates them up front), chosen as
 // powers of two a little above what vanilla Rain World needs, leaving room
 // for Downpour/Watcher content:
-//   regions 14 (+2 pseudo)    -> 64
+//   regions 14 (+2 pseudo), +31 Watcher, +10 Downpour -> 128
 //   rooms 760                 -> 2048
 //   tiles 3264886             -> 8388608 (2^23)
 //   room cameras 1714         -> 4096
 //   placed items 511          -> 1024
 //   shortcuts 6266            -> 16384
-//   exits/dens 2957           -> 8192
-//   room nodes 3393           -> 8192 (+ ~460k connectivity entries pooled)
+//   exits/dens 2957 (8039 with Watcher) -> 16384
+//   room nodes 3393           -> 16384 (+ ~460k connectivity entries
+//     pooled, a few million with Watcher)
 //   players: co-op up to 4    -> 8
 //   palettes ~50 files        -> 128
 //   items (rocks): placed + random spawns persist in every visited room,
-//     ~3000 once all 760 rooms were visited -> 8192
-//   physical objects / body chunks: players + items -> 8192 / 16384
+//     ~3000 once all 760 rooms were visited, ~11000 with Watcher -> 32768
+//   physical objects / body chunks: players + items -> 32768 / 65536
 //   region gates ~20          -> 64
 //   music triggers ~80 (+MSC/Watcher) -> 512
 //   centipedes: a few per realised room -> 64 (17 chunks, 136 push
 //     connections each at most, within the chunk/connection bounds)
-//   path fields: shared distance fields built on demand -> 32, their
-//     distances pooled (rooms are at most ~15k tiles)
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
 //   rot: 18 vanilla rooms with rot (27 with Downpour) -> 256 systems;
-//     6584 bulbs (806 in the worst room), 618 tubes -> 65536 / 16384
+//     6584 bulbs (806 in the worst room), 618 tubes -> 65536 / 16384;
+//     Watcher: 159 rooms, 37647 bulbs, 2199 tubes, 220k rot grid cells
 //   shortcut path tiles pooled (~6266 paths)
+//   warp points: 85 Watcher rooms have one or two -> 1024, as many targets
 //
 // Tags: `scenario` = static world data loaded from the game files,
 //       `save` = simulation state.
@@ -55,7 +56,7 @@ object{
 object{
 	name{region}
 	storage_type{contiguous}
-	size{64}
+	size{128}
 	tag{scenario}
 	property{ name{name} type{text_key} }
 	property{ name{display_name} type{text_key} }
@@ -128,6 +129,8 @@ object{
 	property{ name{items_spawned} type{bitfield} }
 	// the rot (DaddyCorruption) was grown on the first visit
 	property{ name{rot_spawned} type{bitfield} }
+	// its warp points were realised
+	property{ name{warps_spawned} type{bitfield} }
 	// bumped whenever tiles change at runtime (gate doors, spear beams):
 	// cached path fields of the room are rebuilt
 	property{ name{geometry_version} type{uint16_t} }
@@ -224,7 +227,7 @@ object{
 	property{ name{length} type{uint16_t} }
 	property{ name{type} type{world::shortcut_type} }
 	// ShortcutData.connection: every tile from the entrance to the destination
-	property{ name{path} type{vector_pool{524288}{rw::ivec2}} }
+	property{ name{path} type{vector_pool{2097152}{rw::ivec2}} }
 }
 relationship{
 	name{shortcut_location}
@@ -298,6 +301,57 @@ relationship{
 	primary_key{placed}
 }
 
+// Watcher warp points of the room settings (WarpPoint.WarpPointData), in
+// file order. `dest_room` is the target room's lowercase name (invalid: a
+// dynamic warp, its target is picked among the DynamicWarpTargets)
+object{
+	name{warp_placed}
+	storage_type{contiguous}
+	size{1024}
+	tag{scenario}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{dest_room} type{text_key} }
+	property{ name{dest_pos} type{std::optional<rw::vec2>} }
+	property{ name{effect} type{world::warp_effect} }
+	// one way warps: the entrance can be used, the exit only receives
+	property{ name{one_way} type{bitfield} }
+	property{ name{one_way_entrance} type{bitfield} }
+	// only usable from the ripple layer
+	property{ name{ripple_warp} type{bitfield} }
+	property{ name{limited_use} type{bitfield} }
+	property{ name{uses} type{int16_t} }
+	// WarpPointSpawnCondition.AnySlugcat (else WatcherOnly)
+	property{ name{any_slugcat} type{bitfield} }
+	// the uuidPair (seeds dynamic target picks)
+	property{ name{seed} type{uint32_t} }
+}
+relationship{
+	name{warp_placed_location}
+	tag{scenario}
+	link{ object{warp_placed} name{placed} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{placed}
+}
+
+// DynamicWarpTarget: where dynamic warps can lead
+object{
+	name{warp_target}
+	storage_type{contiguous}
+	size{1024}
+	tag{scenario}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{ripple_requirement} type{float} }
+	property{ name{dead_end} type{bitfield} }
+	property{ name{bad_warp} type{bitfield} }
+}
+relationship{
+	name{warp_target_location}
+	tag{scenario}
+	link{ object{warp_target} name{target} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{target}
+}
+
 // AbstractRoomNode as serialised on the connectivity line of the room file
 object{
 	name{room_node}
@@ -311,7 +365,7 @@ object{
 	property{ name{submerged} type{bitfield} }
 	property{ name{index} type{uint8_t} }
 	// connectivity[template][other node], template major
-	property{ name{connectivity} type{vector_pool{1048576}{world::node_connectivity}} }
+	property{ name{connectivity} type{vector_pool{4194304}{world::node_connectivity}} }
 }
 relationship{
 	name{node_location}
@@ -328,7 +382,7 @@ relationship{
 object{
 	name{physical_object}
 	storage_type{erasable}
-	size{8192}
+	size{32768}
 	tag{save}
 	// PhysicalObject.gravity before the room gravity multiplier
 	property{ name{g} type{float} }
@@ -352,7 +406,7 @@ relationship{
 object{
 	name{body_chunk}
 	storage_type{erasable}
-	size{16384}
+	size{65536}
 	tag{save}
 	property{ name{pos} type{rw::vec2} }
 	property{ name{last_pos} type{rw::vec2} }
@@ -539,6 +593,31 @@ object{
 	property{ name{zero_g_pole_grab_dir} type{rw::ivec2} }
 	// eaten by the rot: dead and gone (Creature.Destroy)
 	property{ name{eaten} type{uint8_t} }
+
+	// Watcher: warps (Player.warpPointCooldown, standingInWarpPointProtectionTime)
+	property{ name{warp_point_cooldown} type{int32_t} }
+	property{ name{warp_protection} type{int32_t} }
+	// camouflage (isCamo, camoCharge, the hold to toggle timers) and how
+	// faded out the slugcat is drawn
+	property{ name{is_camo} type{uint8_t} }
+	property{ name{camo_progress} type{float} }
+	property{ name{last_camo_progress} type{float} }
+	property{ name{camo_charge} type{float} }
+	property{ name{camo_recharge_penalty} type{int32_t} }
+	property{ name{activate_camo_timer} type{int32_t} }
+	property{ name{performing_activation_timer} type{int32_t} }
+	property{ name{cancel_camo_cooldown} type{int32_t} }
+	property{ name{camo_inputs_need_reset} type{uint8_t} }
+	property{ name{start_camo_state} type{int8_t} }
+	property{ name{ripple_ring_delay} type{int32_t} }
+	// levitation (TickLevitation)
+	property{ name{levitation_active} type{uint8_t} }
+	property{ name{levitation_needs_cooldown} type{uint8_t} }
+	property{ name{levitation_gravity} type{float} }
+	property{ name{levitation_air_resistance} type{float} }
+	property{ name{levitation_cooldown} type{float} }
+	// the warp pull zeroes the body's gravity (SetLocalGravity)
+	property{ name{warp_held} type{uint8_t} }
 }
 // the physical body a player controls
 relationship{
@@ -566,7 +645,7 @@ relationship{
 object{
 	name{item}
 	storage_type{erasable}
-	size{8192}
+	size{32768}
 	tag{save}
 	property{ name{type} type{world::item_type} }
 	// Weapon.Mode
@@ -678,8 +757,8 @@ object{
 	property{ name{bottom_left} type{rw::ivec2} }
 	property{ name{top_right} type{rw::ivec2} }
 	// DaddyCorruption.directions, zero for tiles without rot
-	property{ name{directions} type{vector_pool{262144}{rw::vec2}} }
-	property{ name{cells} type{vector_pool{262144}{world::rot_cell}} }
+	property{ name{directions} type{vector_pool{1048576}{rw::vec2}} }
+	property{ name{cells} type{vector_pool{1048576}{world::rot_cell}} }
 	property{ name{random} type{rw::rng} }
 	// Garbage Wastes rot (no reacting to noise, black eyes on the tubes)
 	property{ name{gw_mode} type{bitfield} }
@@ -805,23 +884,39 @@ relationship{
 	primary_key{meal}
 }
 
-// A distance field to a goal tile over one room, for one way of moving
-// (pathing.hpp). Built on demand when a creature asks for a path and shared
-// by every creature heading to the same tile; recycled least recently used.
+// WarpPoint of a realised room (and its WarpTear's animation)
 object{
-	name{path_field}
+	name{warp_point}
 	storage_type{contiguous}
-	size{32}
+	size{1024}
 	tag{save}
-	property{ name{room} type{room_id} }
-	property{ name{goal} type{rw::ivec2} }
-	property{ name{movement} type{uint8_t} }
-	property{ name{geometry_version} type{uint16_t} }
-	property{ name{last_used} type{uint32_t} }
-	property{ name{in_use} type{bitfield} }
-	// travel cost to the goal per tile (row major), 0xFFFF unreachable
-	property{ name{distance} type{vector_pool{1048576}{uint16_t}} }
+	property{ name{placed} type{warp_placed_id} }
+	property{ name{state} type{world::warp_state} }
+	property{ name{trigger_time} type{float} }
+	property{ name{activation_time} type{int32_t} }
+	// WarpTear.openAnimation / fadeAnim and their last tick values
+	property{ name{open} type{float} }
+	property{ name{last_open} type{float} }
+	property{ name{fade} type{float} }
+	property{ name{last_fade} type{float} }
+	property{ name{open_triggered} type{bitfield} }
+	property{ name{closes_early} type{bitfield} }
+	property{ name{cooldown_timer} type{float} }
+	property{ name{uses} type{int16_t} }
+	// the ripple hint rings of a warp on the other layer
+	property{ name{shockwave_timer} type{float} }
+	property{ name{shockwave_limit} type{float} }
+	property{ name{second_shockwave} type{bitfield} }
+	property{ name{triggered_by} type{player_id} }
 }
+relationship{
+	name{warp_point_location}
+	tag{save}
+	link{ object{warp_point} name{point} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{point}
+}
+
 
 //
 // RegionGate (doors at tile columns 14, 23, 32 of the gate room)
