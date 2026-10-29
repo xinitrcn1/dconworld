@@ -364,6 +364,50 @@ namespace warps {
             w.warp_point_set_open(wp, open);
         }
 
+        // WarpPoint.Update's StaticSoundLoops: the idle hum (or the suck in
+        // while it pulls the Watcher in), new and loud whenever its mode
+        // changes, following the tear's opening; and the ripple hint of a
+        // warp on the other layer. Both fade out over 320 frames when they
+        // stop
+        void loop_sounds(sys::game_state& state, room_view const& room, dcon::warp_point_id wp, dcon::warp_placed_id placed, vec2 pos) {
+            auto& w = state.world;
+            using sound::sound_id;
+            bool const hint = other_layer(state, wp) && !one_way_exit(state, placed);
+            bool const suck_in = w.warp_point_get_state(wp) == warp_state::enter;
+            uint8_t const mode = suck_in ? 2 : 1;
+            float& vol = w.warp_point_get_sound_volume(wp);
+            if (w.warp_point_get_sound_mode(wp) != mode) {
+                w.warp_point_set_sound_mode(wp, mode);
+                vol = 1.f;
+            }
+            bool const ripple = w.warp_placed_get_ripple_warp(placed);
+            bool const limited = w.warp_placed_get_limited_use(placed);
+            sound_id id;
+            if (suck_in)
+                id = ripple ? sound_id::warp_point_ripple_suck_in_objects_loop : limited ? sound_id::warp_point_bad_suck_in_objects_loop : sound_id::warp_point_normal_suck_in_objects_loop;
+            else
+                id = ripple ? sound_id::warp_point_ripple_idle_loop : one_way_exit(state, placed) ? sound_id::warp_point_one_way_exit_idle_loop
+                    : limited ? sound_id::warp_point_bad_idle_loop : sound_id::warp_point_normal_idle_loop;
+            state.play_loop(sound::loop_key(sound::loop_owner::warp_point, uint32_t(wp.index())), id, room.id, pos, vol, 1.f, 320);
+            // warpLocked: a used up warp
+            if (w.warp_point_get_state(wp) == warp_state::closed || hint)
+                vol = mathf::lerp(vol, 0.f, 0.08f);
+            else if (suck_in)
+                vol = mathf::lerp(vol, 1.f, 0.08f);
+            else
+                vol = mathf::lerp(vol, w.warp_point_get_open(wp), 0.08f);
+
+            if (hint && !w.warp_point_get_hint_sound(wp)) {
+                w.warp_point_set_hint_sound(wp, 1);
+                w.warp_point_set_hint_volume(wp, 1.f);
+            }
+            if (w.warp_point_get_hint_sound(wp)) {
+                float& hv = w.warp_point_get_hint_volume(wp);
+                state.play_loop(sound::loop_key(sound::loop_owner::warp_hint, uint32_t(wp.index())), sound_id::warp_point_ripple_hint_loop, room.id, pos, hv);
+                hv = mathf::lerp(hv, hint ? 1.f : 0.f, 0.08f);
+            }
+        }
+
         void update_point(sys::game_state& state, room_view const& room, dcon::warp_point_id wp) {
             auto& w = state.world;
             auto const placed = placed_of(state, wp);
@@ -385,6 +429,7 @@ namespace warps {
                 }
                 w.warp_point_set_shockwave_timer(wp, t);
             }
+            loop_sounds(state, room, wp, placed, pos);
             // WarpPoint.ProvideAir: breathing inside an open tear
             if (room.water) {
                 float const open = openness(state, wp, 1.f);

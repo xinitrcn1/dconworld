@@ -165,6 +165,12 @@ namespace particles {
         // RoomRain: streaks from the top of the room
         // (a storm over sand is a sandstorm, terrain.cpp blows that)
         float const rain = terrain::sand_if_built(state, room.id) ? 0.f : mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
+        // (RoomRain's sounds follow the rain cycle's intensity, which isn't
+        // ported: once it is, its DisembodiedDynamicSoundLoops go here as
+        // disembodied loop requests, owner loop_owner::rain: normal_rain_loop
+        // at 0.1 + 0.9 * clamp01(sin(InverseLerp(0.001, 0.7, i) * pi))^1.5,
+        // heavy_rain_loop at InverseLerp(0.12, 0.5, i)^0.85, then the death
+        // rain, rumble, flood and approaching loops)
         if (rain > 0.f) {
             float const want = rain * room.pixel_width() / 260.f;
             int n = int(want);

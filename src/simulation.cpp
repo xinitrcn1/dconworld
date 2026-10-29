@@ -212,6 +212,8 @@ namespace simulation {
         auto& w = state.world;
         // rooms added since (tests build their own) get their first visit
         populate(state);
+        // the loops are kept up tick by tick: this tick's start empty
+        state.loops.clear();
 
         // the players out in a room update with it; the ones in a pipe travel
         // it first, serially (coming out moves them to another room)
@@ -283,6 +285,10 @@ namespace simulation {
                 if (state.sounds.size() < 256)
                     state.sounds.push_back(s);
             rt.sounds.clear();
+            for (auto const& l : rt.loops)
+                if (state.loops.size() < 256)
+                    state.loops.push_back(l);
+            rt.loops.clear();
             for (auto& m : rt.music)
                 if (state.music.size() < 16)
                     state.music.push_back(std::move(m));
@@ -303,6 +309,7 @@ namespace simulation {
         particles::from_sounds(state, first_sound);
         particles::update(state);
         warps::update_ripple_rings(state);
+        ++state.loop_tick;
         ++state.tick;
         auto const t3 = clock::now();
         auto& tt = times();

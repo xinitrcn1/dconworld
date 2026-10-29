@@ -284,7 +284,10 @@ namespace player {
     X(levitation_gravity) \
     X(levitation_air_resistance) \
     X(levitation_cooldown) \
-    X(warp_held)
+    X(warp_held) \
+    X(camo_direction_sound) \
+    X(ability_loop_sound) \
+    X(ability_loop_volume)
 
         // Reference accessors into the data container for one player, so the
         // port reads like the C# ("this.canJump" -> p.can_jump())
@@ -357,6 +360,68 @@ namespace player {
         void wall_jump(ctx& x, int32_t direction);
         void lung_update(ctx& x);
         void watcher_update(ctx& x);
+
+        // Player.Update's slideLoop: the one sliding, rolling or skidding
+        // sound the slugcat makes, kept up every tick on its main chunk
+        // (mushroom trips aren't ported; UI_Slugcat_Stunned_LOOP has no
+        // sample in sounds.txt, it only silences the others)
+        void slide_loop(ctx& x) {
+            pref& p = x.p;
+            using sound::sound_id;
+            auto a = sound_id::count;
+            if (p.stun() > 0)
+                a = sound_id::ui_slugcat_stunned_loop;
+            else if (p.corridor_drop() || p.vertical_corridor_slide_counter() > 0 || p.horizontal_corridor_slide_counter() > 0)
+                a = sound_id::slugcat_slide_in_narrow_corridor_loop;
+            else if (p.slide_counter() > 0 && p.body_mode() == body_mode_index::stand)
+                a = sound_id::slugcat_skid_on_ground_loop;
+            else if (p.animation() == animation_index::roll)
+                a = sound_id::slugcat_roll_loop;
+            else if (p.animation() == animation_index::climb_on_beam && x.in(0).y < 0)
+                a = sound_id::slugcat_slide_down_vertical_beam_loop;
+            else if (p.animation() == animation_index::belly_slide)
+                a = sound_id::slugcat_belly_slide_loop;
+            else if (p.body_mode() == body_mode_index::wall_climb)
+                a = sound_id::slugcat_wall_slide_loop;
+            if (a == sound_id::count)
+                return;
+            vec2 const v = x.vel(0);
+            float vol = 1.f, pitch = 1.f;
+            switch (a) {
+            case sound_id::ui_slugcat_stunned_loop:
+                vol = mathf::pow(mathf::inverse_lerp(8.f, 27.f, float(p.stun())), 0.7f);
+                break;
+            case sound_id::slugcat_slide_in_narrow_corridor_loop:
+                pitch = mathf::lerp(0.7f, 1.3f, rw::magnitude(v) / (p.corridor_drop() ? 25.f : 12.5f));
+                vol = p.vertical_corridor_slide_counter() > 0 ? 1.f : mathf::min(1.f, rw::magnitude(v) / 4.f);
+                break;
+            case sound_id::slugcat_belly_slide_loop:
+                pitch = mathf::lerp(0.5f, 1.5f, std::fabs(v.x) / 25.5f);
+                vol = mathf::min(1.f, std::fabs(v.x) / 10.f);
+                break;
+            case sound_id::slugcat_roll_loop: {
+                vec2 const d = custom::dir_vec(x.pos(0), x.pos(1));
+                pitch = mathf::lerp(0.85f, 1.15f, 0.5f + d.y * 0.5f);
+                vol = 0.5f + std::fabs(d.x) * 0.5f;
+                break;
+            }
+            case sound_id::slugcat_skid_on_ground_loop:
+                pitch = mathf::lerp(0.7f, 1.3f, std::fabs(v.x) / 9.5f);
+                vol = mathf::min(1.f, std::fabs(v.x) / 6.f);
+                break;
+            case sound_id::slugcat_slide_down_vertical_beam_loop:
+                pitch = mathf::lerp(0.7f, 1.3f, std::fabs(v.y) / 4.9f);
+                vol = mathf::min(1.f, std::fabs(v.y) / 2.5f);
+                break;
+            case sound_id::slugcat_wall_slide_loop:
+                pitch = mathf::lerp(0.7f, 1.3f, std::fabs(x.pos(0).y - x.last_pos(0).y) / 1.75f);
+                vol = mathf::min(1.f, std::fabs(v.y) * 1.5f);
+                break;
+            default:
+                break;
+            }
+            x.state.play_loop(sound::loop_key(sound::loop_owner::player, uint32_t(p.id.index())), a, x.room.id, x.pos(0), vol, pitch);
+        }
 
         void stun_impl(pref& p, int32_t st) {
             // Player.Stun then Creature.Stun
@@ -546,6 +611,7 @@ namespace player {
                 p.shoot_up_counter() = 0;
         }
 
+        slide_loop(x);
         x.surface_friction() = x.consious() ? 0.5f : 0.3f;
 
         // "WALLSTUCK": the two chunks ended up on opposite sides of a wall
@@ -725,6 +791,46 @@ namespace player {
                 && !p.camo_inputs_need_reset() && free_anim && (x.state.ripple_level < 5.f || !x.state.warp.active);
         }
 
+        // WatcherUpdate's watcherAbilitySoundLoop for the camouflage: a
+        // StaticSoundLoop that starts loud whenever the sound changes, follows
+        // the hold to toggle timer, and dies away (with an 80 frame fade)
+        // once the ability is let go. The dynamic warp sounds aren't ported
+        // (neither are dynamic warps made by the Watcher)
+        void ability_loop(ctx& x) {
+            pref& p = x.p;
+            uint8_t sid = 0;
+            if (x.state.ripple_level >= 0.5f && p.activate_camo_timer() > 0 && (p.performing_activation_timer() > 0 || ability_held(x))) {
+                if (p.camo_direction_sound() == 0)
+                    p.camo_direction_sound() = p.is_camo() ? 2 : 1;
+                sid = p.camo_direction_sound();
+            }
+            if (sid != 0 && sid != p.ability_loop_sound()) {
+                p.ability_loop_sound() = sid;
+                p.ability_loop_volume() = 1.f;
+            }
+            if (sid == 0)
+                p.camo_direction_sound() = 0;
+            if (p.ability_loop_sound() == 0)
+                return;
+            float& vol = p.ability_loop_volume();
+            bool const deactivating = p.ability_loop_sound() == 2;
+            if (sid == 0) {
+                vol = mathf::lerp(vol, 0.f, 0.06f);
+                if (vol < 0.05f)
+                    vol = 0.f;
+            } else {
+                // exitOutOfCamoDuration / enterIntoCamoDuration
+                int32_t const duration = deactivating ? 40 : 80;
+                if (p.activate_camo_timer() <= duration)
+                    vol = mathf::lerp(0.2f, 1.f, mathf::inverse_lerp(0.f, float(duration), float(p.activate_camo_timer())));
+                else
+                    vol = mathf::lerp(vol, 0.f, 0.04f);
+            }
+            x.state.play_loop(sound::loop_key(sound::loop_owner::player, uint32_t(p.id.index()), 1),
+                deactivating ? sound::sound_id::player_deactivating_camo_loop : sound::sound_id::player_activating_camo_loop,
+                x.room.id, x.pos(0), vol, deactivating ? 0.7f : 1.f, 80);
+        }
+
         // Player.ToggleCamo (at ripple level 5 this crosses into the ripple
         // layer, which can't happen while a warp is going off)
         void toggle_camo(ctx& x) {
@@ -852,6 +958,7 @@ namespace player {
                     p.cancel_camo_cooldown() = 40;
                 p.start_camo_state() = -1;
             }
+            ability_loop(x);
             // CamoUpdate
             if (p.is_camo() && !x.consious())
                 toggle_camo(x);

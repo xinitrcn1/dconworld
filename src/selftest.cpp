@@ -12,6 +12,7 @@
 #include <tbb/global_control.h>
 
 #include "selftest.hpp"
+#include "audio.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
@@ -1341,6 +1342,109 @@ namespace selftest {
             r.check("scavenger toll and treasury", ok, s.describe() + d);
         }
 
+        {
+            // the loops' bookkeeping on the audio side, without a device:
+            // kept up tick by tick, faded out once not asked for, restarted
+            // on another sound, only for the room heard
+            using sound::sound_id;
+            auto const req = [](uint64_t owner, sound_id id, uint32_t room, uint16_t fade_frames = 0) {
+                sound::loop_request q;
+                q.owner = owner;
+                q.id = id;
+                q.room = room;
+                q.fade_out_frames = fade_frames;
+                return q;
+            };
+            std::vector<audio::loop_state> loops;
+            std::vector<size_t> started;
+            std::vector<uint32_t> dropped;
+            auto const find = [&](uint64_t owner) -> audio::loop_state const* {
+                for (auto const& l : loops)
+                    if (l.req.owner == owner && !l.stopping)
+                        return &l;
+                return nullptr;
+            };
+            std::vector<sound::loop_request> tick{req(1, sound_id::cicada_wings_loop, 7), req(2, sound_id::centipede_crawl_loop, 7),
+                req(3, sound_id::slugcat_roll_loop, 8)};
+            audio::upkeep(loops, tick, 7, 24, started);
+            bool const both = started.size() == 2 && loops.size() == 2 && find(1) && find(2) && !find(3);
+            audio::fade(loops, 0.1f, dropped);
+            bool const up = find(1) && find(1)->envelope == 1.f;
+            // owner 2 isn't kept up: fades out, then goes
+            tick = {req(1, sound_id::cicada_wings_loop, 7, 60)};
+            started.clear();
+            audio::upkeep(loops, tick, 7, 24, started);
+            audio::fade(loops, 0.02f, dropped);
+            bool const fading = loops.size() == 2 && !find(2) && started.empty();
+            audio::fade(loops, 0.1f, dropped);
+            bool const gone = loops.size() == 1 && find(1);
+            // a paused game (no new tick) leaves them alone: nothing to do
+            // here, upkeep only runs per tick. Another sound: the old one
+            // fades out over its 60 frames, a new one starts
+            tick = {req(1, sound_id::cicada_wings_bump_attack_charge_loop, 7)};
+            started.clear();
+            audio::upkeep(loops, tick, 7, 24, started);
+            bool const swapped = started.size() == 1 && loops.size() == 2 && loops[0].stopping && loops[0].fade_out > 0.9f
+                && find(1)->req.id == sound_id::cicada_wings_bump_attack_charge_loop;
+            audio::fade(loops, 0.5f, dropped);
+            bool const slow = loops.size() == 2;
+            // the view moves to another room: what was left behind stops at once
+            tick = {req(1, sound_id::cicada_wings_bump_attack_charge_loop, 7)};
+            audio::upkeep(loops, tick, 8, 24, started);
+            audio::fade(loops, 0.1f, dropped);
+            bool const left = loops.empty();
+            // at most max_loops at once
+            tick.clear();
+            for (uint64_t o = 10; o < 40; ++o)
+                tick.push_back(req(o, sound_id::centipede_crawl_loop, 8));
+            started.clear();
+            audio::upkeep(loops, tick, 8, 24, started);
+            bool const capped = loops.size() == 24;
+            char d[128];
+            std::snprintf(d, sizeof(d), " both=%d up=%d fading=%d gone=%d swapped=%d slow=%d left=%d capped=%d", int(both), int(up), int(fading),
+                int(gone), int(swapped), int(slow), int(left), int(capped));
+            r.check("loop upkeep and fade out", both && up && fading && gone && swapped && slow && left && capped, d);
+        }
+        {
+            // the simulation side: a squidcada's wing hum is asked for every
+            // tick it flies in a viewed room, not from a room nobody views,
+            // and not once it is destroyed
+            auto const near = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
+            auto const far = make_room(gs, region, box(40, 30, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, near, feet_at(3, 1));
+            auto const a = cicada::create(gs, near, world::room_view::middle_of_tile(30, 20), true);
+            auto const b = cicada::create(gs, far, world::room_view::middle_of_tile(30, 20), true);
+            auto const key_a = sound::loop_key(sound::loop_owner::creature, uint32_t(a.index()));
+            auto const key_b = sound::loop_key(sound::loop_owner::creature, uint32_t(b.index()));
+            auto const asked = [&](uint64_t key) {
+                for (auto const& l : gs.loops)
+                    if (l.owner == key && l.vol > 0.f)
+                        return true;
+                return false;
+            };
+            bool far_heard = false;
+            uint32_t const tick0 = gs.loop_tick;
+            bool const hums = s.until(1200, [&] {
+                far_heard = far_heard || asked(key_b);
+                return asked(key_a);
+            });
+            bool const ticked = gs.loop_tick > tick0;
+            // a camera on the far room: its squidcada is heard too
+            gs.camera_rooms.assign(1, far);
+            bool const viewed = s.until(1200, [&] { return asked(key_b); });
+            gs.camera_rooms.clear();
+            s.step();
+            bool const unviewed = !asked(key_b);
+            cicada::destroy(gs, a);
+            s.step();
+            bool const destroyed = !asked(key_a);
+            cicada::destroy(gs, b);
+            gs.sounds.clear();
+            char d[128];
+            std::snprintf(d, sizeof(d), " hums=%d far=%d ticked=%d viewed=%d unviewed=%d destroyed=%d", int(hums), int(far_heard), int(ticked),
+                int(viewed), int(unviewed), int(destroyed));
+            r.check("loops only where viewed", hums && !far_heard && ticked && viewed && unviewed && destroyed, s.describe() + d);
+        }
         {
             // every room updates in parallel: the same world comes out on one
             // thread and on every thread

@@ -664,6 +664,8 @@ namespace lizard {
         float tail_length = 0.f;
         float head_connection_rad = 0.f;
         float show_dominance = 0.f;
+        // LizardGraphics.bellyDragVolume (the belly drag loop's)
+        float belly_drag_volume = 0.f;
         float black_lizard_light_up_head = 0.f;
         float voice_visualization_intensity = 0.f;
         float last_voice_visualization_intensity = 0.f;

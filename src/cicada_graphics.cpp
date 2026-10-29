@@ -132,7 +132,8 @@ namespace cicada_graphics {
         bool const flying = w.creature_get_payload(c).cicada.flying != 0;
         int32_t const charge_counter = w.creature_get_payload(c).cicada.charge_counter;
 
-        // the wing sounds: loops aren't played here, only how they stop
+        // the wing sounds: the hum (a ChunkSoundEmitter kept up while the
+        // wings are out) and how it stops
         float spread = 0.f;
         for (auto const& side : g.wing_deployment)
             for (float const d : side)
@@ -146,6 +147,15 @@ namespace cicada_graphics {
             if (loop == 0 && spread > 0.f)
                 state.play_sound(awake ? sound::sound_id::cicada_wings_stop : sound::sound_id::cicada_wings_violent_stop, room.id, p0, spread, iv.wing_sound_pitch);
             g.current_loop = loop;
+        }
+        if (loop != 0) {
+            using sound::sound_id;
+            sound_id const id = loop == 1 ? sound_id::cicada_wings_loop
+                : loop == 3 ? sound_id::cicada_wings_bump_attack_charge_loop : sound_id::cicada_wings_bump_attack_prepare_loop;
+            float pitch = iv.wing_sound_pitch;
+            if (loop == 1)
+                pitch *= 0.85f + 0.3f * mathf::pow(mathf::inverse_lerp(-1.f, 1.f, rw::dot(rw::normalized(p0 - p1), rw::normalized(g.z_rotation))), 2.f);
+            state.play_loop(sound::loop_key(sound::loop_owner::creature, uint32_t(c.index())), id, room.id, p0, spread, pitch);
         }
 
         // CreatureLooker: the slugcat it is busy with, else the one it sees

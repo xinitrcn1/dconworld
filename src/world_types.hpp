@@ -3,6 +3,7 @@
 // Plain types stored in the data container (see dcon_generated.txt)
 
 #include <cstdint>
+#include <string>
 
 #include "math.hpp"
 
@@ -109,6 +110,25 @@ namespace world {
         flood_and_rain,
         none,
         unknown,
+    };
+
+    // AmbientSound.Type
+    enum class ambient_type : uint8_t {
+        omni,        // OmniDirectionalSound: everywhere in the room, centred
+        directional, // DirectionalSound: panned by its direction
+        spot,        // SpotSound: around a point, fading out to its taper radius
+    };
+    // one entry of a settings file's "AmbientSounds:" line
+    struct ambient_sound_desc {
+        ambient_type type = ambient_type::omni;
+        std::string sample; // as written, with its extension
+        float volume = 0.5f;
+        float pitch = 1.f;
+        rw::vec2 pos{0.f, 0.f};          // spot
+        rw::vec2 direction{0.f, -1.f};   // directional
+        float rad = 50.f;                // spot
+        float taper = 0.1f;              // spot
+        float doppler = 0.f;
     };
 
     // Rot (DaddyCorruption) placed objects of the room settings

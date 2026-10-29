@@ -242,6 +242,8 @@ namespace daddy {
     // DaddyGraphics
     struct graphics_state {
         float digesting = 0.f;
+        // digestLoop's volume (a StaticSoundLoop at the middle of the body)
+        float digest_loop_volume = 0.f;
         int32_t reaction_sound_delay = 0;
         int32_t feel_something_reaction_delay = 0;
         eye eyes[max_chunks];

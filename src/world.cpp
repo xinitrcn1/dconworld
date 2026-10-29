@@ -673,6 +673,19 @@ namespace world {
                 dc.music_trigger_set_counter(tid, -1);
                 dc.try_create_music_trigger_location(tid, rid);
             }
+            for (auto const& a : r.settings.ambient_sounds) {
+                auto const aid = dc.create_ambient_sound();
+                dc.ambient_sound_set_type(aid, a.type);
+                dc.ambient_sound_set_sample(aid, s.add_text(a.sample));
+                dc.ambient_sound_set_volume(aid, a.volume);
+                dc.ambient_sound_set_pitch(aid, a.pitch);
+                dc.ambient_sound_set_pos(aid, a.pos);
+                dc.ambient_sound_set_direction(aid, a.direction);
+                dc.ambient_sound_set_rad(aid, a.rad);
+                dc.ambient_sound_set_taper(aid, a.taper);
+                dc.ambient_sound_set_doppler(aid, a.doppler);
+                dc.try_create_ambient_sound_location(aid, rid);
+            }
             for (auto const& o : r.rot) {
                 auto const oid = dc.create_rot_placed();
                 dc.rot_placed_set_kind(oid, o.kind);
@@ -884,10 +897,69 @@ namespace world {
             add("gate shelters", true);
         }
 
+        // The "AmbientSounds:" line of a settings file (RoomSettings.
+        // LoadAmbientSounds): ", " separated sounds of "<TYPE><sample>..."
+        // split on "><" (OMNI, DIR, SPOT; AmbientSound.FromString)
+        void parse_ambient_sounds(std::string_view text, std::vector<ambient_sound_desc>& out) {
+            constexpr std::string_view key = "AmbientSounds: ";
+            size_t at = text.find(key);
+            while (at != std::string_view::npos && at != 0 && text[at - 1] != '\n')
+                at = text.find(key, at + 1);
+            if (at == std::string_view::npos)
+                return;
+            std::string_view line = text.substr(at + key.size());
+            line = line.substr(0, line.find('\n'));
+            auto const split = [](std::string_view sv, std::string_view sep) {
+                std::vector<std::string_view> r;
+                for (size_t p = 0;;) {
+                    size_t const q = sv.find(sep, p);
+                    r.push_back(sv.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p));
+                    if (q == std::string_view::npos)
+                        return r;
+                    p = q + sep.size();
+                }
+            };
+            auto const num = [](std::string_view sv) { return std::strtof(std::string{sv}.c_str(), nullptr); };
+            for (auto entry : split(line, ",")) {
+                while (!entry.empty() && (entry.front() == ' ' || entry.front() == '\r'))
+                    entry.remove_prefix(1);
+                while (!entry.empty() && (entry.back() == ' ' || entry.back() == '\r'))
+                    entry.remove_suffix(1);
+                auto const f = split(entry, "><");
+                ambient_sound_desc a;
+                if (f[0] == "OMNI" && f.size() >= 6)
+                    a.type = ambient_type::omni;
+                else if (f[0] == "DIR" && f.size() >= 7)
+                    a.type = ambient_type::directional;
+                else if (f[0] == "SPOT" && f.size() >= 10)
+                    a.type = ambient_type::spot;
+                else
+                    continue;
+                a.sample = std::string{f[1]};
+                a.volume = num(f[4]);
+                a.pitch = num(f[5]);
+                if (a.type == ambient_type::directional) {
+                    a.direction = rw::custom::deg_to_vec(num(f[6]));
+                    if (f.size() > 7)
+                        a.doppler = num(f[7]);
+                } else if (a.type == ambient_type::spot) {
+                    a.pos = rw::vec2{num(f[6]), num(f[7])};
+                    a.rad = rw::magnitude(rw::vec2{num(f[8]), num(f[9])});
+                    if (f.size() > 11) {
+                        a.doppler = num(f[10]);
+                        a.taper = num(f[11]);
+                    }
+                }
+                out.push_back(std::move(a));
+            }
+        }
+
         parsers::room_template parse_template(sys::game_state const& s, std::string_view sv, parsers::error_handler& err) {
             parsers::token_generator gen(sv);
             parsers::room_context ctx{s};
-            return parsers::parse_room_template(gen, ctx, err);
+            auto t = parsers::parse_room_template(gen, ctx, err);
+            parse_ambient_sounds(sv, t.ambient_sounds);
+            return t;
         }
 
         void register_region_settings(sys::game_state& s, layered_fs::directory const& world_dir, dcon::region_id region,
@@ -1318,11 +1390,22 @@ namespace world {
                     }
                 }
             });
-            // a RegionGate for every gate room
+            // a RegionGate for every gate room: an ElectricGate if listed in
+            // gates/egates.txt, else a WaterGate
+            std::vector<std::string> egates;
+            if (auto const ef = world_dir.get_single_subdir("gates").get_single_file("egates.txt").open_file(s.fs); ef) {
+                std::vector<std::string_view> lines;
+                split_lines(ef->to_string_view(), lines);
+                for (auto line : lines)
+                    if (!(line = trim(line)).empty())
+                        egates.push_back(text::to_lowercase_native(line));
+            }
             dc.for_each_room([&](dcon::room_id rid) {
                 if (!dc.room_get_is_gate(rid))
                     return;
                 auto const g = dc.create_gate();
+                auto const lname = text::to_lowercase_native(s.to_string_view(dc.room_get_name(rid)));
+                dc.gate_set_electric(g, std::find(egates.begin(), egates.end(), lname) != egates.end());
                 dc.gate_set_mode(g, gate_mode::middle_closed);
                 dc.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
                 dc.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});

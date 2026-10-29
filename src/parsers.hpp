@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "world_types.hpp"
+
 namespace sys {
     struct game_state;
 }
@@ -130,6 +132,8 @@ namespace parsers {
         std::optional<float> rain_intensity;
         std::optional<bool> room_specific_script_active;
         std::optional<bool> wet_terrain;
+        // "AmbientSounds:", read by world.cpp (not the generated parser)
+        std::vector<world::ambient_sound_desc> ambient_sounds;
 
         void fade_palette(string_list&& sl, error_handler& err, room_context& ctx) noexcept;
         void finish() noexcept {}

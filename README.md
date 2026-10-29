@@ -30,7 +30,8 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --fuzz 600         # a creature of each kind in every room, slugcats with random input
                                  # in 128 rooms at a time (the whole world ticking), then every room exit pipe
 ./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread
-./build/rwcpp --audio-check      # load the sound effects, decode whole songs, report
+./build/rwcpp --audio-check      # load the sound effects, loops and ambient clips, decode whole songs, report
+./build/rwcpp --audio-dump a.wav --room su_a22 --ticks 400   # mix what is heard into a WAV, headless
 ```
 
 The game data is read straight from the installed game. Roots are layered:
@@ -135,7 +136,7 @@ tick, viewed or not, with full physics and AI for every creature in it.
   bucket, and what holds a slugcat is looked for in the slugcat's room. Each
   room has its own caches and buffers (`sys::room_runtime`): path fields,
   terrain proximity, ceiling tiles, water surface, sand, and this tick's
-  noises, sounds, music, particles and ripple rings.
+  noises, sounds, loop requests, music, particles and ripple rings.
 - **Transactions**: whatever would change the data container's structure
   (creating or deleting objects, a lizard's spit, Spearmaster's needle, a
   rot meal, a bomb gone off, a centipede eaten by the rot) is queued on the
@@ -143,8 +144,8 @@ tick, viewed or not, with full physics and AI for every creature in it.
   by room in order, each room's in the order queued; outside the parallel
   phase `defer` runs at once. Grasps of items are plain properties of the
   player and the item, so picking up and throwing need no transaction.
-- **Serial, after**: the rooms' sounds, music, particles and rings are
-  merged in room order; the Watcher's warps (which move everything they pull
+- **Serial, after**: the rooms' sounds, loop requests, music, particles and
+  rings are merged in room order; the Watcher's warps (which move everything they pull
   to another room and drive the screen wide sequence) update, every warp
   room in order; then the particles.
 
@@ -226,7 +227,7 @@ slugcat letting go, the fuzz and the bench then take it as they come.
 | `src/item_graphics.*` | `Rock`, `Spear` (and explosive/electric spears, Spearmaster's needles), `DataPearl` and `ScavengerOutpost` `DrawSprites` with the game's elements |
 | `src/outposts.*` | the scavengers' loot without scavengers: `ScavengerOutpost` (toll spears, `DeerGraphics.Antlers`, `PearlString`s), `ScavengerTreasury`, story `MultiplayerItem`s |
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
-| `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, music triggers and songs; the simulation only queues requests on the game state |
+| `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, loops kept up by the simulation's per tick requests, the rooms' ambient sounds, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
 | `src/simulation.*` | one tick of the whole world: every room in parallel (TBB), the deferred transactions, vessels and warps; startup population of every room |
 | `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures (by room and kind), items and spit by room, for the parallel room updates |
@@ -553,18 +554,87 @@ Watcher's purple.
 ### Audio
 
 The game's loose sound and music files are empty placeholders; the real ones
-live in `StreamingAssets/AssetBundles` (`loadedsoundeffects`, `music_songs`).
-Those are read directly: UnityFS with LZ4 blocks, the AudioClips of the
+live in `StreamingAssets/AssetBundles` (`loadedsoundeffects`,
+`loadedsoundeffects_ambient`, `music_songs`). Those are read directly from the
+install, nothing is bundled: UnityFS with LZ4 blocks, the AudioClips of the
 serialized file, and their FMOD FSB5 data, PCM16 or Vorbis whose stripped
 setup header is restored from vgmstream's table and rewrapped as Ogg for
 stb_vorbis. Sound effects follow `soundeffects/sounds.txt` (volume and pitch
-ranges, PLAYALL, `_1`.. `_n` variants), panned and attenuated around the
-camera; the slugcat's jumps, rolls, landings and fall impacts, throws, pick
-ups, weapons hitting walls, shortcut ticks and gate doors play them (30 of
-31 ported sounds; the death impact uses a UI sample outside the bundles).
-Music follows the rooms' `Triggers:` (MusicEvent/StopMusicEvent spot and
-region triggers with fire chance, delay, priority, fade in/out and room
-count). Threat music and the procedural region ambience aren't ported.
+ranges, the trigger's own `vol`/`pitch`/`rangeFac` flags, PLAYALL,
+silentChance, `_1`.. `_n` variants), panned and attenuated around the camera
+(fading out past the screen's edges, `rangeFac` stretching the fade). The
+slugcat's jumps, rolls, landings and fall impacts, throws, pick ups, weapons
+hitting walls, shortcut ticks, gate doors and the creatures play them. Music
+follows the rooms' `Triggers:` (MusicEvent/StopMusicEvent spot and region
+triggers with fire chance, delay, priority, fade in/out and room count).
+Threat music and the procedural region ambience aren't ported.
+
+**Loops** (`DynamicSoundLoop`, `ChunkDynamicSoundLoop`, `StaticSoundLoop`,
+`RectangularDynamicSoundLoop`, `DisembodiedDynamicSoundLoop` and the
+emitters with `requireActiveUpkeep`): an object that wants a loop asks for it
+every tick with `game_state::play_loop` (a `sound::loop_request`: an owner key
+from `sound::loop_key`, the sound, the room, the position, a rect for
+rectangular ones or a pan for disembodied ones, volume, pitch, and
+StaticSoundLoop's `fadeOutOnDestroyFrames`). Like `play_sound`, only viewed
+rooms make requests, into the room's `room_runtime::loops` while the rooms
+update in parallel; they are merged into `game_state::loops` in room order
+after the parallel phase (warps add theirs serially after), which holds just
+this tick's requests, and `game_state::loop_tick` counts the ticks. Requests
+never feed back into the simulation (the world hash is unchanged); the little
+state the loops need (a squidcada's current loop, the daddy's digestion
+volume, a gate's, a warp point's, the Watcher's camouflage sound) is cosmetic.
+The audio side (`audio::upkeep`, `audio::fade`, no device needed, tested by
+`--selftest`) reconciles its voices once per new tick: matched by owner, a
+loop follows its request; one whose owner didn't ask again (turned it off,
+volume 0, died, was destroyed, left the room) fades out, over its
+`fadeOutOnDestroyFrames` or a 60 ms declick (vanilla cuts it); another sound
+for the same owner starts a new voice with a fresh sample variant; loops of
+a room the camera left stop at once. Paused, nothing changes. A voice is an
+SDL stream per sample (all of them for PLAYALL) fed the sample over and over
+0.1 s ahead with the pan baked in, its gain and frequency ratio set every
+frame; 24 at most.
+
+What loops: the squidcada's wing hum and its bump attack prepare/charge
+variants (CicadaGraphics), the centipede's crawl and its charge's crackle
+(CentipedeGraphics; Centiwing_Fly_LOOP comes with centiwings), the
+lizards' lunge and belly drag (LizardGraphics; neither is in sounds.txt, so
+silent unless a mod adds them, like vanilla), the daddy long legs' and
+brother's digestion (DaddyGraphics), the slugcat's slide loops (belly slide,
+roll, skid, wall slide, sliding down a pole or through a corridor;
+stunned, sample-less, silences them like vanilla), the Watcher's camouflage
+activating/deactivating loop, rocks skidding on the ground (the rock and
+spear through the air loops are commented out in sounds.txt), the water
+surface (a rect along the default water level), gates' background
+machinery (Gate_Water/Electric_Working_Background_LOOP from the mode, electric
+gates from `gates/egates.txt`), and warp points' idle, suck in and ripple
+hint loops. Left for later, with what they need: the other RegionGateGraphics
+loops (steam, waterfall, clamps, screws: the gate graphics), waterfalls
+(`WaterFall` objects), the rain cycle's rain/rumble/flood loops (a hook in
+`particles::ambient`: RoomRain's sounds follow the cycle's intensity), the
+Watcher's dynamic warp and ripplesickness loops, Mushroom_Trip_LOOP
+(mushrooms), shelter machinery (shelter doors). The dropwig, the rot and
+shortcut travel have no loops in vanilla.
+
+**Room ambience** (`AmbientSoundPlayer`): the `AmbientSounds:` of every
+room's settings (OMNI, DIR and SPOT with volume, pitch, position, radius and
+taper; the room's own plus its template's it doesn't overwrite,
+`RoomSettings.InheritAmbientSounds`) are `ambient_sound` objects. The audio
+side plays the camera room's: entering a room keeps the omnidirectional
+players playing the same sample (taking the new volume and pitch, like
+`VirtualMicrophone.NewRoom`) and stops the others; clips stream from a mod's
+`loadedsoundeffects/ambient/` or the `loadedsoundeffects_ambient` bundle,
+looping. Omnidirectional ones play centred, directional ones panned by their
+direction, spot ones by `InverseLerp(taperRad, rad, distance)` from the
+listener (the slugcat) and panned across the taper radius. Not done: the
+doppler pitch, the underwater low pass, the ripple space ambience, and
+vanilla's volume curve (`Volume exponent: 1.8`, every sound here is linear).
+
+Missing samples, clips or no audio device degrade silently: the requests are
+still made and dropped. `--audio-check` reports which sounds and loops have
+samples and decodes every room's ambient clip; `--audio-dump out.wav` (with
+`--room`, `--ticks`, `--script`, the spawn options) runs headless, mixes what
+the camera would hear into a WAV and reports its loudness every half second
+and every loop's start, stop and peak gain.
 
 ### Shortcuts, items, gates
 

@@ -114,6 +114,43 @@ namespace sound {
         daddy_and_bro_tentacle_release_creature,
         daddy_digestion_init,
         bro_digestion_init,
+        // loops (sound_loop requests, never played as one-shots)
+        cicada_wings_loop,
+        cicada_wings_bump_attack_prepare_loop,
+        cicada_wings_bump_attack_charge_loop,
+        centipede_crawl_loop,
+        centipede_electric_charge_loop,
+        centiwing_fly_loop,
+        lizard_lounge_attack_loop,
+        lizard_belly_drag_loop,
+        daddy_digestion_loop,
+        bro_digestion_loop,
+        slugcat_belly_slide_loop,
+        slugcat_roll_loop,
+        slugcat_slide_down_vertical_beam_loop,
+        slugcat_skid_on_ground_loop,
+        slugcat_wall_slide_loop,
+        slugcat_slide_in_narrow_corridor_loop,
+        ui_slugcat_stunned_loop,
+        player_activating_camo_loop,
+        player_deactivating_camo_loop,
+        rock_skidding_on_ground_loop,
+        rock_through_air_loop,
+        spear_thrown_through_air_loop,
+        spear_spinning_through_air_loop,
+        water_surface_calm_loop,
+        gate_water_working_background_loop,
+        gate_electric_background_loop,
+        warp_point_normal_idle_loop,
+        warp_point_bad_idle_loop,
+        warp_point_ripple_idle_loop,
+        warp_point_one_way_exit_idle_loop,
+        warp_point_ripple_hint_loop,
+        warp_point_normal_suck_in_objects_loop,
+        warp_point_bad_suck_in_objects_loop,
+        warp_point_ripple_suck_in_objects_loop,
+        normal_rain_loop,
+        heavy_rain_loop,
         count
     };
     char const* to_string(sound_id id) noexcept;
@@ -128,6 +165,39 @@ namespace sound {
         float vol = 1.f;
         float pitch = 1.f;
     };
+
+    // A looping sound an object keeps up (DynamicSoundLoop, StaticSoundLoop,
+    // an emitter with requireActiveUpkeep): the object asks for it again
+    // every tick it wants it, with this tick's volume, pitch and position.
+    // The audio side keeps one voice per `owner` and fades it out once the
+    // requests stop (the owner turned it off, died, was destroyed or left
+    // the room) or ask for another sound or room
+    enum class loop_shape : uint8_t {
+        positioned,  // ChunkSoundEmitter/PositionedSoundEmitter: at `pos`
+        rect,        // RectSoundEmitter: the point of `pos`..`rect_max` nearest the listener
+        disembodied, // DisembodiedLoopEmitter: no position, panned by `pan`
+    };
+    struct loop_request {
+        uint64_t owner = 0; // loop_key
+        sound_id id = sound_id::count;
+        uint32_t room = 0xFFFFFFFFu; // dcon::room_id index
+        loop_shape shape = loop_shape::positioned;
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 rect_max{0.f, 0.f};
+        float vol = 1.f;
+        float pitch = 1.f;
+        float pan = 0.f;
+        // StaticSoundLoop.fadeOutOnDestroyFrames, in frames of 60 a second
+        // (0: just the short declick)
+        uint16_t fade_out_frames = 0;
+    };
+    // whose loop: the object kind, its id's index and which of its loops
+    enum class loop_owner : uint8_t {
+        creature, player, item, water, gate, warp_point, warp_hint, rain,
+    };
+    constexpr uint64_t loop_key(loop_owner kind, uint32_t index, uint32_t slot = 0) noexcept {
+        return (uint64_t(kind) << 56) | (uint64_t(slot & 0xFFFFFFu) << 32) | uint64_t(index);
+    }
 
     // MusicPlayer.GameRequestsSong / GameRequestsSongStop
     struct music_request {

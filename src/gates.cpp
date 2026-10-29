@@ -199,5 +199,17 @@ namespace gates {
                 change_door_status(state, room, i, !is_closed);
             last_closed = uint8_t((last_closed & ~(1u << i)) | (uint32_t(is_closed) << i));
         }
+
+        // RegionGateGraphics.backgroundWorkingLoop: the machinery humming in
+        // the middle of the room while the gate works (the steam, waterfall,
+        // clamp and screw loops come with RegionGateGraphics; FakeGate rooms
+        // aren't told apart)
+        auto const mode = w.gate_get_mode(g);
+        bool const idle = mode == gate_mode::middle_closed || mode == gate_mode::closed || mode == gate_mode::waiting || mode == gate_mode::middle_open;
+        float& vol = w.gate_get_working_loop_volume(g);
+        state.play_loop(sound::loop_key(sound::loop_owner::gate, uint32_t(g.index())),
+            w.gate_get_electric(g) ? sound::sound_id::gate_electric_background_loop : sound::sound_id::gate_water_working_background_loop,
+            room, center, vol);
+        vol = mathf::lerp(vol, idle ? 0.f : 1.f, 0.05f);
     }
 }

@@ -65,6 +65,8 @@ namespace {
             "  --bench [ticks]     time the whole world (a creature of each kind in every room)\n"
             "                      on one thread and on every thread, and exit\n"
             "  --audio-check       load the sound effects, decode a song, report and exit\n"
+            "  --audio-dump <wav>  no window: run --ticks ticks (and --script) mixing what is heard into a WAV,\n"
+            "                      report its loudness and the loops' lifetimes\n"
             "  --screenshot <bmp>  render one frame after --ticks idle ticks, save it and exit\n"
             "  --ticks <n>         ticks to simulate before --screenshot (default 80)\n"
             "  --pos <x,y>         start position (feet, room pixels) instead of the spawn\n"
@@ -196,6 +198,16 @@ namespace {
         }
 
         // Snap to the vanilla camera containing player one, like RoomCamera
+        // VirtualMicrophone.listenerPoint: the followed slugcat, or the
+        // middle of the view when it is elsewhere
+        vec2 listener(vec2 view_center) const {
+            if (gs.world.player_get_in_shortcut(players[0]))
+                return shortcuts::vessel_position(gs, players[0], 1.f);
+            if (simulation::player_room(gs, players[0]) != room)
+                return view_center;
+            return gs.world.body_chunk_get_pos(player::body_chunk(gs, players[0], 0));
+        }
+
         void update_camera(float view_w, float view_h) {
             vec2 const head = gs.world.player_get_in_shortcut(players[0]) ? shortcuts::vessel_position(gs, players[0], 1.f)
                 : gs.world.body_chunk_get_pos(player::body_chunk(gs, players[0], 0));
@@ -334,6 +346,7 @@ int main(int argc, char* argv[]) {
     bool weaver = false;
     bool selftest_mode = false;
     bool audio_check = false;
+    std::string audio_dump;
     int32_t fuzz_ticks = -1;
     int32_t bench_ticks = -1;
     player::slugcat_name slugcat = player::slugcat_name::white;
@@ -350,6 +363,8 @@ int main(int argc, char* argv[]) {
             slugcat = parse_slugcat(next());
         } else if (a == "--audio-check") {
             audio_check = true;
+        } else if (a == "--audio-dump") {
+            audio_dump = next();
         } else if (a == "--selftest") {
             selftest_mode = true;
         } else if (a == "--fuzz") {
@@ -476,11 +491,14 @@ int main(int argc, char* argv[]) {
     }
     if (audio_check) {
         auto sound = audio::create(gs);
+        // the check needs no device
+        if (!sound)
+            sound = audio::create_offline(gs);
         return sound && audio::self_check(*sound, gs) ? 0 : 1;
     }
 
     // vanilla rolls item spawns with UnityEngine.Random; screenshots stay reproducible
-    if (screenshot.empty())
+    if (screenshot.empty() && audio_dump.empty())
         gs.random.state ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
     app a{gs};
     a.slugcat = slugcat;
@@ -511,24 +529,8 @@ int main(int argc, char* argv[]) {
         player_graphics::reset(gs, a.players[0]);
     }
 
-    render::state r;
-    bool const headless = !screenshot.empty();
-    if (!render::init(r, int(gs.screen_width), int(gs.screen_height), "rwcpp", headless))
-        return 1;
-    r.unity_dir = unity::find_asset_dir(roots, unity_dir);
-    render::load_assets(r, gs);
-
-    if (headless) {
-        auto const step = [&](player::input_package const& in) {
-            gs.camera_rooms.assign(1, a.room);
-            simulation::tick(gs, a.players, std::span{&in, 1});
-            a.follow_player();
-            gs.sounds.clear(); // nothing plays them headless
-            gs.music.clear();
-        };
-        for (uint32_t t = 0; t < screenshot_ticks; ++t)
-            step(player::input_package{});
-        // scripted input: comma separated "<letters><ticks>"
+    // scripted input: comma separated "<letters><ticks>"
+    auto const run_script = [&](auto&& step) {
         size_t pos = 0;
         while (pos < script.size()) {
             size_t const end = std::min(script.find(',', pos), script.size());
@@ -557,6 +559,46 @@ int main(int argc, char* argv[]) {
                 step(in);
             }
         }
+    };
+
+    // --audio-dump: the headless run, heard instead of seen
+    if (!audio_dump.empty()) {
+        auto sound = audio::create_offline(gs);
+        if (!sound)
+            return 1;
+        vec2 const size{gs.screen_width, gs.screen_height};
+        auto const step = [&](player::input_package const& in) {
+            gs.camera_rooms.assign(1, a.room);
+            simulation::tick(gs, a.players, std::span{&in, 1});
+            a.follow_player();
+            a.update_camera(size.x, size.y);
+            vec2 const center = a.cam.pos + size * 0.5f;
+            audio::update(*sound, gs, a.room, center, size, a.listener(center), 1.f / float(gs.ticks_per_second));
+        };
+        for (uint32_t t = 0; t < screenshot_ticks; ++t)
+            step(player::input_package{});
+        run_script(step);
+        return audio::dump(*sound, audio_dump.c_str()) ? 0 : 1;
+    }
+
+    render::state r;
+    bool const headless = !screenshot.empty();
+    if (!render::init(r, int(gs.screen_width), int(gs.screen_height), "rwcpp", headless))
+        return 1;
+    r.unity_dir = unity::find_asset_dir(roots, unity_dir);
+    render::load_assets(r, gs);
+
+    if (headless) {
+        auto const step = [&](player::input_package const& in) {
+            gs.camera_rooms.assign(1, a.room);
+            simulation::tick(gs, a.players, std::span{&in, 1});
+            a.follow_player();
+            gs.sounds.clear(); // nothing plays them headless
+            gs.music.clear();
+        };
+        for (uint32_t t = 0; t < screenshot_ticks; ++t)
+            step(player::input_package{});
+        run_script(step);
         for (auto const t : creature::all_types)
             creature::for_each_of(gs.world, t, [&](dcon::creature_id c) { reports::add_log(creature::describe(gs, c)); });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
@@ -852,7 +894,8 @@ int main(int argc, char* argv[]) {
         std::string hud = a.hud(paused, slow);
         if (sound) {
             vec2 const size{float(r.width) / a.cam.zoom, float(r.height) / a.cam.zoom};
-            audio::update(*sound, gs, a.room, a.cam.pos + size * 0.5f, size, float(frame) / 1e9f);
+            vec2 const center = a.cam.pos + size * 0.5f;
+            audio::update(*sound, gs, a.room, center, size, a.listener(center), float(frame) / 1e9f);
             auto const song = audio::current_song(*sound);
             if (!song.empty())
                 hud += "\nmusic: " + song;

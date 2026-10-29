@@ -309,6 +309,35 @@ relationship{
 	primary_key{trigger}
 }
 
+// Ambient sounds of the room settings ("AmbientSounds:" line): the room's
+// own, then its template's it doesn't overwrite (RoomSettings.
+// InheritAmbientSounds). ~18k entries in the settings files with the
+// Watcher, each template's repeated in every room inheriting it
+object{
+	name{ambient_sound}
+	storage_type{contiguous}
+	size{65536}
+	tag{scenario}
+	property{ name{type} type{world::ambient_type} }
+	// as written, with its extension ("AM_ENV-LightWind.ogg")
+	property{ name{sample} type{text_key} }
+	property{ name{volume} type{float} }
+	property{ name{pitch} type{float} }
+	// SpotSound: centre, radius and taper; DirectionalSound: direction
+	property{ name{pos} type{rw::vec2} }
+	property{ name{direction} type{rw::vec2} }
+	property{ name{rad} type{float} }
+	property{ name{taper} type{float} }
+	property{ name{doppler} type{float} }
+}
+relationship{
+	name{ambient_sound_location}
+	tag{scenario}
+	link{ object{ambient_sound} name{sound} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{sound}
+}
+
 // Rot (DaddyCorruption) placed objects of the room settings, in file order:
 // Corruption/PassiveCorruption areas (`handle` is the radius handle),
 // CorruptionTube vines and CorruptionDarkness blots (from pos to pos + handle)
@@ -702,6 +731,12 @@ object{
 	property{ name{levitation_cooldown} type{float} }
 	// the warp pull zeroes the body's gravity (SetLocalGravity)
 	property{ name{warp_held} type{uint8_t} }
+	// Player.camoDirectionSoundID (0 none, 1 activating, 2 deactivating)
+	// and watcherAbilitySoundLoop's sound (the same) and volume: sound
+	// only, never read back by the simulation
+	property{ name{camo_direction_sound} type{uint8_t} }
+	property{ name{ability_loop_sound} type{uint8_t} }
+	property{ name{ability_loop_volume} type{float} }
 	// Creature.grasps[0] and [1]: the items in its hands (plain properties
 	// rather than a relationship, so grabbing and letting go are writes to
 	// the player and the item that a room's update can do while every other
@@ -1284,6 +1319,13 @@ object{
 	property{ name{shockwave_limit} type{float} }
 	property{ name{second_shockwave} type{uint8_t} }
 	property{ name{triggered_by} type{player_id} }
+	// its sound loops (StaticSoundLoop): the idle/suck in one's mode (0
+	// before the first update, 1 idle, 2 suck in) and volume, and the
+	// ripple hint's (made the first time the hint shows)
+	property{ name{sound_mode} type{uint8_t} }
+	property{ name{sound_volume} type{float} }
+	property{ name{hint_sound} type{uint8_t} }
+	property{ name{hint_volume} type{float} }
 }
 relationship{
 	name{warp_point_location}
@@ -1311,6 +1353,10 @@ object{
 	property{ name{dont_open} type{uint8_t} }
 	// Door.lastClosed of the three doors, bit per door
 	property{ name{last_closed} type{uint8_t} }
+	// ElectricGate (listed in gates/egates.txt) rather than WaterGate
+	property{ name{electric} type{uint8_t} }
+	// RegionGateGraphics.backgroundWorkingLoop's volume
+	property{ name{working_loop_volume} type{float} }
 }
 relationship{
 	name{gate_location}

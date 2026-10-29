@@ -164,6 +164,7 @@ namespace sys {
         // this tick's outputs
         std::vector<noise> noises;
         std::vector<sound::sound_request> sounds;
+        std::vector<sound::loop_request> loops;
         std::vector<sound::music_request> music;
         std::vector<particle> particles;
         std::vector<ripple_ring> ripple_rings;
@@ -203,6 +204,12 @@ namespace sys {
         // any
         std::vector<sound::sound_request> sounds;
         std::vector<sound::music_request> music;
+        // the loops the viewed rooms keep up this tick (sound::loop_request),
+        // in room order: replaced every tick, `loop_tick` counts the ticks
+        // that made them (the audio side reconciles its voices once per new
+        // tick, and leaves them alone while the game is paused)
+        std::vector<sound::loop_request> loops;
+        uint32_t loop_tick = 0;
         using noise = sys::noise;
 
         // per room state outside the data container, indexed by room
@@ -276,6 +283,31 @@ namespace sys {
             }
             if (sounds.size() < 256)
                 sounds.push_back(r);
+        }
+        // A loop's upkeep for this tick (DynamicSoundLoop.Update, an emitter's
+        // alive = true): only from the rooms a camera looks at, and silent
+        // loops (volume 0) stop like vanilla's
+        void play_loop(sound::loop_request const& r) {
+            if (!(r.vol > 0.f))
+                return;
+            dcon::room_id const room{dcon::room_id::value_base_t(r.room)};
+            if (r.room == 0xFFFFFFFFu || !has_runtime(room) || !rooms[size_t(room.index())].viewed)
+                return;
+            auto& out = parallel ? rooms[size_t(room.index())].loops : loops;
+            if (out.size() < 256)
+                out.push_back(r);
+        }
+        // ChunkSoundEmitter/StaticSoundLoop: a loop at `pos`
+        void play_loop(uint64_t owner, sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol, float pitch = 1.f, uint16_t fade_out_frames = 0) {
+            sound::loop_request r;
+            r.owner = owner;
+            r.id = id;
+            r.room = room ? uint32_t(room.index()) : 0xFFFFFFFFu;
+            r.pos = pos;
+            r.vol = vol;
+            r.pitch = pitch;
+            r.fade_out_frames = fade_out_frames;
+            play_loop(r);
         }
         // Room.InGameNoise: heard in the room the rest of this tick
         void add_noise(dcon::room_id room, rw::vec2 pos, float strength, dcon::physical_object_id source = {}) {

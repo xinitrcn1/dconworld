@@ -206,5 +206,19 @@ namespace parsers {
         set(rain_intensity, o.rain_intensity);
         set(room_specific_script_active, o.room_specific_script_active);
         set(wet_terrain, o.wet_terrain);
+        // RoomSettings.InheritAmbientSounds: the overlay's own sounds, then
+        // the ones of this (its parent) it doesn't overwrite (same sample
+        // and type)
+        if (!o.ambient_sounds.empty()) {
+            std::vector<world::ambient_sound_desc> merged = o.ambient_sounds;
+            for (auto const& a : ambient_sounds) {
+                bool overwritten = false;
+                for (auto const& b : o.ambient_sounds)
+                    overwritten = overwritten || (a.sample == b.sample && a.type == b.type);
+                if (!overwritten)
+                    merged.push_back(a);
+            }
+            ambient_sounds = std::move(merged);
+        }
     }
 }

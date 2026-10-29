@@ -949,6 +949,25 @@ namespace items {
             if (w.item_get_type(it) == world::item_type::data_pearl)
                 pearl_update(state, it);
 
+            // Rock/Spear.soundLoop (ChunkDynamicSoundLoop): skidding or
+            // flying fast. Only Rock_Skidding_On_Ground_LOOP has a sample;
+            // the through the air ones are commented out in sounds.txt
+            if (w.item_get_type(it) == world::item_type::rock || is_spear(state, it)) {
+                vec2 const vel = w.body_chunk_get_vel(c);
+                float const speed = rw::magnitude(vel);
+                auto id = sound::sound_id::count;
+                if (speed > 5.f) {
+                    if (w.item_get_type(it) == world::item_type::rock)
+                        id = w.body_chunk_get_contact_point(c).y < 0 ? sound::sound_id::rock_skidding_on_ground_loop : sound::sound_id::rock_through_air_loop;
+                    else if (w.item_get_mode(it) == weapon_mode::thrown)
+                        id = sound::sound_id::spear_thrown_through_air_loop;
+                    else if (w.item_get_mode(it) == weapon_mode::free)
+                        id = sound::sound_id::spear_spinning_through_air_loop;
+                }
+                if (id != sound::sound_id::count)
+                    state.play_loop(sound::loop_key(sound::loop_owner::item, uint32_t(it.index())), id, room.id,
+                        w.body_chunk_get_pos(c), mathf::inverse_lerp(5.f, 15.f, speed));
+            }
             if (is_spear(state, it)) {
                 spear_update(state, it, room);
                 return;

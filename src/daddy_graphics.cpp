@@ -767,7 +767,11 @@ namespace daddy_graphics {
         if (w.creature_get_payload(d).daddy.hd)
             dummy_update(state, d, room);
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
-        // (the digestion sound loop isn't ported: no looping emitters here)
+        // digestLoop: Daddy_Digestion_LOOP for the big ones, Bro_ for the brother
+        state.play_loop(sound::loop_key(sound::loop_owner::creature, uint32_t(d.index())),
+            w.creature_get_payload(d).daddy.size_class ? sound::sound_id::daddy_digestion_loop : sound::sound_id::bro_digestion_loop,
+            room.id, middle, g.digest_loop_volume);
+        g.digest_loop_volume = mathf::lerp(g.digest_loop_volume, mathf::pow(g.digesting, 0.8f), 0.2f);
         if (g.reaction_sound_delay > 0)
             --g.reaction_sound_delay;
         if (g.feel_something_reaction_delay > 0)

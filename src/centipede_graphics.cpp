@@ -150,6 +150,24 @@ namespace centipede_graphics {
         float const size = w.creature_get_payload(c).centipede.size;
         auto& rng = w.creature_get_graphics_random(c);
 
+        // soundLoop (ChunkDynamicSoundLoop on the main chunk): the charge's
+        // crackle, else the legs' crawl. Centiwings' Centiwing_Fly_LOOP and
+        // the aquapede's variant come with those kinds
+        {
+            auto const head = centipede::chunk(state, c, creature::main_chunk(state, c));
+            float const charge = w.creature_get_payload(c).centipede.shock_charge;
+            auto const key = sound::loop_key(sound::loop_owner::creature, uint32_t(c.index()));
+            vec2 const at = w.body_chunk_get_pos(head);
+            if (charge > 0.f)
+                state.play_loop(key, sound::sound_id::centipede_electric_charge_loop, room.id, at,
+                    mathf::inverse_lerp(0.f, 0.1f, charge), mathf::lerp(0.5f, 1.5f, charge));
+            else if (!w.creature_get_dead(c) && moving)
+                // InverseLerp(distance, 0.5, 2) as vanilla has it (the
+                // arguments swapped: loud when crawling slowly or fast)
+                state.play_loop(key, sound::sound_id::centipede_crawl_loop, room.id, at,
+                    mathf::inverse_lerp(rw::distance(w.body_chunk_get_last_pos(head), at), 0.5f, 2.f) * mathf::lerp(0.5f, 1.f, size),
+                    mathf::lerp(1.2f, 0.8f, size));
+        }
         if (moving && awake)
             g.walk_cycle += (body_direction ? -1.f : 1.f) / 10.f;
         g.last_body_dir = g.body_dir;

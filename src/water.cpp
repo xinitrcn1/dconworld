@@ -182,6 +182,16 @@ namespace water {
         surface_t* s = find(state, room.id);
         if (s == nullptr)
             s = &make(state, room);
+        // Water.waterSounds: a RectangularDynamicSoundLoop along the surface,
+        // heard from its point nearest the listener (SilenceWater isn't read)
+        sound::loop_request r;
+        r.owner = sound::loop_key(sound::loop_owner::water, uint32_t(room.id.index()));
+        r.id = sound::sound_id::water_surface_calm_loop;
+        r.room = uint32_t(room.id.index());
+        r.shape = sound::loop_shape::rect;
+        r.pos = vec2{0.f, float(room.default_water_level - 1) * 20.f};
+        r.rect_max = vec2{room.pixel_width(), float(room.default_water_level) * 20.f};
+        state.play_loop(r);
         s->time += 1.f;
         s->last_h = s->h;
         step(*s);

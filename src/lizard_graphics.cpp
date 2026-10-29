@@ -642,6 +642,44 @@ namespace lizard_graphics {
         float const volume = z.voice_index >= 0 ? std::sin(mathf::clamp01(z.voice_progression) * mathf::pi) * custom::lerp_map(z.voice_intensity, 0.f, 2.f, 0.4f, 3.f) : 0.f;
         g.voice_visualization_intensity = volume > 0.f ? 1.f : 0.f;
         g.voice_visualization = mathf::clamp01(volume * 0.5f);
+
+        // soundLoop (ChunkDynamicSoundLoop on the main chunk): the lunge, else
+        // the belly dragging along walls and floors. Neither sound is in
+        // sounds.txt, so vanilla never plays them either: wired for mods
+        // that add them
+        {
+            auto const key = sound::loop_key(sound::loop_owner::creature, uint32_t(l.index()));
+            vec2 const at = chunk_pos(state, l, 0);
+            if (z.anim == lizard::animation::lounge) {
+                state.play_loop(key, sound::sound_id::lizard_lounge_attack_loop, room.id, at, 1.f);
+            } else {
+                float num = 0.f, num2 = 0.f, num3 = 0.f;
+                for (uint32_t i = 0; i < 3; ++i) {
+                    auto const k = lizard::chunk(state, l, i);
+                    vec2 const pos = w.body_chunk_get_pos(k);
+                    vec2 const vel = w.body_chunk_get_vel(k);
+                    ivec2 const contact = w.body_chunk_get_contact_point(k);
+                    float const r = display_rad(state, l, i) + 6.f;
+                    if (contact.x != 0 || room.get_tile(pos - vec2{r, 0.f}).solid() || room.get_tile(pos + vec2{r, 0.f}).solid()) {
+                        num += (contact.x != 0 ? 1.f : 0.5f) / 3.f;
+                        num2 += std::fabs(vel.y) / 3.f;
+                    }
+                    if (contact.y != 0 || room.get_tile(pos - vec2{0.f, r}).solid() || room.get_tile(pos + vec2{0.f, r}).solid()) {
+                        num += (contact.y != 0 ? 1.f : 0.5f) / 3.f;
+                        num3 += std::fabs(vel.x) / 3.f;
+                    }
+                }
+                int32_t const tail = std::min(p.tail_segments, lizard::max_tail);
+                for (int32_t j = 0; j < tail && num <= 1.f; ++j)
+                    if (g.tail[j].terrain_contact)
+                        num += 0.5f / float(tail);
+                g.belly_drag_volume = mathf::lerp(g.belly_drag_volume, mathf::clamp(num, 0.f, 1.f), 0.2f);
+                float const speed = mathf::max(num2, num3);
+                state.play_loop(key, sound::sound_id::lizard_belly_drag_loop, room.id, at,
+                    g.belly_drag_volume * mathf::inverse_lerp(0.2f, 2.f, speed),
+                    mathf::lerp(0.3f, 2.2f, mathf::lerp(mathf::inverse_lerp(0.2f, 8.f, speed), 0.5f, 0.3f)));
+            }
+        }
         g.show_dominance = mathf::clamp(g.show_dominance - 1.f / mathf::lerp(60.f, 120.f, rng.value()), 0.f, 1.f);
         if (b == breed::white) {
             if (dead) {
