@@ -143,9 +143,10 @@ namespace shortcuts {
         float& progress = w.creature_get_vessel_progress(player::creature_of(state, p));
         w.creature_set_vessel_last_progress(player::creature_of(state, p), progress);
         progress += vessel_speed;
-        // ShortcutHandler ticks once per tile
+        // ShortcutHandler ticks once per tile, in the room the pipe leaves
+        // from (heard only while a camera looks at it)
         if (std::floor(progress) != std::floor(progress - vessel_speed))
-            state.play_sound(sound::sound_id::player_tick_along_in_shortcut, dcon::room_id{}, vec2{0.f, 0.f});
+            state.play_sound_unpositioned(sound::sound_id::player_tick_along_in_shortcut, w.creature_get_away_room(player::creature_of(state, p)));
         if (progress < len - 1.f)
             return;
         progress = len - 1.f;

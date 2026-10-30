@@ -423,6 +423,7 @@ namespace npc {
                 nav.from = at;
                 nav.dir = int8_t(dir);
                 nav.hold_jump = 0;
+                nav.cool = 0;
                 if (m == move::rise)
                     ++stats().rises;
                 if (m == move::crouch)
@@ -447,6 +448,12 @@ namespace npc {
             void to(move m) {
                 nav.how = m;
                 nav.move_timer = 0;
+            }
+
+            // a move just begun: its first tick's input (it may be over at
+            // once, failed: then nothing this tick)
+            player::input_package started() {
+                return keep_moving().value_or(input(0, 0));
             }
 
             // a move under way: this tick's input, none when it is over
@@ -871,13 +878,13 @@ namespace npc {
                     // (holding a pole: from its tip)
                     begin(on_pole && st->dir == 0 ? move::tip : move::rise, st->tile, st->dir);
                     nav.cool = 0;
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::pounce:
                     begin(move::crouch, st->tile, st->dir);
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::leap:
                     begin(move::back_up, st->tile, st->dir);
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::swing:
                     // holding the pole first (out of a pipe's mouth, onto it)
                     if (!on_pole)
@@ -885,20 +892,20 @@ namespace npc {
                     begin(move::swing, st->tile, st->dir);
                     nav.wall_side = 0;
                     nav.cool = 0;
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::tip:
                     begin(move::tip, st->tile, st->dir);
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::bounce:
                     begin(move::bounce, st->tile, st->dir);
                     nav.wall_side = 0;
                     nav.cool = 0;
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::wall:
                     begin(move::wall, st->tile, st->dir);
                     nav.wall_side = 0;
                     nav.cool = 0;
-                    return *keep_moving();
+                    return started();
                 case pathing::step_kind::pipe: {
                     // in front of a pipe within the room: into it
                     for (auto const d : custom::four_directions)
@@ -921,7 +928,7 @@ namespace npc {
                     if (room.get_tile(st->tile).any_beam() || on_pole)
                         return input(on_pole ? 0 : dd.x, 1);
                     begin(move::rise, st->tile, dd.x);
-                    return *keep_moving();
+                    return started();
                 }
                 // down: on a pole only down (sideways too it would wall climb)
                 if (dd.y < 0)

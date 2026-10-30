@@ -321,7 +321,15 @@ namespace sys {
 
         // Room.PlaySound: heard only from the rooms a camera looks at
         void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {
-            sound::sound_request const r{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch};
+            push_sound(sound::sound_request{id, room ? uint32_t(room.index()) : 0xFFFFFFFFu, pos, true, vol, pitch}, room);
+        }
+        // Room.PlaySound(id, pan, vol, pitch): no position, centred, heard
+        // only while a camera looks at the room
+        void play_sound_unpositioned(sound::sound_id id, dcon::room_id room, float vol = 1.f, float pitch = 1.f) {
+            if (room)
+                push_sound(sound::sound_request{id, uint32_t(room.index()), rw::vec2{0.f, 0.f}, false, vol, pitch}, room);
+        }
+        void push_sound(sound::sound_request const& r, dcon::room_id room) {
             if (has_runtime(room)) {
                 auto& rt = rooms[size_t(room.index())];
                 if (!rt.viewed)
