@@ -37,6 +37,13 @@ the tools for tracing them, and what is known not to work yet.
   surroundings need): it doesn't stay. It picks a shelter over the rooms'
   connections alone, as if every pipe of a room could be walked to from
   every other (`explore(..., any)`), and tries (`nav_state::guessed`).
+  Where the walkable way does go on from how it got into a room, the guess
+  keeps to it: only rooms the walkable way leads nowhere from are taken as
+  open. WRFA_E04's gap (no jump closes it) isn't guessed across from the
+  WRFA_A12 side, where the walkable way leads back to A12's warp. Into a
+  new room on a guessed trip (through a warp, say) it looks again: a
+  shelter it knows the walkable way to now (not the one it set off from)
+  becomes its target ("retargeted").
   Where the path field doesn't reach it, it makes for the next pipe
   straight (up to it, jumping now and then for ledges, walls and poles,
   never towards a column with nothing under it to the room's bottom). No
@@ -51,6 +58,13 @@ the tools for tracing them, and what is known not to work yet.
   −500 px, −250 in a wall climb, in a room without water). The port doesn't
   kill a slugcat for it otherwise; an NPC down there waited under the room
   for good.
+- **Beams.** Hanging from a horizontal beam it gets up on it with a fresh
+  press of up (Player.cs wants `input[1].y == 0`; held from the jump that
+  caught the beam it hangs there for good). Up on a beam it jumps straight
+  up into a corridor or onto a pole over it (lined up under it in nudges, a
+  one tile shaft takes no less; not holding up), never onto another beam
+  that way. WRFA_S01's way out is that: up to the beam, onto it, up the
+  shaft.
 - **Sleeping spot** (`npc::shelter_spot`): ShelterDoor's `playerSpawnPos`.
   From the shelter's exit pipe entrance out (the first of left, up, right,
   down that isn't solid) until the next tile is solid, going up also left to
@@ -68,9 +82,28 @@ the tools for tracing them, and what is known not to work yet.
   its tail gives it a needle for each hand: the ability itself
   (`items.cpp`'s `spearmaster_update`), no item made by the brain. Once a
   cycle, giving up after 400 ticks.
-- **Fleeing.** It doesn't fight. A creature that would kill or eat a
-  slugcat (that creature's own dynamic relationship to it: `go_for_kill`,
-  intensity at least 0.05), in sight and within 360 px, sends it running.
+- **Fleeing.** A creature that would kill or eat a slugcat (that
+  creature's own dynamic relationship to it: `go_for_kill`, intensity at
+  least 0.05), in sight and within 360 px, sends it running. Not a
+  squidcada or a leech (it ignores those), not one that is stunned (it runs
+  past). **Rivulet** runs from nothing. The others have had enough after
+  400 ticks of running (lately: it counts back down while it isn't), or
+  when chased back into the same pipe a second time (a short wait first):
+  for 600 ticks they ignore every threat and go on their way ("braved").
+- **Weapons.** Walking over a weapon (rock, spear, bomb, lilly puck: lying
+  free within 30 px of its head or feet) with a hand free it taps pick up;
+  it never goes out of its way for one. With a weapon in hand and a threat
+  in sight, within 400 px and level with it (60 px), it turns to it and
+  throws (every 20 ticks at most). Thrown items hit creatures as the
+  player's do; a stunned or dead threat is no threat, so it runs on.
+  Spearmaster throws its needles the same way.
+- **Spearmaster fights.** A threat doesn't send it running: it goes up to
+  where the threat is level with it and in range, throws what it holds,
+  and with its hands empty holds pick up for a new needle out of its tail,
+  backing off while it comes out when the threat is close (the pull works
+  on the run, up and down let go). A stunned threat stays its target; it
+  stops when the thing is dead, or after 1200 ticks of fighting one it
+  can't get at (then on its way, deaf to threats a while).
   It runs into a pipe it is closer to than the threat (every 40 ticks it
   looks again), else straight away from the threat. It forgets a threat 100
   ticks after it last saw it. Fleeing through a pipe off the planned way
@@ -296,6 +329,7 @@ again; after three of those the target is dropped.
 | `--npc-dead-ends` | soak | the exits from which no other exit can be walked to |
 | `--npc-unreachable` | soak | for every NPC with no shelter in reach: its room and the rooms its search reaches (the first three: their route data) |
 | `--npc-list` | soak | every NPC at the end |
+| `--npc-guess` | trip | set off even with no walkable way known (a guessed trip, retargeting on the way) |
 | `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
 

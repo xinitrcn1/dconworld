@@ -390,10 +390,15 @@ namespace pathing {
                                     add(g, v, 25u + 10u * uint32_t(d + std::abs(dy)), step_kind::rise, s);
                             }
                     // straight up to a pole, a beam, into a corridor (a
-                    // shelter's shaft up to its pipe)
-                    for (int32_t k = 2; k <= max_rise && ground; ++k) {
+                    // shelter's shaft up to its pipe; from up on a beam too,
+                    // over something to land on, though not onto another beam:
+                    // WRFA_S01's beam under its shaft, not HI_C11's ladder of
+                    // beams it wall jumps up)
+                    for (int32_t k = 2; k <= max_rise && (ground || (on_beam_top && beam_safe)); ++k) {
                         ivec2 const c = g + ivec2{0, k};
                         if (!open(room, c) || !open(room, c - ivec2{0, 1}) || walkable(c - ivec2{0, 1}))
+                            break;
+                        if (!ground && room.get_tile(c).horizontal_beam())
                             break;
                         if (walkable(c)) {
                             add(g, c, 20u + 10u * uint32_t(k), step_kind::rise, 0);

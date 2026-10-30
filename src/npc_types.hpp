@@ -86,6 +86,8 @@ namespace npc {
         // the trip was guessed from the rooms' connections (no walkable way
         // known): where the path field doesn't reach, it tries anyway
         uint8_t guessed = 0;
+        // into a new room on a guessed trip: look for a walkable way again
+        uint8_t rethink = 0;
         // the creature it runs from, where it last saw it, and the ticks
         // since (it gives up after a while out of sight)
         dcon::creature_id threat;
@@ -101,6 +103,14 @@ namespace npc {
         uint8_t chased = 0;
         uint16_t chased_from = 0;
         int32_t hide = 0;
+        // ticks spent running from threats lately, the ticks it ignores them
+        // (it had enough of running: in it goes, whatever is there)
+        int32_t flee_ticks = 0;
+        int32_t brave = 0;
+        // Spearmaster: ticks it has been fighting the current threat
+        int32_t fight_ticks = 0;
+        // ticks before it picks something up or throws again
+        uint8_t arm_cool = 0;
         // it made for the nearest shelter with the rain close (once a cycle)
         uint8_t hurried = 0;
         // its target shelter's region's finished cycles when it got there

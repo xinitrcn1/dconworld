@@ -2689,6 +2689,89 @@ namespace selftest {
             r.check("NPC runs from a lizard", was_out && fled && back && !player::dead(st, p), d);
         }
         {
+            // rocks on its way out: it picks one up as it walks over them and
+            // throws it at the lizard ahead, which goes down stunned; the
+            // squidcada about it ignores. Rivulet runs from neither
+            auto const arena = [&](char const* name, player::slugcat_name who, uint32_t seed) {
+                auto [st_ptr, rgn] = npc_world(name);
+                auto& st = *st_ptr;
+                auto const a = shelter_room(st, rgn, 1);
+                auto const room = make_room(st, rgn, box(60, 20, [&](int32_t x, int32_t y) {
+                    if (char const c = pipe_at(x, y, 3, 2, -1))
+                        return c;
+                    if (char const c = pipe_at(x, y, 56, 2, 1))
+                        return c;
+                    return y <= 1 ? '#' : ' ';
+                }));
+                auto const b = shelter_room(st, rgn, -1);
+                link(st, exits_of(st, a)[0], a, side_exit(st, room, false), room);
+                link(st, side_exit(st, room, true), room, exits_of(st, b)[0], b);
+                simulation::populate(st);
+                for (int32_t x = 7; x <= 11; x += 2)
+                    items::create_on_tile(st, room, feet_at(x, 2), world::item_type::rock);
+                rw::rng rng{seed};
+                auto const p = npc::create(st, a, feet_at(5, 2), rng, {}, who);
+                auto const liz = spawn(st, room, 34, 2, creature::type::lizard, uint8_t(lizard::breed::pink));
+                spawn(st, room, 20, 10, creature::type::cicada);
+                return std::tuple{std::move(st_ptr), room, p, liz};
+            };
+            {
+                auto [st_ptr, room, p, liz] = arena("npc_arms", player::slugcat_name::white, 0xA235u);
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                uint32_t const thrown = npc::stats().thrown;
+                bool held = false, threw = false, stunned = false, fled_cicada = false;
+                uint32_t t = 0;
+                for (; t < 2000 && !stunned; ++t) {
+                    tick_world(st, 1);
+                    trace_npc(st, p, t);
+                    held = held || items::held(st, p, 0) || items::held(st, p, 1);
+                    threw = npc::stats().thrown > thrown;
+                    stunned = threw && (w.creature_get_stun(liz) > 0 || creature::dead(st, liz));
+                    auto const& nav = w.slugcat_npc_get_nav(npc::of(st, p));
+                    fled_cicada = fled_cicada || (nav.threat && creature::type_of(w, nav.threat) == creature::type::cicada);
+                }
+                char d[200];
+                std::snprintf(d, sizeof(d), " held=%d threw=%d stunned=%d after %u ticks, cicada a threat=%d alive=%d; %s", int(held), int(threw), int(stunned), t,
+                    int(fled_cicada), int(!player::dead(st, p)), creature::describe(st, liz).c_str());
+                r.check("NPC picks up a rock and stuns a lizard", held && threw && stunned && !fled_cicada, d);
+            }
+            {
+                // Spearmaster goes for it: needles out of its tail, thrown,
+                // again until the lizard is dead
+                auto [st_ptr, room, p, liz] = arena("npc_spear", player::slugcat_name::spear, 0x5BEAu);
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                uint32_t const thrown = npc::stats().thrown;
+                bool fled = false, killed = false;
+                uint32_t t = 0;
+                for (; t < 4000 && !killed; ++t) {
+                    tick_world(st, 1);
+                    trace_npc(st, p, t);
+                    fled = fled || w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::flee;
+                    killed = creature::dead(st, liz);
+                }
+                char d[200];
+                std::snprintf(d, sizeof(d), " killed=%d after %u ticks, %u throws, fled=%d alive=%d; %s", int(killed), t, npc::stats().thrown - thrown, int(fled),
+                    int(!player::dead(st, p)), creature::describe(st, liz).c_str());
+                r.check("NPC Spearmaster kills a lizard", killed && !fled && !player::dead(st, p), d);
+            }
+            {
+                auto [st_ptr, room, p, liz] = arena("npc_riv", player::slugcat_name::rivulet, 0x4171u);
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                bool out = false, fled = false;
+                for (uint32_t t = 0; t < 1500; ++t) {
+                    tick_world(st, 1);
+                    out = out || rooms::room_of(st, p) == room;
+                    fled = fled || w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::flee;
+                }
+                char d[160];
+                std::snprintf(d, sizeof(d), " out=%d fled=%d; %s", int(out), int(fled), npc::describe(st, p).c_str());
+                r.check("NPC Rivulet runs from nothing", out && !fled, d);
+            }
+        }
+        {
             // every room updates in parallel: the same world comes out on one
             // thread and on every thread
             uint32_t const cores = std::max(2u, std::thread::hardware_concurrency());
@@ -2939,7 +3022,7 @@ namespace selftest {
                 std::printf("%s", npc::debug_room(gs, r, at).c_str());
             return 1;
         };
-        if (!sees) {
+        if (!sees && !npc::debug().guess) {
             std::printf("%s%s", npc::debug_routes(gs, p).c_str(), npc::debug_reach(gs, p).c_str());
             return fail(0, "no way to the target");
         }
@@ -3031,9 +3114,12 @@ namespace selftest {
                         return;
                     auto const& nav = w.slugcat_npc_get_nav(n);
                     vec2 const feet = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
-                    std::printf("  t=%u #%u %s in %s feet (%d,%d) mode %s stuck %d fails %u\n", t, uint32_t(n.index()), npc::describe(gs, p).c_str(),
-                        std::string{gs.to_string_view(w.room_get_name(room))}.c_str(), int32_t(feet.x / 20.f), int32_t(feet.y / 20.f),
-                        player::to_string(w.player_get_body_mode(p)), nav.stuck, uint32_t(nav.fails));
+                    auto const& in = w.player_get_input(p)[0];
+                    vec2 const head = w.body_chunk_get_pos(player::body_chunk(gs, p, 0));
+                    std::printf("  t=%u #%u %s in %s in(%d,%d,%d) head (%.0f,%.0f) feet (%.0f,%.0f) mode %s anim %s step %d->%d,%d stuck %d fails %u\n", t,
+                        uint32_t(n.index()), npc::describe(gs, p).c_str(), std::string{gs.to_string_view(w.room_get_name(room))}.c_str(), in.x, in.y, int(in.jmp),
+                        head.x / 20.f, head.y / 20.f, feet.x / 20.f, feet.y / 20.f, player::to_string(w.player_get_body_mode(p)),
+                        player::to_string(w.player_get_animation(p)), int(nav.last_kind), nav.last_step.x, nav.last_step.y, nav.stuck, uint32_t(nav.fails));
                 });
             if (t % 1000 == 0 || t == ticks)
                 std::printf("tick %u (%.2f ms/tick): %s\n", t, ms / double(t), npc::stats_line(gs).c_str());

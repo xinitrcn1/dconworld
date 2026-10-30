@@ -118,6 +118,9 @@ namespace npc {
         bool dead_ends = false;
         bool unreachable = false;
         bool list = false;
+        // --npc-guess: --npc-trip sets off without a walkable way known
+        // (the guessed trips of an NPC that knows none)
+        bool guess = false;
         // --npc-measure (with --selftest): the movement measurement in its
         // current form instead of the tests
         bool measure = false;
@@ -148,6 +151,10 @@ namespace npc {
         std::atomic<uint32_t> flights{0};
         std::atomic<uint32_t> hurried{0};
         std::atomic<uint32_t> turned_back{0};
+        std::atomic<uint32_t> picked_up{0};
+        std::atomic<uint32_t> thrown{0};
+        std::atomic<uint32_t> braved{0};
+        std::atomic<uint32_t> retargeted{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

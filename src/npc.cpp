@@ -51,6 +51,16 @@ namespace npc {
         constexpr int32_t forget_threat = 100;
         // a threat this close (and seen) sends it running
         constexpr float threat_range = 360.f;
+        // running from threats this many ticks (lately) it has had enough:
+        // it ignores them this long and goes on its way
+        constexpr int32_t flee_patience = 400;
+        constexpr int32_t brave_ticks = 600;
+        // Spearmaster fighting a threat it can't kill this long: on its way
+        constexpr int32_t fight_patience = 1200;
+        // a weapon lying this close to its body it picks up on the way; a
+        // threat this close and level with it gets one thrown at it
+        constexpr float pick_range = 20.f;
+        constexpr float throw_range = 400.f;
         // a rest in a shelter where it never rains (no cycle to wait out)
         constexpr int32_t dry_rest_ticks = 4800;
 
@@ -213,9 +223,12 @@ namespace npc {
             return mask;
         }
 
-        // (`any`: over the rooms' connections alone, as if every exit of a
-        // room could be walked to from every other: a guess for when the
-        // walkable way finds no shelter)
+        // (`any`: a guess for when the walkable way finds no shelter. Where
+        // the walkable way goes on from how it got into a room, that; where
+        // it doesn't, the room's connections alone, as if every exit could be
+        // walked to from every other. A gap no jump closes (WRFA_E04) isn't
+        // guessed across when the room's walkable way leads somewhere else,
+        // a warp close by)
         search& explore(sys::game_state const& state, dcon::room_id room, uint64_t start, bool any = false) {
             static thread_local search s;
             auto const& w = state.world;
@@ -263,7 +276,8 @@ namespace npc {
                 auto const r = room_at(st / slots);
                 uint32_t const slot = st % slots;
                 auto const& rr = all[size_t(r.index())];
-                uint64_t const mask = any ? all_exits(state, r) : slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
+                uint64_t const walkable = slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
+                uint64_t const mask = any && walkable == 0 ? all_exits(state, r) : walkable;
                 for (uint32_t b = 0; b < 64; ++b)
                     if (mask & (uint64_t(1) << b))
                         hop(r, b, st + 1u);
@@ -381,6 +395,11 @@ namespace npc {
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id t) {
                 if (t == c || creature::is_slugcat(state.world, t) || !creature::live(state, t) || state.world.creature_get_dead(t))
                     return;
+                // (squidcadas and leeches aren't worth running from; a stunned
+                // one can be run past)
+                auto const kind = creature::type_of(state.world, t);
+                if (kind == creature::type::cicada || kind == creature::type::leech || state.world.creature_get_stun(t) > 0)
+                    return;
                 // it would eat or kill a slugcat (its own dynamic relationship)
                 auto const r = tracker::dynamic_relationship(state, t, c);
                 if (!r.go_for_kill() || r.intensity < 0.05f)
@@ -423,6 +442,11 @@ namespace npc {
                     return options[i].tile;
             }
             return std::nullopt;
+        }
+
+        // a thing to throw at a threat
+        bool weapon(sys::game_state const& state, dcon::item_id it) {
+            return it && state.world.item_get_type(it) <= world::item_type::lilly_puck;
         }
 
         struct brain {
@@ -500,19 +524,29 @@ namespace npc {
                     // where the jump leaves from first: under the target going
                     // straight up, else the column it rises in (the next one may be
                     // under a ceiling)
-                    if (t < 8 && mode != player::body_mode_index::climbing_on_beam && mode != player::body_mode_index::corridor_climb) {
+                    bool const on_beam_top = w().player_get_animation(p) == player::animation_index::stand_on_beam;
+                    // (from up on a beam: not holding up on the way, it would
+                    // catch the beam again; before lining up, which holds the
+                    // move's clock at its start)
+                    if (t == 0 || (t < 8 && on_beam_top))
+                        nav.hold_jump = on_beam_top ? 1 : nav.hold_jump;
+                    if (t < 8 && (on_beam_top || (mode != player::body_mode_index::climbing_on_beam && mode != player::body_mode_index::corridor_climb))) {
                         int32_t const feet_x = room_view::get_tile_position(pos(state, p, 1)).x;
                         int32_t const column = dir == 0 ? nav.aim.x : nav.from.x;
                         // (two or more up beside it: the far side of the column,
-                        // clear of the ledge's corner on the way up)
+                        // clear of the ledge's corner on the way up; straight up,
+                        // the middle of it: a one tile shaft takes no less)
                         float const off = dir != 0 && nav.aim.y - nav.from.y >= 2
-                            ? pos(state, p, 1).x - (room_view::middle_of_tile(nav.from).x - 4.f * float(dir)) : 0.f;
-                        if ((feet_x != column || std::abs(off) > 3.f) && t < 6) {
+                            ? pos(state, p, 1).x - (room_view::middle_of_tile(nav.from).x - 4.f * float(dir))
+                            : dir == 0 ? pos(state, p, 1).x - room_view::middle_of_tile(nav.aim).x : 0.f;
+                        float const slack = dir == 0 ? 2.f : 3.f;
+                        if ((feet_x != column || std::abs(off) > slack) && t < 6) {
                             if (feet_x == column) {
                                 nav.move_timer = 1;
                                 if (++nav.cool > 40)
                                     nav.move_timer = 6;
-                                return input(off > 0.f ? -1 : 1, 0);
+                                // (in nudges: held, it slides past the spot)
+                                return input(nav.cool % 2 == 0 ? 0 : off > 0.f ? -1 : 1, 0);
                             }
                             nav.move_timer = 1;
                             if (++nav.cool > 40) {
@@ -522,10 +556,6 @@ namespace npc {
                             return input(rw::math_sign(column - feet_x), 0);
                         }
                     }
-                    // (from up on a beam: not holding up on the way, it would
-                    // catch the beam again)
-                    if (t == 0)
-                        nav.hold_jump = w().player_get_animation(p) == player::animation_index::stand_on_beam ? 1 : 0;
                     // off the wall (jumping from it would push it away), stand up,
                     // then jump towards the ledge and hold on
                     if (t < 8) {
@@ -914,8 +944,11 @@ namespace npc {
                 bool const corridor = mode == player::body_mode_index::corridor_climb;
                 switch (st->kind) {
                 case pathing::step_kind::rise:
-                    // (holding a pole: from its tip)
-                    begin(on_pole && st->dir == 0 ? move::tip : move::rise, st->tile, st->dir);
+                    // (holding a pole: from its tip; up on a horizontal beam
+                    // it is a plain jump up)
+                    begin(on_pole && anim != player::animation_index::stand_on_beam && anim != player::animation_index::hang_from_beam && st->dir == 0 ? move::tip
+                                                                                                                                                 : move::rise,
+                        st->tile, st->dir);
                     nav.cool = 0;
                     return started();
                 case pathing::step_kind::pounce:
@@ -960,6 +993,11 @@ namespace npc {
                 case pathing::step_kind::walk:
                     break;
                 }
+                // hanging from a horizontal beam, up onto it: only a fresh press
+                // of up does it (Player.cs: input[1].y == 0), held from the jump
+                // that caught the beam it hangs there for good
+                if (anim == player::animation_index::hang_from_beam && dd.y > 0)
+                    return input(0, hist[0].y > 0 ? 0 : 1);
                 if (swimming || corridor)
                     return input(dd.x, dd.y);
                 if (dd.y > 0) {
@@ -991,6 +1029,13 @@ namespace npc {
                 return input(dd.x, 0);
             }
 
+            // a guessed search starts from the exits it can walk to, from all
+            // of the room's when it can walk to none
+            uint64_t guess_start() {
+                uint64_t const walk = goals_from(state, room, at);
+                return walk != 0 ? walk : all_exits(state, room.id);
+            }
+
             // the trip to the target shelter from where it stands
             bool plan() {
                 auto const target = w().slugcat_npc_get_target(n);
@@ -1001,7 +1046,7 @@ namespace npc {
                     return true;
                 // (no walkable way: the rooms' connections, to try)
                 nav.guessed = 1;
-                return set_trip(state, c, explore(state, room.id, all_exits(state, room.id), true), target);
+                return set_trip(state, c, explore(state, room.id, guess_start(), true), target);
             }
 
             // a target shelter it can get to, the closest or any
@@ -1013,7 +1058,7 @@ namespace npc {
                 auto options = shelters_of(state, *sp, room.id);
                 nav.guessed = options.empty() ? 1 : 0;
                 if (options.empty()) {
-                    sp = &explore(state, room.id, all_exits(state, room.id), true);
+                    sp = &explore(state, room.id, guess_start(), true);
                     options = shelters_of(state, *sp, room.id);
                 }
                 auto const& s = *sp;
@@ -1098,6 +1143,11 @@ namespace npc {
                     nav.threat = t;
                     nav.threat_pos = creature::main_pos(state, t);
                     nav.threat_timer = 0;
+                } else if (spearmaster() && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
+                    && room.visual_contact(head, creature::main_pos(state, nav.threat))) {
+                    // (Spearmaster keeps after one it stunned, till it's dead)
+                    nav.threat_pos = creature::main_pos(state, nav.threat);
+                    nav.threat_timer = 0;
                 } else {
                     ++nav.threat_timer;
                 }
@@ -1117,6 +1167,35 @@ namespace npc {
                     nav.threat = {};
                     nav.flee_tile = ivec2{-1, -1};
                 }
+            }
+
+            bool spearmaster() { return w().player_get_stats(p).name == player::slugcat_name::spear; }
+
+            // Spearmaster goes for the threat instead of running: up to where
+            // it is level with it and in range, then a needle thrown (arm()
+            // throws what is in hand) or, hands empty, pick up held for a new
+            // one out of its tail, again and again until the thing is dead
+            player::input_package attack() {
+                ++nav.fight_ticks;
+                vec2 const head = pos(state, p, 0);
+                vec2 const at = creature::main_pos(state, nav.threat);
+                bool const in_range = std::fabs(at.y - head.y) < 60.f && std::fabs(at.x - head.x) < throw_range * 0.8f && room.visual_contact(head, at);
+                bool const armed = weapon(state, items::held(state, p, 0)) || weapon(state, items::held(state, p, 1));
+                if (!in_range) {
+                    if (auto const in = keep_moving())
+                        return *in;
+                    return go(ground_under(room, at), false);
+                }
+                if (auto const in = keep_moving())
+                    return *in;
+                int32_t const towards = at.x > head.x ? 1 : -1;
+                if (armed)
+                    return input(towards, 0);
+                // reloading: backing off while the needle comes out (pulling
+                // works on the run, as long as it isn't holding up or down),
+                // standing its ground once it has room
+                bool const close = std::fabs(at.x - head.x) < 200.f;
+                return player::make_input(close ? float(-towards) : 0.f, 0.f, false, false, true);
             }
 
             player::input_package flee() {
@@ -1153,6 +1232,25 @@ namespace npc {
                     migrate::cancel(state, c);
                     ++stats().arrived;
                     return input(0, 0);
+                }
+                // on a guessed trip, somewhere new (through a warp, say): a
+                // shelter it knows the walkable way to from here, if there is
+                // one now, the closest
+                if (leads() && nav.rethink) {
+                    nav.rethink = 0;
+                    auto const& s = explore(state, room.id, goals_from(state, room, at));
+                    auto options = shelters_of(state, s, room.id);
+                    // (not back to where it set off from)
+                    std::erase_if(options, [&](dcon::room_id r) { return r == w().slugcat_npc_get_home(n); });
+                    if (!options.empty() && options.front() != target) {
+                        w().slugcat_npc_set_target(n, options.front());
+                        nav.route_hops = uint8_t(std::min(255u, hops_to(s, options.front())));
+                        nav.guessed = 0;
+                        migrate::cancel(state, c);
+                        set_trip(state, c, s, options.front());
+                        ++stats().retargeted;
+                        return input(0, 0);
+                    }
                 }
                 if (leads() && target) {
                     turn_back();
@@ -1244,8 +1342,32 @@ namespace npc {
                 see_threats();
                 if (nav.what == goal::start && nav.goal_timer < 0)
                     return input(0, 0);
-                if (nav.threat && nav.threat_timer < forget_threat && nav.what != goal::rest)
-                    return flee();
+                // Rivulet runs from nothing; the others, after running for a
+                // while (or chased back into the same pipe again), go anyway
+                if (nav.brave > 0)
+                    --nav.brave;
+                bool const fearless = w().player_get_stats(p).name == player::slugcat_name::rivulet || nav.brave > 0;
+                // Spearmaster fights (giving up on one it can't get at: on its
+                // way, deaf to threats a while)
+                if (spearmaster() && !fearless && nav.what != goal::rest && nav.threat && nav.threat_timer < forget_threat
+                    && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)) {
+                    if (nav.fight_ticks <= fight_patience)
+                        return attack();
+                    nav.fight_ticks = 0;
+                    nav.brave = brave_ticks;
+                    ++stats().braved;
+                } else {
+                    nav.fight_ticks = 0;
+                }
+                if (nav.threat && nav.threat_timer < forget_threat && nav.what != goal::rest && !fearless) {
+                    if (++nav.flee_ticks <= flee_patience)
+                        return flee();
+                    nav.flee_ticks = 0;
+                    nav.brave = brave_ticks;
+                    ++stats().braved;
+                } else if (nav.flee_ticks > 0) {
+                    --nav.flee_ticks;
+                }
                 if (nav.what == goal::flee) {
                     nav.what = goal::travel;
                     nav.flee_tile = ivec2{-1, -1};
@@ -1255,6 +1377,48 @@ namespace npc {
                 return travel();
             }
         };
+
+        // Its hands, on top of whatever its legs do this tick: a weapon at its
+        // feet picked up (never out of its way for one), one thrown at a
+        // threat level with it (a stunned or dead one isn't a threat: on it
+        // goes)
+        void arm(sys::game_state& state, dcon::player_id p, room_view const& room, nav_state& nav, player::input_package& in) {
+            auto& w = state.world;
+            if (nav.arm_cool > 0) {
+                --nav.arm_cool;
+                return;
+            }
+            auto const& hist = w.player_get_input(p);
+            vec2 const head = pos(state, p, 0);
+            if (nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
+                && (w.creature_get_stun(nav.threat) <= 0 || w.player_get_stats(p).name == player::slugcat_name::spear) && !hist[0].thrw && (weapon(state, items::held(state, p, 0)) || weapon(state, items::held(state, p, 1)))) {
+                vec2 const at = creature::main_pos(state, nav.threat);
+                if (std::fabs(at.y - head.y) < 60.f && std::fabs(at.x - head.x) < throw_range && room.visual_contact(head, at)) {
+                    in.x = at.x > head.x ? 1 : -1;
+                    in.y = 0;
+                    in.analogue_dir = vec2{float(in.x), 0.f};
+                    in.thrw = true;
+                    nav.arm_cool = 20;
+                    ++stats().thrown;
+                    return;
+                }
+            }
+            if ((items::held(state, p, 0) && items::held(state, p, 1)) || in.y < 0 || hist[0].pckp)
+                return;
+            vec2 const feet = pos(state, p, 1);
+            bool near = false;
+            rooms::for_each_item(state, room.id, [&](dcon::item_id it) {
+                if (near || !weapon(state, it) || w.item_get_mode(it) != world::weapon_mode::free)
+                    return;
+                vec2 const ip = w.body_chunk_get_pos(items::chunk(state, it));
+                near = custom::dist_less(ip, head, pick_range + 10.f) || custom::dist_less(ip, feet, pick_range + 10.f);
+            });
+            if (near) {
+                in.pckp = true;
+                nav.arm_cool = 10;
+                ++stats().picked_up;
+            }
+        }
 
         rw::vec3 random_color(rw::rng& rng) {
             return custom::hsl2rgb(rng.value(), mathf::lerp(0.25f, 1.f, rng.value()), mathf::lerp(0.3f, 0.85f, rng.value()));
@@ -1748,6 +1912,7 @@ namespace npc {
             }
             nav.room_before = nav.room;
             nav.room = here;
+            nav.rethink = nav.guessed;
             nav.threat = {};
             nav.flee_tile = ivec2{-1, -1};
             nav.goal_tile = ivec2{-1, -1};
@@ -1759,6 +1924,12 @@ namespace npc {
                 nav.chased = uint8_t(std::min(8, nav.chased + 1));
                 nav.chased_from = nav.room_before;
                 nav.hide = 400 * int32_t(nav.chased) + w.creature_get_random(c).range(0, 200);
+                // the second time it waits a little and goes in anyway
+                if (nav.chased >= 2) {
+                    nav.hide = 100 + w.creature_get_random(c).range(0, 100);
+                    nav.brave = nav.hide + brave_ticks;
+                    ++stats().braved;
+                }
             } else if (here != nav.chased_from) {
                 nav.chased = 0;
             }
@@ -1794,7 +1965,9 @@ namespace npc {
             auto& rng = b.rng;
             return input(rng.range(-1, 2), rng.range(-1, 2), rng.value() < 0.2f);
         }
-        return b.think();
+        auto in = b.think();
+        arm(state, p, room, nav, in);
+        return in;
     }
 
     std::string describe(sys::game_state const& state, dcon::player_id p) {
@@ -1830,12 +2003,12 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[360];
+        char buf[420];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.turned_back.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

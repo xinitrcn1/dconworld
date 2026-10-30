@@ -95,6 +95,7 @@ namespace {
             "  --npc-dead-ends     the exits no other exit can be walked to from (--npc-soak)\n"
             "  --npc-unreachable   why the first NPCs with no shelter in reach have none (--npc-soak)\n"
             "  --npc-list          every NPC at the end of --npc-soak\n"
+            "  --npc-guess         --npc-trip even when no walkable way is known (a guessed trip)\n"
             "  --npc-measure       with --selftest: the movement measurement instead of the tests\n"
             "  --npc-exp <room,x,y,mode,dir[,turn]>  with --npc-trip: a scripted jump off a pole\n"
             "  --npc-soak [ticks]  the world with its NPC slugcats (--npcs) for that many ticks, headless:\n"
@@ -202,6 +203,8 @@ namespace {
             d.unreachable = true;
         } else if (a == "--npc-list") {
             d.list = true;
+        } else if (a == "--npc-guess") {
+            d.guess = true;
         } else if (a == "--npc-measure") {
             d.measure = true;
         } else if (a == "--npc-exp") {
