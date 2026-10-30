@@ -46,7 +46,7 @@ pass several `--root`s and earlier ones take priority (mergedmods over base).
 Controls: arrows/WASD move, Z/Space jump, X/J throw, Left Shift/L pick up
 (hold down while pressing it to drop; hold it with a baby centipede in hand to
 eat it), push into a pipe entrance to travel it,
-stand still in a gate's middle zone to cycle it, K spawns a centipede at the
+stay in a gate's middle zone to cycle it, K spawns a centipede at the
 cursor (Shift+K the next variant: centipede, baby, centiwing, red, aquapede;
 Ctrl+K removes them all), O spawns three leeches at the cursor (Shift+O the next
 variant: leech, sea leech, jungle leech; Ctrl+O removes them all), V spawns a dropwig on the
@@ -687,8 +687,8 @@ MoveToMoreAttractiveNeighborRoom), every kind, leeches and long legs
 included, and a trip is a list of rooms the AI walks to the exits of. Now
 and then (`cross_region_chance`) a trip leads to another region: through a
 region gate, whose airlock any creature waiting at its middle door cycles
-like a slugcat would (`gates::wait_tile`, the zone and stand still checks
-over the room's creatures), or through a Watcher warp, which carries the
+(`gates::wait_tile`): anything over the gate's middle, walking, crawling,
+swimming or flying, cycles it after 60 ticks, with no stand still wait), or through a Watcher warp, which carries the
 creature and what it holds to its destination (a DynamicWarpTarget for a
 warp without one) in a transaction. A creature away from home goes back
 to its den by its home region's rain cycle (regions have their own

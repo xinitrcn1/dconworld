@@ -16,6 +16,9 @@ namespace gates {
         // Door.closeSpeed / openSpeed
         constexpr float close_speed = 0.0055555557f;
         constexpr float open_speed = 0.0045454544f;
+        // ticks something has to stay over the gate's middle before it
+        // cycles (vanilla's startCounter, without its stand-still wait)
+        constexpr int32_t trigger_ticks = 60;
 
         // RegionGate.ChangeDoorStatus: rewrites the door's tiles
         void change_door_status(sys::game_state& state, dcon::room_id room, int32_t door, bool open) {
@@ -60,46 +63,26 @@ namespace gates {
         }
 
         // RegionGate.PlayersInZone over the room's creatures, the slugcats
-        // included: the zone they all are in, -1 none or mixed
+        // included, counting only those over the gate's middle (zones 1 and
+        // 2, judged by x alone so flying and moving creatures count): the
+        // zone they all are in, -1 none or both sides
         int32_t players_in_zone(sys::game_state const& state, dcon::room_id room) {
             int32_t num = -1;
-            bool any = false;
             bool mixed = false;
             rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
                 if (mixed)
                     return;
                 int32_t const z = detect_zone(state, c, room);
-                if (z < 0)
+                if (z != 1 && z != 2)
                     return;
-                if (any && z != num) {
+                if (num >= 0 && z != num) {
                     num = -1;
                     mixed = true;
                     return;
                 }
-                any = true;
                 num = z;
             });
             return num;
-        }
-
-        // RegionGate.AllPlayersThroughToOtherSide's wait for the players to
-        // stand still (touchedNoInputCounter); a creature waits at the door
-        // by itself
-        bool players_standing_still(sys::game_state const& state, dcon::room_id room) {
-            auto const& w = state.world;
-            bool still = true;
-            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
-                ivec2 t;
-                if (!creature_tile(state, c, room, t))
-                    return;
-                if (auto const p = creature::player_of(state, c)) {
-                    if (w.player_get_touched_no_input_counter(p) < 20)
-                        still = false;
-                } else if (rw::magnitude(w.body_chunk_get_vel(creature::chunk(state, c, creature::main_chunk(state, c)))) > 2.f) {
-                    still = false;
-                }
-            });
-            return still;
         }
 
         bool all_players_through(sys::game_state const& state, dcon::room_id room, bool let_through_dir) {
@@ -157,8 +140,8 @@ namespace gates {
             if (num > 0 && num < 3) {
                 bool const dir = num == 1;
                 w.gate_set_let_through_dir(g, dir);
-                if (!w.gate_get_dont_open(g) && players_standing_still(state, room)) {
-                    if (++start_counter > 60) {
+                if (!w.gate_get_dont_open(g)) {
+                    if (++start_counter > trigger_ticks) {
                         w.gate_set_mode(g, gate_mode::closing_air_lock);
                         goal[dir ? 0 : 2] = 1.f;
                         start_counter = 0;

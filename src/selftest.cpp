@@ -2134,6 +2134,80 @@ namespace selftest {
             r.check("creature through a region gate", built && planned && in_gate && cycled && across && w.creature_get_regions_changed(c) > 0, d);
         }
         {
+            // a squidcada flies through a region gate: it only has to be over
+            // the gate's middle (in the air and moving), the gate cycles for
+            // it, and it goes on into the next region
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const r1 = w.create_region();
+            w.region_set_name(r1, st.add_text("ga"));
+            w.region_set_never_rains(r1, true);
+            auto const r2 = w.create_region();
+            w.region_set_name(r2, st.add_text("gb"));
+            w.region_set_never_rains(r2, true);
+            auto const a = make_room(st, r1, pipe_room(0, 34));
+            // the gate: a floor below y 8, the doors at x 14, 23, 32 (the middle
+            // one closed), a room exit pipe at each end
+            auto const gate_room = make_room(st, r1, box(48, 25, [](int32_t x, int32_t y) {
+                for (auto const& [px, side] : {std::pair{3, -1}, std::pair{44, 1}}) {
+                    if (x == px && y == 8)
+                        return 'S';
+                    if (x == px && y == 7)
+                        return '.';
+                    if (x == px + side && y == 7)
+                        return 'E';
+                    if ((x == px + side && y == 8) || (x == px && y == 9))
+                        return '#';
+                }
+                if (y < 8)
+                    return '#';
+                if ((x == 23 || x == 24) && y <= 16)
+                    return '#';
+                return ' ';
+            }));
+            auto const b = make_room(st, r2, pipe_room(0, 5));
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_last_closed(g, 0b010);
+            w.try_create_gate_location(g, gate_room);
+            auto const ea = exits_of(st, a), eg = exits_of(st, gate_room), eb = exits_of(st, b);
+            bool const built = ea.size() == 1 && eg.size() == 2 && eb.size() == 1;
+            if (built) {
+                w.room_exit_set_target_from_exit_connection(ea[0], gate_room);
+                w.room_exit_set_target_from_exit_connection(eg[0], a);
+                w.room_exit_set_target_from_exit_connection(eg[1], b);
+                w.room_exit_set_target_from_exit_connection(eb[0], gate_room);
+            }
+            st.spawn_dens = false;
+            simulation::populate(st);
+            rain::new_cycle(st, r1);
+            rain::new_cycle(st, r2);
+            auto const c = spawn(st, a, 10, 2, creature::type::cicada, 0);
+            // and a lizard lying stunned at the far end of the gate room: only
+            // what's over the middle counts, so it doesn't hold the gate shut
+            auto const bystander = built ? spawn(st, gate_room, 8, 8, creature::type::lizard, uint8_t(lizard::breed::green)) : dcon::creature_id{};
+            bool const planned = migrate::plan_trip(st, c, a, b);
+            bool in_gate = false, cycled = false, across = false, airborne = false;
+            for (uint32_t t = 0; t < 8000 && !across; ++t) {
+                if (bystander)
+                    w.creature_set_stun(bystander, 100);
+                tick_world(st, 1);
+                in_gate = in_gate || creature::room_of(st, c) == gate_room;
+                cycled = cycled || w.gate_get_mode(g) == world::gate_mode::middle_open;
+                if (creature::room_of(st, c) == gate_room && w.gate_get_mode(g) == world::gate_mode::middle_closed)
+                    airborne = airborne || creature::main_pos(st, c).y > 10.f * 20.f;
+                across = creature::room_of(st, c) == b;
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " built=%d planned=%d in_gate=%d airborne=%d cycled=%d across=%d", int(built), int(planned), int(in_gate), int(airborne),
+                int(cycled), int(across));
+            r.check("flying creature through a gate", built && planned && in_gate && airborne && cycled && across, d);
+        }
+        {
             // a centipede walks into a Watcher warp on its way and comes out
             // in the room of another region it leads to
             auto const st_ptr = sys::make_game_state();
