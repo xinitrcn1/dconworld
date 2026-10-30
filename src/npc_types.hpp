@@ -111,6 +111,22 @@ namespace npc {
         int32_t wait = 0;
         // ticks standing in a warp waiting for it to set off
         int32_t warp_wait = 0;
+        // A spear step (only where no other way on is known): a spear thrown
+        // from `spear_from` (standing there) towards `spear_dir` sticks in the
+        // wall and lends `spear_beam` (and the tile behind it) a beam to climb
+        // on. 0 none, 1 under way (fetching a spear, going there, throwing);
+        // the room it last looked for one in (index + 1), throws tried
+        // crawl-turn vaults failed in this room, the one that failed twice
+        // (not tried again here)
+        uint8_t vault_fails = 0;
+        rw::ivec2 vault_bad[2] = {{-1, -1}, {-1, -1}};
+        uint8_t spear_phase = 0;
+        int8_t spear_dir = 0;
+        rw::ivec2 spear_from{-1, -1};
+        rw::ivec2 spear_beam{-1, -1};
+        uint16_t spear_looked = 0;
+        uint8_t spear_throws = 0;
+        int32_t spear_wait = 0;
         // chased back through a pipe: how many times in a row from the same
         // room (its index + 1), the ticks it hides before trying again (more
         // each time: a creature camping by the pipe moves on in the end)

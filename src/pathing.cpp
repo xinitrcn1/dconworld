@@ -421,7 +421,10 @@ namespace pathing {
                             ivec2 const top = c + ivec2{s, 0};
                             // (from up on a beam only over something to land on: off it the
                             // jump may drop through the beam, over a pit for good)
-                            if ((!on_beam_top || beam_safe) && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
+                            // (or with the ledge's wall right beside the beam: up it into
+                            // a ledge grab, UW_D03's spear in the wall under its exit)
+                            bool const wall_beside = !open(room, g + ivec2{s, 0}) && !open(room, g + ivec2{s, 1});
+                            if ((!on_beam_top || beam_safe || wall_beside) && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
                                 add(g, top, 20u + 10u * uint32_t(k), step_kind::rise, s);
                         }
                         // over a gap: a running jump from the edge (with room

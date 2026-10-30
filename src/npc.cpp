@@ -292,7 +292,15 @@ namespace npc {
                 if (known)
                     for (auto const k : known->no_guess)
                         tried = tried || k == uint16_t(r.index() + 1);
-                uint64_t const mask = any && (walkable == 0 || wide) && !tried ? all_exits(state, r) : walkable;
+                // (a room with a spear placed in it: maybe a spear step between
+                // its exits, worth a guess; npc.cpp's spear_way finds out there.
+                // UW_D03's last jump)
+                bool spear = false;
+                if (any && !tried && walkable != 0 && !wide)
+                    w.room_for_each_thing_location(r, [&](dcon::thing_location_id l) {
+                        spear = spear || w.placed_thing_get_kind(w.thing_location_get_thing(l)) == world::thing_kind::reliable_spear;
+                    });
+                uint64_t const mask = any && (walkable == 0 || wide || spear) && !tried ? all_exits(state, r) : walkable;
                 for (uint32_t b = 0; b < 64; ++b)
                     if (mask & (uint64_t(1) << b))
                         hop(r, b, st + 1u);
@@ -457,6 +465,114 @@ namespace npc {
                     return options[i].tile;
             }
             return std::nullopt;
+        }
+
+        // a tile's flags (the beams), to try a spear's beam out
+        uint8_t& tile_flags(sys::game_state& state, dcon::room_id room, ivec2 t) {
+            auto& w = state.world;
+            dcon::tile_id const id{dcon::tile_id::value_base_t(w.room_get_first_tile(room).id.index() + t.y * w.room_get_width(room) + t.x)};
+            return w.tile_get_flags(id);
+        }
+
+        bool is_spear(sys::game_state const& state, dcon::item_id it) {
+            return it && state.world.item_get_type(it) == world::item_type::spear;
+        }
+
+        // A spear step: where a spear stuck in a wall would make a way from
+        // `at` to `goal` that none is known for. From the tiles it can get to
+        // (standing on the ground there, or holding a pole), a throw straight
+        // at a wall within 8 tiles (from that close it always sticks) at head
+        // height; the tiles
+        // it would lend a beam to tried out for real (the beam set, the way
+        // looked for, the beam taken away again). Only where a spear is to be
+        // had: in its hand, or lying where it can get to
+        struct spear_step {
+            ivec2 from{-1, -1};
+            int8_t dir = 0;
+            ivec2 beam{-1, -1};
+        };
+        std::optional<spear_step> find_spear_step(sys::game_state& state, room_view const& room, dcon::player_id p, ivec2 at, ivec2 goal) {
+            auto& w = state.world;
+            auto const reach = pathing::slugcat_reach_from(state, room, at);
+            auto const reached = [&](ivec2 t) { return room.inside(t.x, t.y) && reach[size_t(t.y * room.width + t.x)] != 0; };
+            // a spear to be had
+            bool spear = is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1));
+            rooms::for_each_item(state, room.id, [&](dcon::item_id it) {
+                if (!spear && is_spear(state, it) && w.item_get_mode(it) == world::weapon_mode::free && !items::grabber(state, it)) {
+                    ivec2 const t = room_view::get_tile_position(w.body_chunk_get_pos(items::chunk(state, it)));
+                    for (auto const d : rw::custom::eight_directions_and_zero)
+                        spear = spear || reached(t + d);
+                }
+            });
+            if (!spear)
+                return std::nullopt;
+            // where it can't get to yet: near what reaches the goal
+            auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+            auto const near_goal = [&](ivec2 b) {
+                for (int32_t dy = -4; dy <= 4; ++dy)
+                    for (int32_t dx = -4; dx <= 4; ++dx)
+                        if (room.inside(b.x + dx, b.y + dy) && pathing::distance(state, f, b + ivec2{dx, dy}) != pathing::unreachable)
+                            return true;
+                return false;
+            };
+            std::vector<spear_step> options;
+            for (int32_t y = 1; y < room.height - 2; ++y)
+                for (int32_t x = 1; x < room.width - 1; ++x) {
+                    ivec2 const g{x, y};
+                    // (standing on the ground: head height a tile up; holding a pole:
+                    // the tile it holds, UW_D03's pole x=25 under its block)
+                    bool const pole = room.get_tile(g).vertical_beam();
+                    if (!reached(g) || (!pole && (!pathing::standable(room, g) || room.get_tile(g + ivec2{0, 1}).solid())) || room.get_tile(g).water != 0)
+                        continue;
+                    int32_t const hy = pole ? y : y + 1;
+                    // (it leaves the hand half a tile ahead: eight tiles to the wall is
+                    // still within the 140 px it always sticks from)
+                    for (int32_t const s : {-1, 1})
+                        for (int32_t k = 2; k <= 8; ++k) {
+                            ivec2 const t{x + s * k, hy};
+                            if (!room.inside(t.x, t.y))
+                                break;
+                            if (room.get_tile(t).solid()) {
+                                ivec2 const b = t - ivec2{s, 0};
+                                if (!room.get_tile(b).any_beam() && near_goal(b)
+                                    && std::none_of(options.begin(), options.end(), [&](spear_step const& o) { return o.beam == b; }))
+                                    options.push_back({g, int8_t(s), b});
+                                break;
+                            }
+                            if (room.get_tile(t).t != world::terrain::air)
+                                break;
+                        }
+                }
+            // tried out, the closest throws first, a few at most
+            std::sort(options.begin(), options.end(), [&](spear_step const& a, spear_step const& b) {
+                return std::abs(a.from.x - at.x) + std::abs(a.from.y - at.y) < std::abs(b.from.x - at.x) + std::abs(b.from.y - at.y);
+            });
+            if (options.size() > 16)
+                options.resize(16);
+            std::optional<spear_step> found;
+            for (auto const& o : options) {
+                ivec2 const tiles[2] = {o.beam, o.beam - ivec2{o.dir, 0}};
+                uint8_t was[2] = {0, 0};
+                for (int i = 0; i < 2; ++i)
+                    if (room.inside(tiles[i].x, tiles[i].y) && !room.get_tile(tiles[i]).solid()) {
+                        was[i] = tile_flags(state, room.id, tiles[i]);
+                        tile_flags(state, room.id, tiles[i]) |= uint8_t(world::tile_horizontal_beam);
+                    }
+                ++w.room_get_geometry_version(room.id);
+                auto const view = world::get_room_view(state, room.id);
+                auto const ff = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                bool const works = pathing::distance(state, ff, o.from) != pathing::unreachable;
+                for (int i = 0; i < 2; ++i)
+                    if (room.inside(tiles[i].x, tiles[i].y) && !room.get_tile(tiles[i]).solid())
+                        tile_flags(state, room.id, tiles[i]) = was[i];
+                ++w.room_get_geometry_version(room.id);
+                (void)view;
+                if (works) {
+                    found = o;
+                    break;
+                }
+            }
+            return found;
         }
 
         // a thing to throw at a threat
@@ -725,13 +841,21 @@ namespace npc {
                     // facing the way, down on fours (still), then the vault: as
                     // measured in UW_E03 (R2,N4,D12, L1,UL1,L3, DRJ1, RJ6, URJ10,
                     // U till it holds); up on the pole, or fallen back: over
+                    // (failed twice from there: not tried again in the room)
+                    auto const vault_failed = [&] {
+                        failed(60);
+                        if (++nav.vault_fails >= 2) {
+                            nav.vault_bad[0] = nav.from;
+                            nav.vault_bad[1] = nav.aim;
+                        }
+                    };
                     if (t > 120 || (t > 30 && mode == player::body_mode_index::climbing_on_beam)) {
                         if (mode != player::body_mode_index::climbing_on_beam)
-                            failed(60);
+                            vault_failed();
                         break;
                     }
                     if (t > 30 && !airborne(state, p) && mode != player::body_mode_index::climbing_on_beam) {
-                        failed(60);
+                        vault_failed();
                         break;
                     }
                     // (only from the ground: in a corridor down climbs it)
@@ -739,8 +863,18 @@ namespace npc {
                         failed(60);
                         break;
                     }
-                    if (t < 2)
+                    // (from where it was measured: a little back of the tile's
+                    // middle, 7 px; elsewhere in the tile it may fall short, try
+                    // again, and again: back and forth in UW_E03)
+                    if (t < 2) {
+                        float const want = room_view::middle_of_tile(nav.from).x - 7.f * float(dir);
+                        float const off = pos(state, p, 1).x - want;
+                        if (std::fabs(off) > 3.f && ++nav.cool < 60) {
+                            nav.move_timer = 0;
+                            return input(nav.cool % 2 == 0 ? 0 : off > 0.f ? -1 : 1, 0);
+                        }
                         return input(dir, 0);
+                    }
                     if (t < 6)
                         return input(0, 0);
                     if (t < 18) {
@@ -969,7 +1103,7 @@ namespace npc {
                     for (auto const& e : nav.blocked)
                         if (e[0] == a && e[1] == b)
                             return true;
-                    return false;
+                    return nav.vault_bad[0] == a && nav.vault_bad[1] == b;
                 });
                 // no walkable way it knows of on a guessed trip (a move the
                 // path graph lacks): make for it, jumping now and then
@@ -1452,7 +1586,86 @@ namespace npc {
                     }
                     return input(0, 0);
                 }
+                if (auto const in = spear_way(goal))
+                    return *in;
                 return go(goal, pipe);
+            }
+
+            // The spear step (find_spear_step), only where no way on is known:
+            // a spear first (in hand, else fetched), then to where it throws,
+            // the throw, the beam waited for; a miss: fetched again (three
+            // tries). Its input, none when there is nothing to do
+            std::optional<player::input_package> spear_way(ivec2 goal) {
+                uint16_t const here = uint16_t(room.id.index() + 1);
+                if (nav.spear_phase == 0) {
+                    auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                    if (pathing::distance(state, f, at) != pathing::unreachable || nav.spear_looked == here)
+                        return std::nullopt;
+                    nav.spear_looked = here;
+                    auto const step = find_spear_step(state, room, p, at, goal);
+                    if (!step)
+                        return std::nullopt;
+                    nav.spear_phase = 1;
+                    nav.spear_from = step->from;
+                    nav.spear_dir = step->dir;
+                    nav.spear_beam = step->beam;
+                    nav.spear_throws = 0;
+                    nav.spear_wait = 0;
+                    ++stats().spear_steps;
+                }
+                // the beam is there: on its way
+                if (room.get_tile(nav.spear_beam).horizontal_beam()) {
+                    nav.spear_phase = 0;
+                    nav.stuck = 0;
+                    nav.best = pathing::unreachable;
+                    return std::nullopt;
+                }
+                if (nav.spear_wait > 0) {
+                    --nav.spear_wait;
+                    return input(0, 0);
+                }
+                bool const holding = is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1));
+                if (!holding) {
+                    if (nav.spear_throws >= 3) {
+                        nav.spear_phase = 0;
+                        return std::nullopt;
+                    }
+                    // the closest spear lying where it can get to
+                    std::optional<ivec2> best;
+                    float best_d = 0.f;
+                    w().for_each_item([&](dcon::item_id it) {
+                        if (!is_spear(state, it) || w().item_get_mode(it) != world::weapon_mode::free || items::grabber(state, it)
+                            || w().physical_object_get_room_from_object_location(items::body(state, it)) != room.id)
+                            return;
+                        vec2 const ip = w().body_chunk_get_pos(items::chunk(state, it));
+                        ivec2 const t = room_view::get_tile_position(ip);
+                        auto const f = pathing::field_to(state, room.id, t, pathing::slugcat);
+                        if (pathing::distance(state, f, at) == pathing::unreachable && t != at)
+                            return;
+                        float const d = rw::distance(ip, pos(state, p, 1));
+                        if (!best || d < best_d) {
+                            best = t;
+                            best_d = d;
+                        }
+                    });
+                    if (!best) {
+                        nav.spear_phase = 0;
+                        return std::nullopt;
+                    }
+                    // (picked up on the way: arm())
+                    return go(*best, false);
+                }
+                if (at != nav.spear_from)
+                    return go(nav.spear_from, false);
+                // standing there (or holding the pole there), the throw at head
+                // height towards the wall (one tick of the way: on a pole it holds on)
+                auto const mode = w().player_get_body_mode(p);
+                bool const on_pole = mode == player::body_mode_index::climbing_on_beam;
+                if (mode != player::body_mode_index::stand && !on_pole)
+                    return input(0, mode == player::body_mode_index::crawl ? 1 : 0);
+                ++nav.spear_throws;
+                nav.spear_wait = 30;
+                return player::make_input(float(nav.spear_dir), 0.f, false, true, false);
             }
 
             player::input_package rest() {
@@ -1533,7 +1746,7 @@ namespace npc {
             }
             auto const& hist = w.player_get_input(p);
             vec2 const head = pos(state, p, 0);
-            if (nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
+            if (nav.spear_phase == 0 && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
                 && (w.creature_get_stun(nav.threat) <= 0 || w.player_get_stats(p).name == player::slugcat_name::spear) && !hist[0].thrw && (weapon(state, items::held(state, p, 0)) || weapon(state, items::held(state, p, 1)))) {
                 vec2 const at = creature::main_pos(state, nav.threat);
                 if (std::fabs(at.y - head.y) < 60.f && std::fabs(at.x - head.x) < throw_range && room.visual_contact(head, at)) {
@@ -2091,6 +2304,8 @@ namespace npc {
             nav.wait = 0;
             for (auto& e : nav.blocked)
                 e[0] = e[1] = ivec2{-1, -1};
+            nav.vault_fails = 0;
+            nav.vault_bad[0] = nav.vault_bad[1] = ivec2{-1, -1};
             if (nav.what == goal::flee && nav.room_before != 0) {
                 nav.chased = uint8_t(std::min(8, nav.chased + 1));
                 nav.chased_from = nav.room_before;
@@ -2174,12 +2389,12 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[420];
+        char buf[460];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

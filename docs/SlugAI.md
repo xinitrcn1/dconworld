@@ -118,6 +118,28 @@ the tools for tracing them, and what is known not to work yet.
   `--npc-exp uw_e03,7,8,S,R2,N4,D12,L1,UL1,L3,DRJ1,RJ6,URJ10,U30`: the feet
   rise 6.4 tiles, the head passes row 15 at x≈9.8 and catches pole x=9 at
   its foot (UW_E03's way in; a straight jump, a single wall jump: row 12).
+  It lines up 7 px back of the tile's middle first (where it was measured);
+  failed twice from a tile it isn't tried again in that room (the usual
+  blocks are let go every 200 ticks: back and forth).
+- **Spear steps** (`npc.cpp`'s `find_spear_step`, `spear_way`), only where
+  no other way on is known: in a room whose path field doesn't reach it
+  from where it is (looked for once a visit), a throw straight at a wall
+  within 8 tiles (from that close a spear always sticks: within 140 px of
+  where it leaves the hand) from a tile it can get to, standing on the
+  ground or holding a pole (the head's height), whose stuck spear's beam
+  (the tile by the wall and the one behind it) ends near what reaches the
+  goal; each tried for real (the beam set, the way looked for, the beam
+  taken away), the closest throws first. Only with a spear to be had: in
+  its hand, or lying where it can get to. Then: the spear first (fetched,
+  picked up walking over it), to the spot, the throw (on a pole one tick
+  of the way with the throw: it holds on), the beam waited for, on its way
+  (a miss: fetched again, three throws). Throws at threats wait meanwhile.
+  A guessed trip takes a room with a spear placed in it (ReliableSpear) as
+  maybe open between all its exits. UW_D03: from the top of pole x=25's
+  lower part into the wall at x=33, the spear sticks at (32,145); from pole
+  x=30's tip onto it, up the wall beside it into a ledge grab onto (33,148).
+  Tests: up a wall with a spear lying on the way; no spear, no step; on the
+  pounce course a spear in its way stays where it is.
 - **Platforms over pipes.** A jump never lands in a platform or a pipe's
   entrance tile; a jump into a pipe's mouth only into one facing it from the
   side (UW_E03's pipe at (29,89) opens up under a platform: drop through
@@ -500,11 +522,9 @@ the tunnel hops, the drop through the platform into the pipe at the top
 part) and gets to D03, which is not planned: from pole x=25's lower part
 (under a block at row 146) to its upper part and the ledge at (33,148) no
 jump measured works (the tip of x=25, the tip and the side of x=30: the head
-gets to row 145). It needs a spear for its last jump (thrown into a wall
-for a step: a stuck spear lends its tile and the free ones beside it a
-horizontal beam, items.cpp); D03 has three placed, one at (45,135) in the
-part it gets to. The NPC doesn't plan spear steps yet. D04 is planned; B01
-isn't.
+gets to row 145): it needs a spear step (above), and with it gets through
+(≈2300 ticks), then D04 (≈1400). B01 isn't planned: its exit (93,39) is up
+pole x=93, whose foot is ten tiles over the floor.
 
 ## The whole world
 

@@ -2619,6 +2619,94 @@ namespace selftest {
             r.check("NPC sleeps on the spot, Spearmaster's needles", needles && on_spot && !player::dead(st, p), d);
         }
         {
+            // a spear step, only where nothing else gets it on: a wall it can't
+            // climb up to its exit on top, a step before it. It gets the spear
+            // lying on the way first, throws it into the wall from the step
+            // (at head height, its beam a hold up the wall) and goes on up.
+            // Without a spear lying there it doesn't try; on the pounce course
+            // (no need of one) a spear in its way stays where it is
+            auto const spear_course = [&](char const* name, bool with_spear) {
+                auto [st_ptr, rgn] = npc_world(name);
+                auto& st = *st_ptr;
+                auto const a = shelter_room(st, rgn, 1);
+                auto const room = make_room(st, rgn, box(40, 20, [&](int32_t x, int32_t y) {
+                    if (char const c = pipe_at(x, y, 3, 2, -1))
+                        return c;
+                    if (char const c = pipe_at(x, y, 36, 8, 1))
+                        return c;
+                    if (y <= 1 || (x >= 19 && x <= 21 && y == 2) || (x >= 25 && y <= 7))
+                        return '#';
+                    return ' ';
+                }));
+                auto const b = shelter_room(st, rgn, -1);
+                link(st, exits_of(st, a)[0], a, side_exit(st, room, false), room);
+                link(st, side_exit(st, room, true), room, exits_of(st, b)[0], b);
+                simulation::populate(st);
+                if (with_spear)
+                    items::create_on_tile(st, room, feet_at(10, 2), world::item_type::spear);
+                rw::rng rng{0x5EA4u};
+                auto const p = npc::create(st, a, feet_at(5, 2), rng, {}, player::slugcat_name::white);
+                st.world.slugcat_npc_set_target(npc::of(st, p), b);
+                return std::tuple{std::move(st_ptr), room, b, p};
+            };
+            auto const stuck_spears = [](sys::game_state& st, dcon::room_id room) {
+                uint32_t n = 0;
+                rooms::for_each_item(st, room, [&](dcon::item_id it) { n += st.world.item_get_mode(it) == world::weapon_mode::stuck_in_wall ? 1 : 0; });
+                return n;
+            };
+            bool const was_guess = npc::debug().guess;
+            npc::debug().guess = true; // (the planner knows no walkable way there: it has to find the spear step)
+            {
+                auto [st_ptr, room, b, p] = spear_course("npc_spear_step", true);
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                uint32_t const steps = npc::stats().spear_steps;
+                bool arrived = false;
+                uint32_t t = 0;
+                for (; t < 5000 && !arrived; ++t) {
+                    tick_world(st, 1);
+                    trace_npc(st, p, t);
+                    arrived = rooms::room_of(st, p) == b && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+                }
+                char d[200];
+                std::snprintf(d, sizeof(d), " arrived=%d after %u ticks, spear steps %u, stuck spears %u; %s", int(arrived), t, npc::stats().spear_steps - steps,
+                    stuck_spears(st, room), npc::describe(st, p).c_str());
+                r.check("NPC spear step up a wall", arrived && npc::stats().spear_steps > steps && stuck_spears(st, room) == 1, d);
+            }
+            {
+                auto [st_ptr, room, b, p] = spear_course("npc_no_spear", false);
+                auto& st = *st_ptr;
+                uint32_t const steps = npc::stats().spear_steps;
+                bool arrived = false;
+                for (uint32_t t = 0; t < 2000 && !arrived; ++t) {
+                    tick_world(st, 1);
+                    arrived = rooms::room_of(st, p) == b;
+                }
+                char d[120];
+                std::snprintf(d, sizeof(d), " arrived=%d spear steps %u", int(arrived), npc::stats().spear_steps - steps);
+                r.check("NPC no spear, no spear step", !arrived && npc::stats().spear_steps == steps, d);
+            }
+            npc::debug().guess = was_guess;
+            {
+                auto [st_ptr, from, course, to] = course_world("npc_spear_kept");
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                auto const spear = items::create_on_tile(st, course, feet_at(12, 6), world::item_type::spear);
+                rw::rng rng{0x5EA5u};
+                auto const p = npc::create(st, from, feet_at(5, 2), rng, {}, player::slugcat_name::white);
+                uint32_t const steps = npc::stats().spear_steps;
+                bool arrived = false;
+                for (uint32_t t = 0; t < 4000 && !arrived; ++t) {
+                    tick_world(st, 1);
+                    arrived = rooms::room_of(st, p) == to && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+                }
+                bool const unused = w.item_get_mode(spear) != world::weapon_mode::stuck_in_wall && w.item_get_mode(spear) != world::weapon_mode::thrown;
+                char d[120];
+                std::snprintf(d, sizeof(d), " arrived=%d spear steps %u spear unused=%d", int(arrived), npc::stats().spear_steps - steps, int(unused));
+                r.check("NPC no spear step when not needed", arrived && npc::stats().spear_steps == steps && unused && stuck_spears(st, course) == 0, d);
+            }
+        }
+        {
             // the failsafe against the rain: late in the cycle and less than
             // half way to its target, it goes back to the shelter it started
             // in (rests there); on time it keeps going
@@ -2993,8 +3081,8 @@ namespace selftest {
                 auto const show = [&](char const* l) {
                     vec2 const h = w.body_chunk_get_pos(player::body_chunk(gs, p, 0)), f = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
                     top = std::max(top, f.y);
-                    std::printf("  t=%3d %-4s head %.1f,%.1f feet %.1f,%.1f anim %s mode %s\n", t, l, h.x, h.y, f.x, f.y, player::to_string(w.player_get_animation(p)),
-                        player::to_string(w.player_get_body_mode(p)));
+                    std::printf("  t=%3d %-4s head %.1f,%.1f feet %.1f,%.1f anim %s mode %s%s\n", t, l, h.x, h.y, f.x, f.y, player::to_string(w.player_get_animation(p)),
+                        player::to_string(w.player_get_body_mode(p)), items::held(gs, p, 0) || items::held(gs, p, 1) ? " holding" : "");
                 };
                 show("-");
                 while (pos < script.size()) {
