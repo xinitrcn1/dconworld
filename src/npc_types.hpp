@@ -1,0 +1,98 @@
+#pragma once
+
+// An NPC slugcat's brain state, stored in the data container (the
+// slugcat_npc object, see npc.hpp)
+
+#include <cstdint>
+
+#include "dcon_generated_ids.hpp"
+#include "math.hpp"
+
+namespace npc {
+    // what its legs are doing: plain steps along the path field, or one of
+    // the moves that takes a few ticks of input (jumping up to a ledge, a
+    // running jump or a charge pounce over a gap)
+    enum class move : uint8_t {
+        walk,
+        // standing up, then jumping towards the ledge and holding on
+        rise,
+        // a running jump: back from the edge for a run up, the run up
+        back_up,
+        run,
+        // a pounce: down on fours facing the gap, holding jump until it is
+        // charged
+        crouch,
+        charge,
+        // in the air after either jump (climbing up a ledge it grabbed)
+        flight,
+        // off a pole, holding up to grab the other one
+        swing,
+        // up onto a pole's tip, to jump from it
+        tip,
+        // wall jumps from side to side up a narrow shaft
+        wall,
+        // from a pole's tip into a wall, off it back to a pole
+        bounce,
+    };
+
+    // what it is after
+    enum class goal : uint8_t {
+        // in its shelter at the start, waiting to set off
+        start,
+        // on its way to the target shelter
+        travel,
+        // running from a threat
+        flee,
+        // in the target shelter until the rain is over
+        rest,
+    };
+
+    inline constexpr uint32_t max_blocked = 4;
+
+    struct nav_state {
+        goal what = goal::start;
+        move how = move::walk;
+        // ticks in the current move, in the current goal
+        int32_t move_timer = 0;
+        int32_t goal_timer = 0;
+        // the move's direction, the tile it aims for and the one it started
+        // from (a jump's edge), whether it holds jump in the air
+        int8_t dir = 0;
+        rw::ivec2 aim{-1, -1};
+        rw::ivec2 from{-1, -1};
+        uint8_t hold_jump = 0;
+        // the step it took last (debugging)
+        rw::ivec2 last_step{-1, -1};
+        uint8_t last_kind = 0;
+        // the moves that failed lately (from, to), skipped while in the room
+        rw::ivec2 blocked[4][2] = {{{-1, -1}, {-1, -1}}, {{-1, -1}, {-1, -1}}, {{-1, -1}, {-1, -1}}, {{-1, -1}, {-1, -1}}};
+        uint8_t blocked_next = 0;
+        // wall jumps: the wall it heads for, ticks before the next jump
+        int32_t wall_side = 0;
+        int32_t cool = 0;
+        // the room it was in last tick (its index + 1, 0 none): arriving
+        // somewhere moves its trip on
+        uint16_t room = 0;
+        // no progress along the path: the best distance to the goal so far
+        // and the ticks since it got better
+        rw::ivec2 goal_tile{-1, -1};
+        uint16_t best = 0xFFFF;
+        int32_t stuck = 0;
+        // failed tries at the current trip (a new target after a few)
+        uint8_t fails = 0;
+        // the creature it runs from, where it last saw it, and the ticks
+        // since (it gives up after a while out of sight)
+        dcon::creature_id threat;
+        rw::vec2 threat_pos{0.f, 0.f};
+        int32_t threat_timer = 0;
+        // the pipe it flees into (x < 0 none)
+        rw::ivec2 flee_tile{-1, -1};
+        // a pack leader waiting for the others at a pipe
+        int32_t wait = 0;
+        // it made for the nearest shelter with the rain close (once a cycle)
+        uint8_t hurried = 0;
+        // its target shelter's region's finished cycles when it got there
+        // (a new cycle sends it off again)
+        uint32_t cycles = 0;
+    };
+}

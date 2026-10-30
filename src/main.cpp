@@ -28,6 +28,8 @@
 #include "render.hpp"
 #include "unity_assets.hpp"
 #include "items.hpp"
+#include "npc.hpp"
+#include "rooms.hpp"
 #include "rot.hpp"
 #include "rain.hpp"
 #include "dens.hpp"
@@ -71,6 +73,32 @@ namespace {
             "  --bench-mode <m>    only one of them: none, each, dens\n"
             "  --rain-in <ticks>   every region's rain comes in that many ticks\n"
             "  --no-dens           no world file creatures in their dens\n"
+            "  --npcs <share>      the share of shelters with a group of NPC slugcats (0..1, default 0.25)\n"
+            "  --no-npcs           no NPC slugcats\n"
+            "  --npc-trip <from> <to> [ticks]  one NPC slugcat (--slugcat, else random; --npc-seed) from\n"
+            "                      shelter to shelter, no creatures, the rain frozen: pass or fail, then exit\n"
+            "  --npc-seed <n>      the --npc-trip slugcat's rolls\n"
+            "  --npc-human-complete <from> <to>  watch an NPC slugcat go from shelter to shelter (no creatures,\n"
+            "                      the rain frozen); when it dies or gets stuck it is back at the pipe it came\n"
+            "                      in by and you drive it, your input logged, until you enter the pipe it\n"
+            "                      was heading for (then it exits; Tab held while watching: faster).\n"
+            "                      --npc-human-log <file>: where the log goes; with --script, no window:\n"
+            "                      the script replayed as what you'd do (does a recorded way work?)\n"
+            "  NPC tracing and debugging (docs/SlugAI.md), with --npc-trip, --npc-soak or --selftest:\n"
+            "  --npc-trace <room|*>[,every]  the NPC's state, input and move every few ticks in that room\n"
+            "  --npc-route <r1,r2,...>  whether each room of a route can be walked from the way in to the way out\n"
+            "  --npc-maps          with --npc-route, a reachability map of each room that can't\n"
+            "  --npc-room <room>   dump a room's poles, pipes and walkable tiles (--npc-soak)\n"
+            "  --npc-goal <exit>   with --npc-room, mark what reaches that exit; --npc-box <x0,y0,x1,y1>\n"
+            "                      lists the walkable tiles there with their distance to it\n"
+            "  --npc-edges <room,x0,y0,x1,y1>  the jumps leaving those tiles (--npc-soak)\n"
+            "  --npc-dead-ends     the exits no other exit can be walked to from (--npc-soak)\n"
+            "  --npc-unreachable   why the first NPCs with no shelter in reach have none (--npc-soak)\n"
+            "  --npc-list          every NPC at the end of --npc-soak\n"
+            "  --npc-measure       with --selftest: the movement measurement instead of the tests\n"
+            "  --npc-exp <room,x,y,mode,dir[,turn]>  with --npc-trip: a scripted jump off a pole\n"
+            "  --npc-soak [ticks]  the world with its NPC slugcats (--npcs) for that many ticks, headless:\n"
+            "                      how they get on and what they cost, then exit\n"
             "  --audio-check       load the sound effects, decode a song, report and exit\n"
             "  --audio-dump <wav>  no window: run --ticks ticks (and --script) mixing what is heard into a WAV,\n"
             "                      report its loudness and the loops' lifetimes\n"
@@ -104,7 +132,8 @@ namespace {
             "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
             "          Y a lizard at the cursor, the next breed each time (Shift+Y the same\n"
             "          breed again, Ctrl+Y removes them all), H a daddy long legs at the\n"
-            "          cursor (Shift+H the next variant, Ctrl+H removes them all),\n"
+            "          cursor (Shift+H the next variant, Ctrl+H removes them all), U a group of\n"
+            "          three NPC slugcats at the cursor (Ctrl+U removes every NPC slugcat),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
@@ -115,6 +144,219 @@ namespace {
             "          (again for another one), Ctrl+M stop the music, Esc quit\n",
             argv0);
     }
+
+    // a comma separated list
+    std::vector<std::string> split(std::string const& s) {
+        std::vector<std::string> out;
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t const end = std::min(s.find(',', pos), s.size());
+            if (end > pos)
+                out.push_back(s.substr(pos, end - pos));
+            pos = end + 1;
+        }
+        return out;
+    }
+
+    // the NPC slugcats' tracing and debugging options (npc::debug_options);
+    // false: not one of them
+    template<typename Next>
+    bool npc_debug_option(std::string const& a, Next&& next) {
+        auto& d = npc::debug();
+        auto const ints = [](std::string const& s) {
+            std::vector<int32_t> v;
+            for (auto const& x : split(s))
+                v.push_back(std::atoi(x.c_str()));
+            return v;
+        };
+        if (a == "--npc-trace") {
+            auto const parts = split(next());
+            d.trace_room = parts.empty() ? "*" : parts[0];
+            if (parts.size() > 1)
+                d.trace_every = std::max(1, std::atoi(parts[1].c_str()));
+        } else if (a == "--npc-route") {
+            d.route = split(next());
+        } else if (a == "--npc-maps") {
+            d.maps = true;
+        } else if (a == "--npc-room") {
+            d.room = next();
+        } else if (a == "--npc-goal") {
+            d.goal = std::atoi(next().c_str());
+        } else if (a == "--npc-box") {
+            auto const v = ints(next());
+            d.box = v.size() == 4;
+            if (d.box) {
+                d.box_lo = rw::ivec2{v[0], v[1]};
+                d.box_hi = rw::ivec2{v[2], v[3]};
+            }
+        } else if (a == "--npc-edges") {
+            auto const parts = split(next());
+            if (parts.size() == 5) {
+                d.edges_room = parts[0];
+                d.edges_lo = rw::ivec2{std::atoi(parts[1].c_str()), std::atoi(parts[2].c_str())};
+                d.edges_hi = rw::ivec2{std::atoi(parts[3].c_str()), std::atoi(parts[4].c_str())};
+            }
+        } else if (a == "--npc-dead-ends") {
+            d.dead_ends = true;
+        } else if (a == "--npc-unreachable") {
+            d.unreachable = true;
+        } else if (a == "--npc-list") {
+            d.list = true;
+        } else if (a == "--npc-measure") {
+            d.measure = true;
+        } else if (a == "--npc-exp") {
+            d.experiment = next();
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // --npc-human-complete: an NPC slugcat on its way; when it dies, falls
+    // out of the room or gets stuck it is put back at the pipe it came in
+    // by and a controller drives it, its input logged (in --script's form),
+    // until it goes into the pipe the NPC would have left the room by
+    struct human_complete {
+        enum class state { watching, driving, done };
+        bool on = false;
+        dcon::player_id p;
+        // where it came into the room it is in (the pipe's mouth; the spawn
+        // in the first shelter)
+        dcon::room_id entry_room;
+        vec2 entry_pos{0.f, 0.f};
+        rw::ivec2 entry_pipe{-1, -1};
+        // the pipe (or warp) to leave by, the room behind it
+        rw::ivec2 target{-1, -1};
+        dcon::room_id target_room;
+        bool driving = false;
+        std::string log_path;
+        std::string route;
+        uint32_t no_way = 0;
+        uint32_t stuck = 0;
+        uint32_t attempts = 0;
+        uint32_t ticks = 0;
+        // the input so far: run lengths of letters
+        std::vector<std::pair<std::string, uint32_t>> script;
+
+        static std::string letters(player::input_package const& in) {
+            std::string l;
+            if (in.y > 0) l += 'U';
+            if (in.y < 0) l += 'D';
+            if (in.x < 0) l += 'L';
+            if (in.x > 0) l += 'R';
+            if (in.jmp) l += 'J';
+            if (in.thrw) l += 'X';
+            if (in.pckp) l += 'P';
+            if (in.spec) l += 'E';
+            return l.empty() ? "N" : l;
+        }
+
+        bool failed(sys::game_state& gs) const {
+            auto const& w = gs.world;
+            return player::dead(gs, p) || w.player_get_eaten(p)
+                || (!player::in_shortcut(gs, p) && w.body_chunk_get_pos(player::body_chunk(gs, p, 1)).y < -40.f);
+        }
+
+        // back where it came into the room
+        void respawn(sys::game_state& gs) {
+            player::reset(gs, p, entry_room, entry_pos);
+            player_graphics::reset(gs, p);
+        }
+
+        // the NPC failed: its turn is over
+        void take_over(sys::game_state& gs, char const* why) {
+            respawn(gs);
+            target = npc::planned_exit(gs, p, target_room).value_or(rw::ivec2{-1, -1});
+            npc::take_over(gs, p);
+            driving = true;
+            script.clear();
+            ticks = 0;
+            auto const& w = gs.world;
+            std::string const room{gs.to_string_view(w.room_get_name(entry_room))};
+            std::string const next = target_room ? std::string{gs.to_string_view(w.room_get_name(target_room))} : std::string{"?"};
+            reports::add_log(std::string{"the NPC "} + why + " in " + room + ": your turn, into the pipe at " + std::to_string(target.x) + ","
+                + std::to_string(target.y) + " (to " + next + ")");
+        }
+
+        void write_log(sys::game_state& gs) const {
+            auto const& w = gs.world;
+            std::FILE* f = std::fopen(log_path.c_str(), "w");
+            if (!f) {
+                reports::add_log("couldn't write " + log_path);
+                return;
+            }
+            std::string const room{gs.to_string_view(w.room_get_name(entry_room))};
+            std::fprintf(f, "# --npc-human-complete %s, %s\n", route.c_str(), player::to_string(w.player_get_stats(p).name));
+            std::fprintf(f, "# room %s: in by the pipe at %d,%d (feet at %.1f,%.1f), out by the pipe at %d,%d to %s\n", room.c_str(), entry_pipe.x,
+                entry_pipe.y, entry_pos.x, entry_pos.y, target.x, target.y,
+                target_room ? std::string{gs.to_string_view(w.room_get_name(target_room))}.c_str() : "?");
+            std::fprintf(f, "# attempts %u, %u ticks; the input as --script (U D L R J X P E, N nothing; then the ticks held):\n", attempts + 1, ticks);
+            std::string line;
+            for (size_t i = 0; i < script.size(); ++i)
+                line += (i ? "," : "") + script[i].first + std::to_string(script[i].second);
+            std::fprintf(f, "%s\n", line.c_str());
+            std::fclose(f);
+            reports::add_log("wrote " + log_path);
+        }
+
+        state update(sys::game_state& gs, player::input_package const& in) {
+            auto& w = gs.world;
+            if (!driving) {
+                simulation::tick(gs, {}, {});
+                // into a new room: where it came in
+                auto const r = rooms::room_of(gs, p);
+                if (r && r != entry_room && !player::in_shortcut(gs, p)) {
+                    entry_room = r;
+                    vec2 const feet = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
+                    entry_pos = feet;
+                    float best = 1e9f;
+                    w.room_for_each_shortcut_location(r, [&](dcon::shortcut_location_id sl) {
+                        auto const sc = w.shortcut_location_get_shortcut(sl);
+                        auto const t = w.shortcut_get_start(sc);
+                        float const d = rw::distance(world::room_view::middle_of_tile(t), feet);
+                        if (d < best) {
+                            best = d;
+                            entry_pipe = t;
+                        }
+                    });
+                }
+                if (failed(gs))
+                    take_over(gs, "died");
+                else if (npc::stats().stuck != stuck)
+                    take_over(gs, "got stuck");
+                else if (npc::stats().no_way != no_way)
+                    take_over(gs, "found no way");
+                else if (r == gs.find_room(route.substr(route.find(" -> ") + 4)) && w.slugcat_npc_get_nav(npc::of(gs, p)).what == npc::goal::rest) {
+                    reports::add_log("the NPC got there on its own");
+                    return state::done;
+                }
+                return state::watching;
+            }
+            // driving: logged, until it is in the pipe (or through the warp)
+            auto const l = letters(in);
+            if (!script.empty() && script.back().first == l)
+                ++script.back().second;
+            else
+                script.emplace_back(l, 1u);
+            ++ticks;
+            dcon::player_id const ps[1] = {p};
+            simulation::tick(gs, ps, std::span{&in, 1});
+            if (failed(gs)) {
+                ++attempts;
+                script.clear();
+                ticks = 0;
+                respawn(gs);
+                reports::add_log("died: again from the start of the room (attempt " + std::to_string(attempts + 1) + ")");
+                return state::driving;
+            }
+            bool const piped = player::in_shortcut(gs, p) && w.shortcut_get_start(w.creature_get_vessel_shortcut(player::creature_of(gs, p))) == target;
+            if (piped || (target_room && rooms::room_of(gs, p) == target_room)) {
+                write_log(gs);
+                return state::done;
+            }
+            return state::driving;
+        }
+    };
 
     player::slugcat_name parse_slugcat(std::string n) {
         for (auto& c : n)
@@ -373,9 +615,16 @@ int main(int argc, char* argv[]) {
     std::string audio_dump;
     int32_t fuzz_ticks = -1;
     int32_t bench_ticks = -1;
+    int32_t npc_soak_ticks = -1;
+    std::string npc_trip_from, npc_trip_to;
+    std::string human_from, human_to, human_log;
+    uint32_t npc_trip_ticks = 40 * 60 * 10;
+    uint32_t npc_seed = 1;
+    bool slugcat_given = false;
     std::string bench_mode;
     int32_t rain_in = -1;
     bool no_dens = false;
+    float npc_chance = npc::default_shelter_chance;
     player::slugcat_name slugcat = player::slugcat_name::white;
     for (int i = 1; i < argc; ++i) {
         std::string const a = argv[i];
@@ -388,6 +637,7 @@ int main(int argc, char* argv[]) {
             start_room = next();
         } else if (a == "--slugcat") {
             slugcat = parse_slugcat(next());
+            slugcat_given = true;
         } else if (a == "--audio-check") {
             audio_check = true;
         } else if (a == "--audio-dump") {
@@ -402,12 +652,33 @@ int main(int argc, char* argv[]) {
             bench_ticks = 200;
             if (i + 1 < argc && argv[i + 1][0] != '-')
                 bench_ticks = std::atoi(argv[++i]);
+        } else if (a == "--npc-trip") {
+            npc_trip_from = next();
+            npc_trip_to = next();
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                npc_trip_ticks = uint32_t(std::atoi(argv[++i]));
+        } else if (a.starts_with("--npc-") && npc_debug_option(a, next)) {
+        } else if (a == "--npc-human-complete") {
+            human_from = next();
+            human_to = next();
+        } else if (a == "--npc-human-log") {
+            human_log = next();
+        } else if (a == "--npc-seed") {
+            npc_seed = uint32_t(std::atoi(next().c_str()));
+        } else if (a == "--npc-soak") {
+            npc_soak_ticks = 6000;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                npc_soak_ticks = std::atoi(argv[++i]);
         } else if (a == "--bench-mode") {
             bench_mode = next();
         } else if (a == "--rain-in") {
             rain_in = std::atoi(next().c_str());
         } else if (a == "--no-dens") {
             no_dens = true;
+        } else if (a == "--npcs") {
+            npc_chance = float(std::atof(next().c_str()));
+        } else if (a == "--no-npcs") {
+            npc_chance = 0.f;
         } else if (a == "--screenshot") {
             screenshot = next();
         } else if (a == "--script") {
@@ -537,9 +808,24 @@ int main(int argc, char* argv[]) {
     auto const gs_ptr = load_world(true);
     auto& gs = *gs_ptr;
     gs.spawn_dens = !no_dens;
+    // (not for the fuzz: it drives slugcats of its own)
+    gs.npc_shelter_chance = fuzz_ticks >= 0 ? 0.f : npc_chance;
+    // --npc-human-complete: the trip test's world (no creatures, no other
+    // NPCs, the rain standing still)
+    bool const human_run = !human_from.empty();
+    if (human_run) {
+        gs.spawn_dens = false;
+        gs.npc_shelter_chance = 0.f;
+        gs.rain_frozen = true;
+        start_room = human_from;
+    }
     // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
     gs.story_slugcat = slugcat;
 
+    if (!npc_trip_from.empty())
+        return selftest::npc_trip(gs, npc_trip_from, npc_trip_to, npc_trip_ticks, slugcat_given ? slugcat : player::slugcat_name::count, npc_seed);
+    if (npc_soak_ticks >= 0)
+        return selftest::npc_soak(gs, uint32_t(npc_soak_ticks));
     if (fuzz_ticks >= 0) {
         simulation::populate(gs);
         return selftest::fuzz(gs, uint32_t(fuzz_ticks));
@@ -584,6 +870,31 @@ int main(int argc, char* argv[]) {
         player::reset(gs, a.players[0], start, *start_pos);
         player_graphics::reset(gs, a.players[0]);
     }
+    // --npc-human-complete: the NPC slugcat is player one (the camera
+    // follows it); a controller drives it once it fails
+    human_complete hc;
+    if (human_run) {
+        auto const to = gs.find_room(human_to);
+        if (!to || !gs.world.room_get_is_shelter(start) || !gs.world.room_get_is_shelter(to)) {
+            std::printf("--npc-human-complete: %s and %s must both be shelters\n", human_from.c_str(), human_to.c_str());
+            return 1;
+        }
+        player::destroy(gs, a.players[0]);
+        rw::rng rng{npc_seed | 1u};
+        a.players[0] = npc::create(gs, start, a.spawn, rng, {}, slugcat_given ? slugcat : player::slugcat_name::count);
+        auto const n = npc::of(gs, a.players[0]);
+        gs.world.slugcat_npc_set_target(n, to);
+        gs.world.slugcat_npc_get_nav(n).goal_timer = 0;
+        hc.on = true;
+        hc.p = a.players[0];
+        hc.entry_room = start;
+        hc.entry_pos = a.spawn;
+        hc.log_path = human_log.empty() ? "npc_human_" + human_from + "_" + human_to + ".txt" : human_log;
+        hc.route = human_from + " -> " + human_to;
+        hc.no_way = npc::stats().no_way;
+        hc.stuck = npc::stats().stuck;
+        reports::add_log("watching " + npc::describe(gs, hc.p) + "; when it fails you take over");
+    }
 
     // scripted input: comma separated "<letters><ticks>"
     auto const run_script = [&](auto&& step) {
@@ -616,6 +927,36 @@ int main(int argc, char* argv[]) {
             }
         }
     };
+
+    // --npc-human-complete with --script: no window, the script is what the
+    // human does once the NPC fails (a recorded log replayed: it tells
+    // whether the way recorded works)
+    if (hc.on && !script.empty()) {
+        std::vector<player::input_package> replay;
+        run_script([&](player::input_package const& in) { replay.push_back(in); });
+        size_t k = 0;
+        for (uint32_t t = 0; t < 40u * 60u * 30u; ++t) {
+            bool const was_driving = hc.driving;
+            uint32_t const attempts = hc.attempts;
+            player::input_package const in = was_driving && k < replay.size() ? replay[k++] : player::input_package{};
+            auto const st = hc.update(gs, in);
+            gs.sounds.clear();
+            gs.music.clear();
+            if (st == human_complete::state::done) {
+                std::printf("PASS after %u ticks\n", t);
+                return 0;
+            }
+            // died: the script again from its start
+            if (hc.attempts != attempts)
+                k = 0;
+            if (was_driving && k >= replay.size() && hc.ticks > replay.size() + 200) {
+                std::printf("FAIL: the script ran out %u ticks ago\n", hc.ticks - uint32_t(replay.size()));
+                return 1;
+            }
+        }
+        std::printf("FAIL: out of time\n");
+        return 1;
+    }
 
     // --audio-dump: the headless run, heard instead of seen
     if (!audio_dump.empty()) {
@@ -709,6 +1050,19 @@ int main(int argc, char* argv[]) {
     uint64_t accumulator = 0;
     std::vector<player::input_package> inputs;
     auto const tick = [&] {
+        if (hc.on) {
+            auto in = keyboard_input();
+            if (auto const g = gamepad_input(pad); g.analogue_dir != vec2{0.f, 0.f} || g.jmp || g.thrw || g.pckp)
+                in = g;
+            gs.camera_rooms.assign(1, a.room);
+            // (watching, Tab held: four times as fast)
+            int const steps = !hc.driving && SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_TAB] ? 4 : 1;
+            for (int i = 0; i < steps && running; ++i)
+                if (hc.update(gs, in) == human_complete::state::done)
+                    running = false;
+            a.follow_player();
+            return;
+        }
         inputs.clear();
         for (size_t i = 0; i < a.players.size(); ++i) {
             // single player: keyboard or gamepad; co-op: gamepad drives player two
@@ -887,6 +1241,19 @@ int main(int argc, char* argv[]) {
                     SDL_GetMouseState(&mx, &my);
                     daddy::create(gs, a.room, render::screen_to_room(r, a.cam, mx, my), daddy::variant(variant));
                     reports::add_log(std::string{daddy::to_string(daddy::variant(variant))} + " long legs");
+                    break;
+                }
+                case SDLK_U: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        npc::destroy_all(gs);
+                        reports::add_log("NPC slugcats removed");
+                        break;
+                    }
+                    // a group of three, maybe a pack
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    npc::spawn_group(gs, a.room, render::screen_to_room(r, a.cam, mx, my), 3, gs.random);
+                    reports::add_log("three NPC slugcats; " + npc::stats_line(gs));
                     break;
                 }
                 case SDLK_I: {

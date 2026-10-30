@@ -591,6 +591,9 @@ namespace player {
         rot::release(state, state.world.player_get_creature(id));
         auto const cr = state.world.player_get_creature(id);
         creature::release_target(state, cr);
+        // an NPC's brain goes with it
+        if (auto const n = state.world.player_get_npc(id))
+            state.world.delete_slugcat_npc(n);
         state.world.delete_player(id);
         creature::erase(state, cr);
     }

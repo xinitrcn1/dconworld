@@ -9,6 +9,7 @@
 #include "creature.hpp"
 #include "dens.hpp"
 #include "migrate.hpp"
+#include "npc.hpp"
 #include "rain.hpp"
 #include "spawns.hpp"
 #include "reports.hpp"
@@ -135,6 +136,13 @@ namespace simulation {
             if (game_world)
                 reports::add_log(spawns::to_string(r));
         }
+        // the NPC slugcats in their shelters
+        if (state.npc_shelter_chance > 0.f && !state.npcs_populated) {
+            state.npcs_populated = true;
+            uint32_t const made = npc::spawn_world(state, state.npc_shelter_chance);
+            if (game_world)
+                reports::add_log(std::to_string(made) + " NPC slugcats in the shelters");
+        }
     }
 
     namespace {
@@ -195,10 +203,12 @@ namespace simulation {
             });
         }
 
-        // the players of this tick and what drives them
+        // the players of this tick and what drives them: a controller's
+        // input, or an NPC's brain (npc.hpp)
         struct driven {
             dcon::player_id p;
             ::player::input_package in;
+            bool npc = false;
         };
 
         // One room's tick: its players, creatures, items, rot, water, sand
@@ -212,8 +222,12 @@ namespace simulation {
             rt.noises.clear();
             pathing::trim(state, room);
             auto const view = world::get_room_view(state, room);
-            for (auto const& [p, in] : players) {
-                update_music_triggers(state, p, room);
+            for (auto const& [p, given, npc] : players) {
+                ::player::input_package in = given;
+                if (npc)
+                    in = npc::think(state, p, view);
+                else
+                    update_music_triggers(state, p, room);
                 player::update(state, p, view, in);
                 player_graphics::update(state, p, view);
                 // Player.GraphicsModuleUpdated: held items follow the hands
@@ -249,9 +263,12 @@ namespace simulation {
         state.loops.clear();
         // every region's rain cycle
         rain::update_world(state);
+        // the NPC slugcats' packs
+        npc::update_world(state);
 
         // the players out in a room update with it; the ones in a pipe travel
-        // it first, serially (coming out moves them to another room)
+        // it first, serially (coming out moves them to another room). The
+        // controlled ones, then the NPCs
         std::vector<driven> out;
         for (size_t i = 0; i < players.size(); ++i) {
             auto const p = players[i];
@@ -260,6 +277,13 @@ namespace simulation {
             else
                 out.push_back(driven{p, i < inputs.size() ? inputs[i] : ::player::input_package{}});
         }
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            auto const p = w.slugcat_npc_get_player(n);
+            if (player::in_shortcut(state, p))
+                shortcuts::update_vessel(state, p);
+            else
+                out.push_back(driven{p, ::player::input_package{}, true});
+        });
 
         // the rooms a camera looks at: the players' and the app's
         for (auto& rt : state.rooms)
@@ -268,7 +292,10 @@ namespace simulation {
             if (state.has_runtime(r))
                 state.runtime(r).viewed = true;
         };
-        w.for_each_player([&](dcon::player_id p) { view(player_room(state, p)); });
+        w.for_each_player([&](dcon::player_id p) {
+            if (!npc::is_npc(state, p))
+                view(player_room(state, p));
+        });
         for (auto const r : state.camera_rooms)
             view(r);
         for (size_t r = 0; r < state.rooms.size(); ++r) {

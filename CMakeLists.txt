@@ -78,6 +78,7 @@ add_executable(rwcpp
     src/relationships.cpp
     src/tracker.cpp
     src/migrate.cpp
+    src/npc.cpp
     src/centipede.cpp
     src/centipede_graphics.cpp
     src/dropbug.cpp

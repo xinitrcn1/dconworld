@@ -21,6 +21,15 @@ namespace selftest {
     // slugcats in every room (a batch of rooms at a time, the whole world
     // ticking), then every room exit pipe
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room);
+    // NPC slugcats in the world's shelters (`gs.npc_shelter_chance`), `ticks`
+    // ticks of the whole world: how they get on (shelters reached, regions
+    // crossed, stuck, dead) and what they cost a tick
+    int npc_soak(sys::game_state& gs, uint32_t ticks);
+    // One NPC slugcat from shelter `from` to shelter `to`, alone in the world
+    // (no creatures, the rain timers frozen): it passes when it rests in
+    // `to` within `ticks`, fails when it dies, finds no way or gets stuck.
+    // `name`: the slugcat (count: random); `seed` its rolls
+    int npc_trip(sys::game_state& gs, std::string const& from, std::string const& to, uint32_t ticks, player::slugcat_name name, uint32_t seed);
     // `ticks` ticks of the whole world, once on one thread and once on every
     // thread: ms per tick, and whether both end in the same world (`load`
     // makes a fresh one). `mode`: "none" (no creatures), "each" (a creature

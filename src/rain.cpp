@@ -468,6 +468,8 @@ namespace rain {
 
     void update_world(sys::game_state& state) {
         auto& w = state.world;
+        if (state.rain_frozen)
+            return;
         w.for_each_region([&](dcon::region_id r) {
             auto const leader = w.region_get_rain_leader(r);
             if (leader && leader != r)

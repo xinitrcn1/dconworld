@@ -22,11 +22,16 @@ namespace pathing {
     // LerpMap(terrainProximity, 1, 6, mid_air, 0) tenths added to a step
     // onto a tile 2 or more tiles from the terrain (vanilla adds up to 500
     // on top of 1; here up to 50 on top of 10, for the 16 bit costs)
+    // `slugcat` is the NPC slugcats' own walking (npc.hpp): standing on
+    // the ground, crawling corridors, climbing poles, swimming, dropping
+    // off ledges, jumping up to ledges and pouncing over gaps (`jump`s);
+    // the resistances are ignored
     struct movement {
         uint8_t resistance[access_count] = {};
         uint8_t swim = 0;
         uint8_t open_air = 0;
         uint8_t mid_air = 0;
+        uint8_t slugcat = 0;
         constexpr bool allows(access a) const noexcept { return resistance[uint32_t(a)] != 0; }
         constexpr bool operator==(movement const&) const = default;
     };
@@ -58,4 +63,25 @@ namespace pathing {
     // DaddyLongLegs (and the templates inheriting it): Air at 1, so every
     // open tile at 1; its tentacles find the grips to get there
     inline constexpr movement daddy{{10, 10, 10, 10, 10, 10, 0}, 0, 0};
+    // the NPC slugcat: floors, corridors, poles at 1.5, swimming at 2
+    inline constexpr movement slugcat{{10, 10, 15, 0, 0, 0, 0}, 20, 0, 0, 1};
+
+    // How the slugcat gets from a tile to the next: a step (walking,
+    // crawling, climbing, swimming), letting go above a drop (off a pole,
+    // over a ledge's edge), jumping up to a ledge or a pole at most 3
+    // tiles up, a running jump or a charge pounce over a gap, a jump from
+    // a pole to another one, from a pole's tip (onto the ground, or off a
+    // wall back to a pole over it), wall jumps up a narrow shaft, a pipe
+    // within the room
+    enum class step_kind : uint8_t { walk, drop, rise, leap, pounce, swing, tip, bounce, wall, pipe };
+    // A slugcat move other than a plain step or a straight drop, between
+    // two tiles of a room (row major indices), its cost in tenths and its
+    // side (-1 left, 1 right, 0 straight up)
+    struct jump {
+        uint32_t from = 0;
+        uint32_t to = 0;
+        uint16_t cost = 0;
+        step_kind kind = step_kind::walk;
+        int8_t dir = 0;
+    };
 }

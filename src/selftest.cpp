@@ -36,6 +36,7 @@
 #include "simulation.hpp"
 #include "dens.hpp"
 #include "migrate.hpp"
+#include "npc.hpp"
 #include "rain.hpp"
 #include "spawns.hpp"
 #include "world.hpp"
@@ -294,6 +295,10 @@ namespace selftest {
             rain::rain_in(gs, region, 150);
             std::vector<dcon::player_id> ps{player::create(gs, rooms[0], feet_at(10, 1)), player::create(gs, rooms[2], feet_at(5, 1), player::slugcat_name::red),
                 player::create(gs, rooms.back(), feet_at(10, 2))};
+            // and NPC slugcats among the creatures (nowhere to go: they run from them)
+            rw::rng npc_rng{0x0A11u};
+            npc::spawn_group(gs, rooms[0], world::room_view::middle_of_tile(20, 2), 3, npc_rng);
+            npc::spawn_group(gs, rooms[3], world::room_view::middle_of_tile(10, 4), 2, npc_rng);
             rw::rng rng{0xDE7E2u};
             std::vector<player::input_package> in(ps.size());
             for (uint32_t t = 0; t < 300; ++t) {
@@ -322,6 +327,45 @@ namespace selftest {
 
         auto const flat = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
         float const floor_y = 20.f; // top of the y=0 solid row
+        if (npc::debug().measure) {
+            // pole at x 15 (head at y 12), a wall `gap` tiles right of it; off the pole into the wall, off the wall
+            // left into a pole `d` tiles left of the wall: the highest tile of that pole it catches (over the start head tile)
+            for (int gap = 1; gap <= 3; ++gap) {
+                std::printf("wall %d right of the pole:", gap);
+                for (int d = 2; d <= 10; ++d) {
+                    int32_t const wx = 15 + gap, tx = wx - d;
+                    auto const room = make_room(gs, region, box(40, 40, [=](int32_t x, int32_t y) {
+                        if (x >= wx)
+                            return '#';
+                        if (x == 15 && y <= 12)
+                            return '|';
+                        return x == tx && y >= 4 && y <= 35 ? '|' : ' ';
+                    }));
+                    sim s(gs, room, feet_at(15, 1));
+                    s.run(20);
+                    s.until(30, [&] { return s.animation() == player::animation_index::climb_on_beam; }, 0, 1);
+                    s.until(300, [&] { return world::room_view::get_tile_position(s.pos(0)).y >= 12; }, 0, 1);
+                    int caught = -99, phase = 0, cool = 0;
+                    for (int t = 0; t < 120 && caught == -99; ++t) {
+                        if (phase == 0) {
+                            s.step(1, 0, t >= 6 && t < 16);
+                            if (t > 8 && (s.body_mode() == player::body_mode_index::wall_climb || s.contact(0).x == 1)) {
+                                phase = 1;
+                                cool = 0;
+                            }
+                        } else {
+                            s.step(-1, cool > 2 ? 1 : 0, cool < 10);
+                            ++cool;
+                            if (s.animation() == player::animation_index::climb_on_beam && world::room_view::get_tile_position(s.pos(0)).x == tx)
+                                caught = world::room_view::get_tile_position(s.pos(0)).y - 12;
+                        }
+                    }
+                    std::printf(" d%d:%s", d, caught == -99 ? "--" : std::to_string(caught).c_str());
+                }
+                std::printf("\n");
+            }
+            return 0;
+        }
 
         {
             sim s(gs, flat, feet_at(10, 4));
@@ -2294,6 +2338,256 @@ namespace selftest {
                 int(data), int(kinds), made, in_den, nights);
             r.check("world file creature spawns", parsed && filters && data && kinds && spawned, d);
         }
+        // NPC slugcats (npc.hpp), in worlds of their own without the rain.
+        // A room exit pipe with its entrance at (px, py), going down a tile
+        // and out to `side` (the hole faces the other way)
+        auto const pipe_at = [](int32_t x, int32_t y, int32_t px, int32_t py, int32_t side) -> char {
+            if (x == px && y == py)
+                return 'S';
+            if (x == px && y == py - 1)
+                return '.';
+            if (x == px + side && y == py - 1)
+                return 'E';
+            if ((x == px + side && y == py) || (x == px && y == py + 1))
+                return '#';
+            return 0;
+        };
+        // a shelter with its exit on `side`
+        auto const shelter_room = [&](sys::game_state& st, dcon::region_id rgn, int32_t side) {
+            auto const room = make_room(st, rgn, box(16, 10, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, side > 0 ? 13 : 2, 2, side))
+                    return c;
+                return y <= 1 ? '#' : ' ';
+            }));
+            st.world.room_set_is_shelter(room, true);
+            return room;
+        };
+        // the exit of `room` whose pipe entrance is leftmost (or rightmost)
+        auto const side_exit = [](sys::game_state& st, dcon::room_id room, bool right) {
+            dcon::room_exit_id best;
+            int32_t best_x = 0;
+            for (auto const e : exits_of(st, room))
+                if (auto const t = dens::exit_entrance(st, room, uint8_t(st.world.room_exit_get_index(e))))
+                    if (!best || (right ? t->x > best_x : t->x < best_x)) {
+                        best = e;
+                        best_x = t->x;
+                    }
+            return best;
+        };
+        auto const link = [](sys::game_state& st, dcon::room_exit_id ea, dcon::room_id a, dcon::room_exit_id eb, dcon::room_id b) {
+            st.world.room_exit_set_target_from_exit_connection(ea, b);
+            st.world.room_exit_set_target_from_exit_connection(eb, a);
+        };
+        auto const npc_world = [](char const* name) {
+            auto st_ptr = sys::make_game_state();
+            auto& w = st_ptr->world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st_ptr->add_text(name));
+            w.region_set_never_rains(rgn, true);
+            st_ptr->spawn_dens = false;
+            return std::pair{std::move(st_ptr), rgn};
+        };
+        auto const trace_npc = [](sys::game_state& st, dcon::player_id p, uint32_t t) {
+            if (npc::debug().trace_room.empty() || t % uint32_t(std::max(1, npc::debug().trace_every)) != 0)
+                return;
+            auto const& w = st.world;
+            auto const room = rooms::room_of(st, p);
+            vec2 const a = w.body_chunk_get_pos(player::body_chunk(st, p, 0)), b = w.body_chunk_get_pos(player::body_chunk(st, p, 1));
+            std::printf("  t=%u %s room=%s mode=%s anim=%s c0=(%.0f,%.0f) c1=(%.0f,%.0f) launch=%d trip=%u/%u\n", t, npc::describe(st, p).c_str(),
+                room ? std::string{st.to_string_view(w.room_get_name(room))}.c_str() : "-", player::to_string(w.player_get_body_mode(p)),
+                player::to_string(w.player_get_animation(p)), a.x, a.y, b.x, b.y, w.player_get_super_launch_jump(p),
+                uint32_t(w.creature_get_trip(player::creature_of(st, p)).next), uint32_t(w.creature_get_trip(player::creature_of(st, p)).hops));
+        };
+        {
+            // shelter -> a room with a pit to pounce over and a ledge three
+            // tiles up -> shelter: it gets there on its own
+            auto [st_ptr, rgn] = npc_world("npc");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const from = shelter_room(st, rgn, 1);
+            auto const course = make_room(st, rgn, box(60, 20, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 3, 6, -1))
+                    return c;
+                if (char const c = pipe_at(x, y, 56, 9, 1))
+                    return c;
+                int32_t const ground = x < 20 ? 5 : x <= 25 ? 1 : x < 35 ? 5 : 8;
+                return y <= ground ? '#' : ' ';
+            }));
+            auto const to = shelter_room(st, rgn, -1);
+            auto const e1 = exits_of(st, from), e3 = exits_of(st, to);
+            bool const built = e1.size() == 1 && e3.size() == 1 && exits_of(st, course).size() == 2;
+            if (built) {
+                link(st, e1[0], from, side_exit(st, course, false), course);
+                link(st, side_exit(st, course, true), course, e3[0], to);
+            }
+            simulation::populate(st);
+            rw::rng rng{0x5106CA7u};
+            auto const p = npc::create(st, from, feet_at(5, 2), rng);
+            auto const shelters = npc::reachable_shelters(st, p);
+            bool const sees_it = shelters.size() == 1 && shelters[0] == to;
+            uint32_t const rises = npc::stats().rises, pounces = npc::stats().pounces;
+            bool crossed = false, arrived = false;
+            uint32_t t = 0;
+            for (; t < 4000 && !arrived; ++t) {
+                tick_world(st, 1);
+                trace_npc(st, p, t);
+                crossed = crossed || rooms::room_of(st, p) == course;
+                arrived = rooms::room_of(st, p) == to && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+            }
+            char d[320];
+            std::snprintf(d, sizeof(d), " built=%d sees_it=%d crossed=%d arrived=%d after %u ticks, rises %u pounces %u; %s", int(built), int(sees_it), int(crossed),
+                int(arrived), t, npc::stats().rises - rises, npc::stats().pounces - pounces, npc::describe(st, p).c_str());
+            r.check("NPC pounces and climbs to a shelter", built && sees_it && crossed && arrived && npc::stats().pounces > pounces && !player::dead(st, p), d);
+        }
+        // the pounce and ledge course between two shelters (the course's
+        // exits on its sides)
+        auto const course_world = [&](char const* name) {
+            auto [st_ptr, rgn] = npc_world(name);
+            auto& st = *st_ptr;
+            auto const from = shelter_room(st, rgn, 1);
+            auto const course = make_room(st, rgn, box(60, 20, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 3, 6, -1))
+                    return c;
+                if (char const c = pipe_at(x, y, 56, 9, 1))
+                    return c;
+                int32_t const ground = x < 20 ? 5 : x <= 25 ? 1 : x < 35 ? 5 : 8;
+                return y <= ground ? '#' : ' ';
+            }));
+            auto const to = shelter_room(st, rgn, -1);
+            link(st, exits_of(st, from)[0], from, side_exit(st, course, false), course);
+            link(st, side_exit(st, course, true), course, exits_of(st, to)[0], to);
+            simulation::populate(st);
+            return std::tuple{std::move(st_ptr), from, course, to};
+        };
+        {
+            // a pack of four: they share the leader's target, the leader
+            // waits for the others at the pipes, they all get there
+            auto [st_ptr, from, course, to] = course_world("npc_pack");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0xBAC4u};
+            auto const lead = npc::create(st, from, feet_at(4, 2), rng);
+            auto const ln = npc::of(st, lead);
+            w.slugcat_npc_set_leader(ln, ln);
+            std::vector<dcon::player_id> pack{lead};
+            for (int32_t i = 0; i < 3; ++i)
+                pack.push_back(npc::create(st, from, feet_at(6 + 2 * i, 2), rng, ln));
+            bool waited = false, all_there = false, same_target = true, held_up = false;
+            uint32_t t = 0;
+            for (; t < 5000 && !all_there; ++t) {
+                // the others knocked down in the course for a while: the
+                // leader waits for them at the far pipe
+                if (!held_up && std::all_of(pack.begin(), pack.end(), [&](dcon::player_id p) { return rooms::room_of(st, p) == course && !player::in_shortcut(st, p); })) {
+                    held_up = true;
+                    for (size_t i = 1; i < pack.size(); ++i)
+                        player::stun(st, pack[i], 200);
+                }
+                tick_world(st, 1);
+                waited = waited || w.slugcat_npc_get_nav(ln).wait > 0;
+                all_there = true;
+                same_target = true;
+                for (auto const p : pack) {
+                    all_there = all_there && rooms::room_of(st, p) == to && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+                    same_target = same_target && w.slugcat_npc_get_target(npc::of(st, p)) == w.slugcat_npc_get_target(ln);
+                }
+            }
+            uint32_t dead = 0;
+            std::string where;
+            for (auto const p : pack) {
+                dead += player::dead(st, p) ? 1 : 0;
+                where += " [" + npc::describe(st, p) + " in " + std::string{st.to_string_view(w.room_get_name(rooms::room_of(st, p)))} + "]";
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " same_target=%d waited=%d all_there=%d after %u ticks, dead=%u;", int(same_target), int(waited), int(all_there), t, dead);
+            r.check("NPC pack travels together", same_target && waited && all_there && dead == 0, d + (all_there ? std::string{} : where));
+        }
+        {
+            // a region gate between the shelters: it waits at the middle
+            // door, the gate cycles for it, it goes on into the next region
+            auto [st_ptr, r1] = npc_world("npc_ga");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const r2 = w.create_region();
+            w.region_set_name(r2, st.add_text("npc_gb"));
+            w.region_set_never_rains(r2, true);
+            auto const a = shelter_room(st, r1, 1);
+            auto const gate_room = make_room(st, r1, box(48, 25, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 3, 8, -1))
+                    return c;
+                if (char const c = pipe_at(x, y, 44, 8, 1))
+                    return c;
+                if (y < 8)
+                    return '#';
+                if ((x == 23 || x == 24) && y <= 16)
+                    return '#';
+                return ' ';
+            }));
+            auto const b = shelter_room(st, r2, -1);
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_last_closed(g, 0b010);
+            w.try_create_gate_location(g, gate_room);
+            link(st, exits_of(st, a)[0], a, side_exit(st, gate_room, false), gate_room);
+            link(st, side_exit(st, gate_room, true), gate_room, exits_of(st, b)[0], b);
+            simulation::populate(st);
+            rain::new_cycle(st, r1);
+            rain::new_cycle(st, r2);
+            rw::rng rng{0x6A7Eu};
+            auto const p = npc::create(st, a, feet_at(5, 2), rng);
+            auto const shelters = npc::reachable_shelters(st, p);
+            uint32_t const crossed_before = npc::stats().regions_crossed;
+            bool in_gate = false, cycled = false, arrived = false;
+            uint32_t t = 0;
+            for (; t < 6000 && !arrived; ++t) {
+                tick_world(st, 1);
+                trace_npc(st, p, t);
+                in_gate = in_gate || rooms::room_of(st, p) == gate_room;
+                cycled = cycled || w.gate_get_mode(g) == world::gate_mode::middle_open;
+                arrived = rooms::room_of(st, p) == b && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " sees_it=%d in_gate=%d cycled=%d arrived=%d after %u ticks, regions crossed %u; %s", int(shelters.size() == 1 && shelters[0] == b),
+                int(in_gate), int(cycled), int(arrived), t, npc::stats().regions_crossed - crossed_before, npc::describe(st, p).c_str());
+            r.check("NPC through a region gate", shelters.size() == 1 && in_gate && cycled && arrived && npc::stats().regions_crossed > crossed_before, d);
+        }
+        {
+            // a lizard in the way: it runs back into the pipe it came out of
+            auto [st_ptr, rgn] = npc_world("npc_flee");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const a = shelter_room(st, rgn, 1);
+            auto const room = make_room(st, rgn, box(60, 20, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 3, 2, -1))
+                    return c;
+                if (char const c = pipe_at(x, y, 56, 2, 1))
+                    return c;
+                return y <= 1 ? '#' : ' ';
+            }));
+            auto const b = shelter_room(st, rgn, -1);
+            link(st, exits_of(st, a)[0], a, side_exit(st, room, false), room);
+            link(st, side_exit(st, room, true), room, exits_of(st, b)[0], b);
+            simulation::populate(st);
+            rw::rng rng{0xF1EEu};
+            auto const p = npc::create(st, a, feet_at(5, 2), rng);
+            auto const liz = spawn(st, room, 40, 2, creature::type::lizard, uint8_t(lizard::breed::pink));
+            uint32_t const flights = npc::stats().flights;
+            bool was_out = false, fled = false, back = false;
+            uint32_t t = 0;
+            for (; t < 3000 && !back; ++t) {
+                tick_world(st, 1);
+                trace_npc(st, p, t);
+                was_out = was_out || rooms::room_of(st, p) == room;
+                fled = fled || (rooms::room_of(st, p) == room && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::flee);
+                back = fled && rooms::room_of(st, p) == a && !player::in_shortcut(st, p);
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " out=%d fled=%d back_in_shelter=%d after %u ticks alive=%d flights %u; %s", int(was_out), int(fled), int(back), t,
+                int(!player::dead(st, p)), npc::stats().flights - flights, creature::describe(st, liz).c_str());
+            r.check("NPC runs from a lizard", was_out && fled && back && !player::dead(st, p), d);
+        }
         {
             // every room updates in parallel: the same world comes out on one
             // thread and on every thread
@@ -2420,6 +2714,240 @@ namespace selftest {
         bool left_room(world::room_view const& room, vec2 hp) {
             return hp.y < -20.f || hp.x < -20.f || hp.x > room.pixel_width() + 20.f;
         }
+    }
+
+    int npc_trip(sys::game_state& gs, std::string const& from_name, std::string const& to_name, uint32_t ticks, player::slugcat_name name, uint32_t seed) {
+        auto& w = gs.world;
+        if (!npc::debug().experiment.empty()) {
+            // --npc-exp room,pole_x,climb_to_y,mode,dir[,turn] (npc.hpp's debug_options)
+            char const* exp = npc::debug().experiment.c_str();
+            char rn[64];
+            int px, cy, mode, dir, turn = 8;
+            std::sscanf(exp, "%63[^,],%d,%d,%d,%d,%d", rn, &px, &cy, &mode, &dir, &turn);
+            gs.spawn_dens = false;
+            gs.rain_frozen = true;
+            simulation::populate(gs);
+            auto const room = gs.find_room(rn);
+            auto p = player::create(gs, room, world::room_view::middle_of_tile(px, cy - 1) + vec2{0.f, -8.f}, name == player::slugcat_name::count ? player::slugcat_name::white : name);
+            auto step = [&](int x, int y, bool j) {
+                auto const in = player::make_input(float(x), float(y), j, false, false);
+                simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+            };
+            auto const anim = [&] { return w.player_get_animation(p); };
+            auto const head = [&] { return world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(gs, p, 0))); };
+            for (int t = 0; t < 30 && anim() != player::animation_index::climb_on_beam; ++t)
+                step(0, 1, false);
+            for (int t = 0; t < 300 && head().y < cy && anim() != player::animation_index::beam_tip; ++t)
+                step(0, 1, false);
+            if (mode == 1 || mode == 4)
+                for (int t = 0; t < 100 && anim() != player::animation_index::beam_tip; ++t)
+                    step(0, 1, false);
+            std::printf("before: head %d,%d anim %s\n", head().x, head().y, player::to_string(anim()));
+            int best_y = 0;
+            for (int t = 0; t < 160; ++t) {
+                static int phase = 0, cool = 0;
+                if (mode == 4 || mode == 5) {
+                    // (4 from the tip, 5 off the side) into the wall on `dir`'s side, off it the other way holding up
+                    if (phase == 0) {
+                        step(dir, 0, mode == 4 ? t < 20 : (t >= 6 && t < 16));
+                        if (t > 4 && (w.player_get_body_mode(p) == player::body_mode_index::wall_climb
+                            || w.body_chunk_get_contact_point(player::body_chunk(gs, p, 0)).x == dir))
+                            phase = 1;
+                    } else {
+                        if (cool < 3)
+                            step(dir, 0, false);
+                        else
+                            step(-dir, 1, cool < 13);
+                        ++cool;
+                    }
+                } else if (mode == 3) {
+                    // off the pole towards `dir`, back towards the wall behind, off it towards `dir` again
+                    auto const ch0 = player::body_chunk(gs, p, 0);
+                    if (phase == 0) {
+                        step(dir, 0, t >= 6 && t < 16);
+                        if (t >= 6 + turn)
+                            phase = 1;
+                    } else if (phase == 1) {
+                        step(-dir, 1, false);
+                        if (w.player_get_body_mode(p) == player::body_mode_index::wall_climb || w.body_chunk_get_contact_point(ch0).x == -dir
+                            || w.player_get_animation(p) == player::animation_index::ledge_grab)
+                            phase = 2;
+                    } else {
+                        if (cool < 2)
+                            step(-dir, 0, false);
+                        else
+                            step(dir, cool > 6 ? 1 : 0, cool < 12);
+                        ++cool;
+                    }
+                } else if (mode == 2) {
+                    // off the pole into the wall on `dir`'s side, off the wall the other way
+                    if (phase == 0) {
+                        step(dir, 0, t >= 6 && t < 16);
+                        if (t > 8 && (w.player_get_body_mode(p) == player::body_mode_index::wall_climb
+                            || w.body_chunk_get_contact_point(player::body_chunk(gs, p, 0)).x == dir))
+                            phase = 1;
+                    } else {
+                        bool const past = (w.body_chunk_get_pos(player::body_chunk(gs, p, 0)).x - (float(px) * 20.f + 10.f)) * float(-dir) > 12.f;
+                        // into the wall with jump let go, then jump off it
+                        if (cool < 3)
+                            step(dir, 0, false);
+                        else
+                            step(-dir, past ? 1 : 0, cool < 13);
+                        ++cool;
+                    }
+                } else if (mode == 0)
+                    step(dir, t < 8 ? 0 : 1, t >= 6 && t < 16);
+                else
+                    step(dir, t > 20 ? 1 : 0, t < 20);
+                best_y = std::max(best_y, world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(gs, p, 1))).y);
+                if (t % 10 == 0)
+                    std::printf("  t=%d head %d,%d feet %d,%d anim %s mode %s\n", t, head().x, head().y,
+                        world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(gs, p, 1))).x,
+                        world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(gs, p, 1))).y, player::to_string(anim()),
+                        player::to_string(w.player_get_body_mode(p)));
+            }
+            return 0;
+        }
+        gs.spawn_dens = false;
+        gs.npc_shelter_chance = 0.f;
+        gs.rain_frozen = true;
+        simulation::populate(gs);
+        auto const from = gs.find_room(from_name), to = gs.find_room(to_name);
+        if (!from || !to || !w.room_get_is_shelter(from) || !w.room_get_is_shelter(to)) {
+            std::printf("FAIL: %s and %s must both be shelters\n", from_name.c_str(), to_name.c_str());
+            return 1;
+        }
+        auto const view = world::get_room_view(gs, from);
+        rw::rng rng{seed | 1u};
+        auto const p = npc::create(gs, from, find_spawn(view, vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f}), rng, {}, name);
+        auto const n = npc::of(gs, p);
+        auto const c = player::creature_of(gs, p);
+        w.slugcat_npc_set_target(n, to);
+        w.slugcat_npc_get_nav(n).goal_timer = 0;
+        if (!npc::debug().route.empty())
+            std::printf("route:\n%s", npc::debug_route(gs, npc::debug().route).c_str());
+        auto const reachable = npc::reachable_shelters(gs, p);
+        bool const sees = std::find(reachable.begin(), reachable.end(), to) != reachable.end();
+        std::printf("%s from %s to %s: %zu shelters reachable, %s among them\n", npc::describe(gs, p).c_str(), from_name.c_str(), to_name.c_str(),
+            reachable.size(), sees ? "the target" : "NOT the target");
+        auto const room_name = [&](dcon::room_id r) { return r ? std::string{gs.to_string_view(w.room_get_name(r))} : std::string{"-"}; };
+        auto const fail = [&](uint32_t t, char const* why) {
+            auto const r = rooms::room_of(gs, p);
+            auto const at = world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(gs, p, 1)));
+            std::printf("FAIL at tick %u: %s in %s at tile %d,%d: %s\n", t, why, room_name(r).c_str(), at.x, at.y, npc::describe(gs, p).c_str());
+            if (r)
+                std::printf("%s", npc::debug_room(gs, r, at).c_str());
+            return 1;
+        };
+        if (!sees) {
+            std::printf("%s%s", npc::debug_routes(gs, p).c_str(), npc::debug_reach(gs, p).c_str());
+            return fail(0, "no way to the target");
+        }
+        uint32_t const no_way = npc::stats().no_way, stuck = npc::stats().stuck;
+        dcon::room_id last;
+        for (uint32_t t = 0; t < ticks; ++t) {
+            simulation::tick(gs, {}, {});
+            gs.sounds.clear();
+            gs.music.clear();
+            auto const r = rooms::room_of(gs, p);
+            if (r != last && !player::in_shortcut(gs, p)) {
+                auto const& trip = w.creature_get_trip(c);
+                std::printf("  tick %6u: %s (trip %u/%u)\n", t, room_name(r).c_str(), uint32_t(trip.next), uint32_t(trip.hops));
+                last = r;
+            }
+            if (auto const& tr = npc::debug().trace_room; !tr.empty() && r && (tr == "*" || room_name(r) == tr) && t % uint32_t(std::max(1, npc::debug().trace_every)) == 0) {
+                auto const& nav = w.slugcat_npc_get_nav(n);
+                vec2 const a = w.body_chunk_get_pos(player::body_chunk(gs, p, 0)), b = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
+                auto const& in = w.player_get_input(p)[0];
+                std::printf("    t=%u in(%d,%d,%d) cj %d wj %d flip %d mt %d %s step %d->%d,%d aim %d,%d goal %d,%d best %u stuck %d mode %s anim %s head %.0f,%.0f (%d,%d) feet (%d,%d)\n", t,
+                    in.x, in.y, int(in.jmp), w.player_get_can_jump(p), w.player_get_want_to_jump(p), w.player_get_flip_direction(p), nav.move_timer, npc::describe(gs, p).c_str(),
+                    int(nav.last_kind), nav.last_step.x, nav.last_step.y, nav.aim.x, nav.aim.y,
+                    nav.goal_tile.x, nav.goal_tile.y, uint32_t(nav.best), nav.stuck, player::to_string(w.player_get_body_mode(p)), player::to_string(w.player_get_animation(p)), a.x, a.y,
+                    world::room_view::get_tile_position(a).x, world::room_view::get_tile_position(a).y, world::room_view::get_tile_position(b).x, world::room_view::get_tile_position(b).y);
+            }
+            if (player::dead(gs, p) || w.player_get_eaten(p))
+                return fail(t, "died");
+            if (!player::in_shortcut(gs, p) && w.body_chunk_get_pos(player::body_chunk(gs, p, 1)).y < -40.f)
+                return fail(t, "fell out of the room (a death in the game)");
+            if (npc::stats().no_way != no_way)
+                return fail(t, "found no way on");
+            if (npc::stats().stuck != stuck)
+                return fail(t, "got stuck");
+            if (r == to && w.slugcat_npc_get_nav(n).what == npc::goal::rest) {
+                std::printf("PASS: in %s after %u ticks (%.1f s), %s\n", to_name.c_str(), t, float(t) / 40.f, npc::stats_line(gs).c_str());
+                return 0;
+            }
+        }
+        return fail(ticks, "out of time");
+    }
+
+    int npc_soak(sys::game_state& gs, uint32_t ticks) {
+        using clock = std::chrono::steady_clock;
+        auto const t0 = clock::now();
+        simulation::populate(gs);
+        auto const t1 = clock::now();
+        auto& w = gs.world;
+        std::printf("populated in %.1f s (slugcat routes included)\n%s\n", std::chrono::duration<double>(t1 - t0).count(), npc::stats_line(gs).c_str());
+        // the slugcats it made: how many shelters each could head for
+        uint32_t none = 0, total = 0;
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            ++total;
+            bool const stuck = npc::reachable_shelters(gs, w.slugcat_npc_get_player(n)).empty();
+            if (stuck && none < 3 && npc::debug().unreachable)
+                std::printf("%s", npc::debug_routes(gs, w.slugcat_npc_get_player(n)).c_str());
+            none += stuck ? 1 : 0;
+        });
+        std::printf("%u of %u NPC slugcats have no shelter they can get to\n", none, total);
+        auto const& dbg = npc::debug();
+        if (dbg.dead_ends)
+            std::printf("%s", npc::debug_dead_ends(gs).c_str());
+        if (auto const er = gs.find_room(dbg.edges_room); !dbg.edges_room.empty() && er) {
+            auto const view = world::get_room_view(gs, er);
+            for (int y = dbg.edges_lo.y; y <= dbg.edges_hi.y; ++y)
+                for (int x = dbg.edges_lo.x; x <= dbg.edges_hi.x; ++x)
+                    if (auto const j = pathing::debug_jumps(gs, view, rw::ivec2{x, y}); !j.empty())
+                        std::printf("from %d,%d:\n%s", x, y, j.c_str());
+        }
+        if (auto const room = gs.find_room(dbg.room); !dbg.room.empty() && room)
+            std::printf("%s", npc::debug_room(gs, room, rw::ivec2{-1, -1}).c_str());
+        double ms = 0.;
+        for (uint32_t t = 1; t <= ticks; ++t) {
+            auto const a = clock::now();
+            simulation::tick(gs, {}, {});
+            ms += std::chrono::duration<double, std::milli>(clock::now() - a).count();
+            gs.sounds.clear();
+            gs.music.clear();
+            if (t % 1000 == 0 || t == ticks)
+                std::printf("tick %u (%.2f ms/tick): %s\n", t, ms / double(t), npc::stats_line(gs).c_str());
+        }
+        // where the living ones are, by what they are doing
+        uint32_t by[4] = {}, dead = 0, killed[creature::tmpl_count + 1] = {};
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            auto const p = w.slugcat_npc_get_player(n);
+            if (player::dead(gs, p)) {
+                ++dead;
+                uint8_t const k = w.creature_get_killed_by(player::creature_of(gs, p));
+                ++killed[k == 0 || k == creature::killed_by_other ? creature::tmpl_count : k - 1u];
+                return;
+            }
+            ++by[size_t(w.slugcat_npc_get_nav(n).what)];
+        });
+        std::printf("alive: %u starting, %u travelling, %u fleeing, %u resting; %u dead:", by[0], by[1], by[2], by[3], dead);
+        for (uint32_t i = 0; i < creature::tmpl_count; ++i)
+            if (killed[i])
+                std::printf(" %s %u", creature::to_string(creature::tmpl(i)), killed[i]);
+        if (killed[creature::tmpl_count])
+            std::printf(" other (rain, falls...) %u", killed[creature::tmpl_count]);
+        std::printf("\n");
+        if (npc::debug().list)
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+                auto const p = w.slugcat_npc_get_player(n);
+                auto const room = rooms::room_of(gs, p);
+                auto const& nav = w.slugcat_npc_get_nav(n);
+                std::printf("  %s in %s at (%.0f,%.0f) stuck %d fails %u\n", npc::describe(gs, p).c_str(), room ? std::string{gs.to_string_view(w.room_get_name(room))}.c_str() : "-",
+                    w.body_chunk_get_pos(player::body_chunk(gs, p, 1)).x, w.body_chunk_get_pos(player::body_chunk(gs, p, 1)).y, nav.stuck, uint32_t(nav.fails));
+            });
+        return 0;
     }
 
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room) {

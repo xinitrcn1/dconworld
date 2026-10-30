@@ -12,8 +12,10 @@
 //   exits/dens 2957 (8039 with Watcher) -> 16384
 //   room nodes 3393           -> 16384 (+ ~460k connectivity entries
 //     pooled, a few million with Watcher)
-//   players: co-op up to 4    -> 255 (the fuzz and the bench drive
-//     a slugcat in hundreds of rooms at once; each is a creature too)
+//   players: co-op up to 4, and the NPC slugcats (npc.hpp: 1 to 8 in a
+//     share of the ~300 shelters with the Watcher, more by hand) -> 4096
+//     (the fuzz and the bench drive a slugcat in hundreds of rooms at
+//     once; each is a creature too)
 //   physical objects / body chunks: players + items + creatures ->
 //     65536 / 262144 (`--bench` puts one creature of each kind in every
 //     one of the 2074 Watcher rooms: ~40 chunks a room)
@@ -64,6 +66,7 @@ include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
 include{"item_types.hpp"}
 include{"rain_types.hpp"}
+include{"npc_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -594,7 +597,7 @@ relationship{
 object{
 	name{player}
 	storage_type{erasable}
-	size{255}
+	size{4096}
 	tag{save}
 	property{ name{stats} type{::player::slugcat_stats} }
 	property{ name{input} type{::player::input_history} }
@@ -752,6 +755,23 @@ object{
 	// the slugcat creature this Player.cs state drives (its payload points
 	// back here)
 	property{ name{creature} type{creature_id} }
+	// what drives it: its controller's input (none), or its NPC brain
+	property{ name{npc} type{slugcat_npc_id} }
+}
+
+// An NPC slugcat's brain (npc.hpp): a player without a controller, its
+// input made up every tick on its way to a target shelter
+object{
+	name{slugcat_npc}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{player} type{player_id} }
+	// the shelter it heads for
+	property{ name{target} type{room_id} }
+	// its pack's leader (itself for the leader, none alone)
+	property{ name{leader} type{slugcat_npc_id} }
+	property{ name{nav} type{::npc::nav_state} }
 }
 
 //

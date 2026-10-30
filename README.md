@@ -35,6 +35,9 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
                                  # one of each kind per room, the world files' den population
 ./build/rwcpp --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
 ./build/rwcpp --rain-in 600      # every region's rain comes in 15 seconds (--no-dens: no den creatures)
+./build/rwcpp --npc-trip hi_s05 uw_s04 --slugcat survivor   # one NPC slugcat from shelter to shelter, pass or fail
+./build/rwcpp --npc-human-complete hi_s05 uw_s04   # watch it; where it fails you take over, your way is logged
+./build/rwcpp --npc-soak 3000    # the world with its NPC slugcats (--npcs <share> of the shelters)
 ./build/rwcpp --audio-check      # load the sound effects, loops and ambient clips, decode whole songs, report
 ./build/rwcpp --audio-dump a.wav --room su_a22 --ticks 400   # mix what is heard into a WAV, headless
 ```
@@ -328,6 +331,24 @@ leeches, 46 baby centipedes...), 762 of kinds not ported (spiders,
 scavengers, snails, lantern mice...); the Watcher as the Watcher: 1577, and
 1615 skipped; 9 spawns name rooms or dens the loaded world lacks (the
 Watcher's `modify` ROOMS merges aren't read).
+
+### NPC slugcats
+
+Slugcats without a controller (`src/npc.*`, our own brain, not vanilla's
+SlugNPCAI): groups of 1 to 8 in a share of the shelters (`--npcs <share>`,
+default 0.25; `--no-npcs`; `U` drops three at the cursor, `Ctrl+U` removes
+them), any slugcat in random colours, some of them packs. Each heads for a
+shelter it can reach, in its region or through gates and warps, over a
+world route of what a slugcat can walk between a room's exits; in a room it
+follows a slugcat path field with walking, climbing, drops, jumps up to
+ledges, running jumps, charge pounces, pole jumps, tip jumps, wall jumps up
+narrow shafts and in-room pipes, every reach measured with Player.cs. It
+runs from what would hunt it (into a pipe if it can), rests in its shelter
+until the rain is over and picks another. `--npc-trip <from> <to>` tests
+one on a route, `--npc-soak` the whole world with them,
+`--npc-human-complete <from> <to>` hands it to the player where it fails
+and records the way. Everything about them, the measurements, the tracing
+options and what doesn't work yet: [docs/SlugAI.md](docs/SlugAI.md).
 
 ### Adding a creature kind
 

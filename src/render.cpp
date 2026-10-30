@@ -2592,7 +2592,7 @@ void main() {
             auto const& w = s.world;
             dcon::player_id p0;
             w.for_each_player([&](dcon::player_id p) {
-                if (!p0)
+                if (!p0 && !w.player_get_npc(p))
                     p0 = p;
             });
             if (!p0)

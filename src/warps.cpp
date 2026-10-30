@@ -38,10 +38,11 @@ namespace warps {
             return state.world.warp_placed_get_pos(placed_of(state, w));
         }
 
+        // (an NPC slugcat takes a warp like a creature: warps::carry)
         bool player_usable(sys::game_state const& state, dcon::player_id p, dcon::room_id room) {
             auto const& w = state.world;
             return w.physical_object_get_room_from_object_location(player::body(state, p)) == room && !player::in_shortcut(state, p)
-                && !player::dead(state, p) && !w.player_get_eaten(p);
+                && !player::dead(state, p) && !w.player_get_eaten(p) && !w.player_get_npc(p);
         }
         vec2 main_chunk(sys::game_state const& state, dcon::player_id p) {
             return state.world.body_chunk_get_pos(player::body_chunk(state, p, 0));
@@ -617,7 +618,7 @@ namespace warps {
         auto const& w = state.world;
         dcon::player_id first;
         w.for_each_player([&](dcon::player_id p) {
-            if (!first)
+            if (!first && !w.player_get_npc(p))
                 first = p;
         });
         return first && is_watcher(state, first) && w.player_get_is_camo(first) && state.ripple_level >= 5.f ? 1 : 0;

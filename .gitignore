@@ -16,6 +16,7 @@
 !assets/
 !assets/*.png
 !LICENSE
+!docs/
 !assets/*.txt
 !assets/shaders/
 !assets/shaders/*

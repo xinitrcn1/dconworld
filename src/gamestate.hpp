@@ -159,6 +159,9 @@ namespace sys {
         uint16_t access_version = 0;
         std::vector<rw::ivec2> ceiling_tiles;
         std::optional<uint16_t> ceiling_version;
+        // the slugcat's jumps (pathing::jump), sorted by the tile they land on
+        std::vector<pathing::jump> jumps;
+        std::optional<uint16_t> jumps_version;
         // rain.cpp's RoomRain.rainReach: the highest solid tile per column
         std::vector<int16_t> rain_reach;
         std::optional<water_surface> water;
@@ -185,6 +188,23 @@ namespace sys {
         // after the parallel phase, room by room in order, each room's in
         // the order they were queued (the "transactions")
         std::vector<std::function<void(game_state&)>> deferred;
+    };
+
+    // npc.hpp's routes: what a slugcat can walk between in a room. A room's
+    // goals are its room exits (by exitAndDenIndex, 0..47) and its warps
+    // (48 + the warp's number, up to 8); per exit, the goals a slugcat coming
+    // out of its pipe can get to, and the same from where each warp leading
+    // here puts it. Worked out once from the level files (never saved)
+    struct slugcat_room_routes {
+        static constexpr uint32_t max_exits = 48;
+        static constexpr uint32_t max_warps = 8;
+        uint64_t from_exit[max_exits] = {};
+        uint64_t from_arrival[max_warps] = {};
+        // the room's warp `k`: (its destination room's index + 1) << 3 | the
+        // arrival slot there, 0 for one leading nowhere
+        uint32_t warp_to[max_warps] = {};
+        // where each arrival slot puts a slugcat (a tile)
+        rw::ivec2 arrival[max_warps];
     };
 
     struct game_state {
@@ -242,8 +262,15 @@ namespace sys {
         // are populated (simulation::populate, spawns.hpp)
         bool spawn_dens = true;
         bool dens_populated = false;
-        // the rain cycles were set up (rain.hpp)
+        // the rain cycles were set up (rain.hpp); frozen: their timers stand
+        // still (tests)
         bool rain_ready = false;
+        bool rain_frozen = false;
+        // NPC slugcats (npc.hpp): the share of shelters that get a group
+        // when the world is populated (0 none), and the slugcats' routes
+        float npc_shelter_chance = 0.f;
+        bool npcs_populated = false;
+        std::vector<slugcat_room_routes> slugcat_routes;
         // AbstractCreature.ID.RandomSeed of the creature being made, for the
         // kinds that roll from it (-1: they roll their own)
         int32_t spawn_seed = -1;

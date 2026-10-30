@@ -14,7 +14,9 @@
 // Following a field is a lookup of the cheapest neighbour.
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "gamestate.hpp"
@@ -61,6 +63,24 @@ namespace pathing {
     uint16_t distance(sys::game_state const& state, field_id f, rw::ivec2 t) noexcept;
     // The neighbour of `from` to step to, none when there is no way on
     std::optional<rw::ivec2> next_step(sys::game_state const& state, field_id f, rw::ivec2 from) noexcept;
+
+    // The NPC slugcat's walking (movement::slugcat). A tile it can stand
+    // on (open, over solid ground, a slope or a platform)
+    bool standable(world::room_view const& room, rw::ivec2 t) noexcept;
+    // a tile its path may go through (standing, a pole, a corridor, water)
+    bool slugcat_walkable(sys::game_state& state, world::room_view const& room, rw::ivec2 t);
+    // the next move along a slugcat field from `from`: the tile it leads
+    // to, how, and its side (none at the goal or with no way on)
+    struct step {
+        rw::ivec2 tile;
+        step_kind kind = step_kind::walk;
+        int8_t dir = 0;
+    };
+    // (`skip`: moves (from, to) it shouldn't take)
+    std::optional<step> slugcat_step(sys::game_state& state, field_id f, rw::ivec2 from, std::function<bool(rw::ivec2, rw::ivec2)> const& skip = nullptr);
+    std::string debug_jumps(sys::game_state& state, world::room_view const& room, rw::ivec2 from);
+    // the tiles a slugcat at `from` can get to (row major, 1 reachable)
+    std::vector<uint8_t> slugcat_reach_from(sys::game_state& state, world::room_view const& room, rw::ivec2 from);
 
     // fields built since start (statistics, tests)
     uint32_t builds() noexcept;
