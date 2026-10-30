@@ -73,13 +73,19 @@ namespace npc {
         // the room it was in last tick (its index + 1, 0 none): arriving
         // somewhere moves its trip on
         uint16_t room = 0;
+        uint16_t room_before = 0;
         // no progress along the path: the best distance to the goal so far
         // and the ticks since it got better
         rw::ivec2 goal_tile{-1, -1};
         uint16_t best = 0xFFFF;
         int32_t stuck = 0;
-        // failed tries at the current trip (a new target after a few)
+        // failed tries at the current trip (a new target after a few), the
+        // target it gave up on last (its index + 1, 0 none)
         uint8_t fails = 0;
+        uint16_t given_up = 0;
+        // the trip was guessed from the rooms' connections (no walkable way
+        // known): where the path field doesn't reach, it tries anyway
+        uint8_t guessed = 0;
         // the creature it runs from, where it last saw it, and the ticks
         // since (it gives up after a while out of sight)
         dcon::creature_id threat;
@@ -89,6 +95,12 @@ namespace npc {
         rw::ivec2 flee_tile{-1, -1};
         // a pack leader waiting for the others at a pipe
         int32_t wait = 0;
+        // chased back through a pipe: how many times in a row from the same
+        // room (its index + 1), the ticks it hides before trying again (more
+        // each time: a creature camping by the pipe moves on in the end)
+        uint8_t chased = 0;
+        uint16_t chased_from = 0;
+        int32_t hide = 0;
         // it made for the nearest shelter with the rain close (once a cycle)
         uint8_t hurried = 0;
         // its target shelter's region's finished cycles when it got there

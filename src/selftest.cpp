@@ -2993,8 +2993,13 @@ namespace selftest {
         w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
             ++total;
             bool const stuck = npc::reachable_shelters(gs, w.slugcat_npc_get_player(n)).empty();
-            if (stuck && none < 3 && npc::debug().unreachable)
-                std::printf("%s", npc::debug_routes(gs, w.slugcat_npc_get_player(n)).c_str());
+            if (stuck && npc::debug().unreachable) {
+                auto const p = w.slugcat_npc_get_player(n);
+                if (none < 3)
+                    std::printf("%s", npc::debug_routes(gs, p).c_str());
+                std::printf("%s from %s %s", npc::describe(gs, p).c_str(), std::string{gs.to_string_view(w.room_get_name(rooms::room_of(gs, p)))}.c_str(),
+                    npc::debug_reach(gs, p).c_str());
+            }
             none += stuck ? 1 : 0;
         });
         std::printf("%u of %u NPC slugcats have no shelter they can get to\n", none, total);
@@ -3017,6 +3022,19 @@ namespace selftest {
             ms += std::chrono::duration<double, std::milli>(clock::now() - a).count();
             gs.sounds.clear();
             gs.music.clear();
+            // --npc-trace: every NPC in that room
+            if (!dbg.trace_room.empty() && t % uint32_t(std::max(1, dbg.trace_every)) == 0)
+                w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+                    auto const p = w.slugcat_npc_get_player(n);
+                    auto const room = rooms::room_of(gs, p);
+                    if (!room || (dbg.trace_room != "*" && gs.find_room(dbg.trace_room) != room) || player::dead(gs, p))
+                        return;
+                    auto const& nav = w.slugcat_npc_get_nav(n);
+                    vec2 const feet = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
+                    std::printf("  t=%u #%u %s in %s feet (%d,%d) mode %s stuck %d fails %u\n", t, uint32_t(n.index()), npc::describe(gs, p).c_str(),
+                        std::string{gs.to_string_view(w.room_get_name(room))}.c_str(), int32_t(feet.x / 20.f), int32_t(feet.y / 20.f),
+                        player::to_string(w.player_get_body_mode(p)), nav.stuck, uint32_t(nav.fails));
+                });
             if (t % 1000 == 0 || t == ticks)
                 std::printf("tick %u (%.2f ms/tick): %s\n", t, ms / double(t), npc::stats_line(gs).c_str());
         }

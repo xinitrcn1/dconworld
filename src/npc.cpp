@@ -195,7 +195,28 @@ namespace npc {
             std::vector<uint32_t> order;
         };
 
-        search& explore(sys::game_state const& state, dcon::room_id room, uint64_t start) {
+        // every exit and warp of the room that leads somewhere, whether a
+        // slugcat can walk between them or not
+        uint64_t all_exits(sys::game_state const& state, dcon::room_id r) {
+            auto const& w = state.world;
+            uint64_t mask = 0;
+            w.room_for_each_exit_location(r, [&](dcon::exit_location_id el) {
+                auto const e = w.exit_location_get_exit(el);
+                uint32_t const node = w.room_exit_get_index(e);
+                if (node < routes::max_exits && leads_to(state, e, r))
+                    mask |= uint64_t(1) << node;
+            });
+            auto const& rr = state.slugcat_routes[size_t(r.index())];
+            for (uint32_t k = 0; k < routes::max_warps; ++k)
+                if (rr.warp_to[k] != 0)
+                    mask |= uint64_t(1) << (warp_bit + k);
+            return mask;
+        }
+
+        // (`any`: over the rooms' connections alone, as if every exit of a
+        // room could be walked to from every other: a guess for when the
+        // walkable way finds no shelter)
+        search& explore(sys::game_state const& state, dcon::room_id room, uint64_t start, bool any = false) {
             static thread_local search s;
             auto const& w = state.world;
             size_t const n = size_t(w.room_size()) * slots;
@@ -242,7 +263,7 @@ namespace npc {
                 auto const r = room_at(st / slots);
                 uint32_t const slot = st % slots;
                 auto const& rr = all[size_t(r.index())];
-                uint64_t const mask = slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
+                uint64_t const mask = any ? all_exits(state, r) : slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
                 for (uint32_t b = 0; b < 64; ++b)
                     if (mask & (uint64_t(1) << b))
                         hop(r, b, st + 1u);
@@ -863,8 +884,26 @@ namespace npc {
                             return true;
                     return false;
                 });
-                if (!st)
-                    return input(0, 0);
+                // no walkable way it knows of on a guessed trip (a move the
+                // path graph lacks): make for it, jumping now and then
+                // (ledges, walls, poles to catch)
+                if (!st) {
+                    if (d != pathing::unreachable || !nav.guessed)
+                        return input(0, 0);
+                    ivec2 const to = goal - at;
+                    int32_t const y = to.y > 1 ? 1 : to.y < -1 && std::abs(to.x) < 3 ? -1 : 0;
+                    int32_t x = rw::math_sign(to.x);
+                    // (never towards a column with nothing under it down to the
+                    // room's bottom: off that edge it falls out of the room)
+                    bool floor_ahead = x == 0;
+                    for (int32_t k = 0; k <= at.y && !floor_ahead; ++k) {
+                        auto const t = room.get_tile(at + ivec2{x, -k});
+                        floor_ahead = t.solid() || t.t == world::terrain::floor || t.any_beam() || t.water != 0;
+                    }
+                    if (!floor_ahead)
+                        return input(0, y);
+                    return input(x, y, y >= 0 && nav.stuck % 40 < 8);
+                }
                 nav.last_step = st->tile;
                 nav.last_kind = uint8_t(st->kind);
                 ivec2 const dd = st->tile - at;
@@ -957,14 +996,29 @@ namespace npc {
                 auto const target = w().slugcat_npc_get_target(n);
                 if (!target || target == room.id)
                     return false;
-                auto const& s = explore(state, room.id, goals_from(state, room, at));
-                return set_trip(state, c, s, target);
+                nav.guessed = 0;
+                if (set_trip(state, c, explore(state, room.id, goals_from(state, room, at)), target))
+                    return true;
+                // (no walkable way: the rooms' connections, to try)
+                nav.guessed = 1;
+                return set_trip(state, c, explore(state, room.id, all_exits(state, room.id), true), target);
             }
 
             // a target shelter it can get to, the closest or any
+            // (none it knows a walkable way to: one the rooms' connections
+            // lead to, to try anyway rather than stay; the one it gave up on
+            // last only when there is no other)
             bool pick_target(bool closest) {
-                auto const& s = explore(state, room.id, goals_from(state, room, at));
-                auto const options = shelters_of(state, s, room.id);
+                auto const* sp = &explore(state, room.id, goals_from(state, room, at));
+                auto options = shelters_of(state, *sp, room.id);
+                nav.guessed = options.empty() ? 1 : 0;
+                if (options.empty()) {
+                    sp = &explore(state, room.id, all_exits(state, room.id), true);
+                    options = shelters_of(state, *sp, room.id);
+                }
+                auto const& s = *sp;
+                if (options.size() > 1 && nav.given_up != 0)
+                    std::erase_if(options, [&](dcon::room_id r) { return uint32_t(r.index()) + 1u == nav.given_up; });
                 if (options.empty())
                     return false;
                 auto const t = closest ? options.front() : options[size_t(rng.range(0, int32_t(options.size())))];
@@ -1083,6 +1137,12 @@ namespace npc {
 
             player::input_package travel() {
                 nav.what = goal::travel;
+                // chased back in here: hiding a while before going out again
+                if (nav.hide > 0) {
+                    --nav.hide;
+                    nav.stuck = 0;
+                    return input(0, 0);
+                }
                 auto const target = w().slugcat_npc_get_target(n);
                 if (target == room.id) {
                     nav.what = goal::rest;
@@ -1145,6 +1205,8 @@ namespace npc {
                     nav.fails = uint8_t(std::min(255, nav.fails + 1));
                     if (nav.fails >= 3 && leads()) {
                         nav.fails = 0;
+                        if (target)
+                            nav.given_up = uint16_t(target.id.index() + 1);
                         w().slugcat_npc_set_target(n, dcon::room_id{});
                     }
                     return input(0, 0);
@@ -1660,6 +1722,16 @@ namespace npc {
         auto const c = player::creature_of(state, p);
         if (!n || player::dead(state, p) || w.player_get_eaten(p))
             return player::input_package{};
+        // fell out of the room's bottom: dead (Creature.Update; the port
+        // doesn't kill a slugcat for it otherwise, and down there it would
+        // wait under the room for good)
+        if (room.default_water_level < 0 && !player::in_shortcut(state, p)) {
+            float const limit = w.player_get_body_mode(p) == player::body_mode_index::wall_climb ? -250.f : -500.f;
+            if (w.body_chunk_get_pos(player::body_chunk(state, p, 0)).y < limit) {
+                player::die(state, p);
+                return player::input_package{};
+            }
+        }
         auto& nav = w.slugcat_npc_get_nav(n);
         // a new room: its trip moves on (a warp did that already), what it
         // knew of the last room is gone
@@ -1674,6 +1746,7 @@ namespace npc {
                 if (w.room_get_region_from_region_membership(from) != w.room_get_region_from_region_membership(room.id))
                     ++stats().regions_crossed;
             }
+            nav.room_before = nav.room;
             nav.room = here;
             nav.threat = {};
             nav.flee_tile = ivec2{-1, -1};
@@ -1682,6 +1755,13 @@ namespace npc {
             nav.wait = 0;
             for (auto& e : nav.blocked)
                 e[0] = e[1] = ivec2{-1, -1};
+            if (nav.what == goal::flee && nav.room_before != 0) {
+                nav.chased = uint8_t(std::min(8, nav.chased + 1));
+                nav.chased_from = nav.room_before;
+                nav.hide = 400 * int32_t(nav.chased) + w.creature_get_random(c).range(0, 200);
+            } else if (here != nav.chased_from) {
+                nav.chased = 0;
+            }
             if (nav.what == goal::flee)
                 nav.what = goal::travel;
         }

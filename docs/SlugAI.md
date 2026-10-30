@@ -33,6 +33,24 @@ the tools for tracing them, and what is known not to work yet.
   region where it never rains, then picks another one. When the rain is
   less than 1600 ticks away it makes for the nearest shelter once a cycle
   ("hurried").
+- **No walkable way to any shelter** (the path graph lacks a move its
+  surroundings need): it doesn't stay. It picks a shelter over the rooms'
+  connections alone, as if every pipe of a room could be walked to from
+  every other (`explore(..., any)`), and tries (`nav_state::guessed`).
+  Where the path field doesn't reach it, it makes for the next pipe
+  straight (up to it, jumping now and then for ledges, walls and poles,
+  never towards a column with nothing under it to the room's bottom). No
+  progress: the usual replanning, and after three failed trips another
+  target; the one it gave up on last only when there is no other.
+- **Chased back.** Fleeing back through a pipe it hides where it came out
+  before trying again: 400 ticks more each time in a row it is chased back
+  from the same room (up to 8), plus up to 200. A creature camping by the
+  only way out (GW_S06 into GW_A04) moves on in the end; going out and
+  straight back every 150 ticks it looked like it never left.
+- **Falling out of a room** kills it (Creature.Update: the head under
+  −500 px, −250 in a wall climb, in a room without water). The port doesn't
+  kill a slugcat for it otherwise; an NPC down there waited under the room
+  for good.
 - **Sleeping spot** (`npc::shelter_spot`): ShelterDoor's `playerSpawnPos`.
   From the shelter's exit pipe entrance out (the first of left, up, right,
   down that isn't solid) until the next tile is solid, going up also left to
@@ -268,7 +286,7 @@ again; after three of those the target is dropped.
 | `--npc-trip <from> <to> [ticks]` | | one NPC (`--slugcat`, else random; `--npc-seed`) from shelter to shelter, no creatures, the rain timers frozen (`game_state::rain_frozen`). Prints each room it enters; fails when it dies, falls out of a room (the port doesn't kill for that, the game does), finds no way, gets stuck, or runs out of time |
 | `--npc-soak [ticks]` | `--npcs` | the world with its NPCs: ms per tick, shelters reached, regions crossed, moves used, deaths and who killed them |
 | `--npc-human-complete <from> <to>` | `--npc-human-log`, `--script` | watch the NPC; when it fails, drive it yourself from the pipe it came in by, logged, to the pipe it was heading for (below) |
-| `--npc-trace <room\|*>[,every]` | trip, human-complete, selftest | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
+| `--npc-trace <room\|*>[,every]` | trip, human-complete, selftest, soak (there: every NPC in the room, one line each) | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
 | `--npc-route <r1,r2,...>` | trip | `ok`/`NO` for each room of a route: can the way out be walked from the way in |
 | `--npc-maps` | route | for each `NO` room: its poles and a map, `f` reachable from the way in, `o` can reach the way out, `B` both. The gap between `f` and `o` is the missing move |
 | `--npc-room <room>` | soak | the room's poles, pipes (type, ends), map (`.` walkable) |
@@ -276,7 +294,7 @@ again; after three of those the target is dropped.
 | `--npc-box <x0,y0,x1,y1>` | room, goal | the walkable tiles there: stand/walk, pole/hbeam/pipe, distance |
 | `--npc-edges <room,x0,y0,x1,y1>` | soak | the jumps leaving those tiles: kind, landing, cost, side |
 | `--npc-dead-ends` | soak | the exits from which no other exit can be walked to |
-| `--npc-unreachable` | soak | the route data of the first NPCs with no shelter in reach |
+| `--npc-unreachable` | soak | for every NPC with no shelter in reach: its room and the rooms its search reaches (the first three: their route data) |
 | `--npc-list` | soak | every NPC at the end |
 | `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
@@ -362,8 +380,11 @@ shelter's surroundings need moves the graph doesn't have). In 6000 ticks:
 19 shelters reached, 73 region crossings counted, 126 trips, 659 rises, 435
 running jumps, 102 pounces, 23 flights, 52 stuck; 5 dead (four long legs,
 one fall). The world ticks at about 1.7 ms a tick on 6 threads with them
-(the "no way" counter counts NPC ticks without a plan, mostly those with no
-shelter in reach, not events).
+(the "no way" counter counts NPC ticks without a plan, not events). Before
+the guessed trips 40 of them stood in their shelters for good; now every
+one sets off (no way: 0), 34 shelters are reached in 6000 ticks instead of
+19, and more of them die out there (23: falls, long legs, lizards; the
+falls were waiting under the rooms uncounted before).
 
 ## Gates
 
