@@ -243,6 +243,8 @@ namespace spawns {
             return make(type::leech, uint8_t(leech::variant::jungle));
         if (t == "dropbug" || t == "dropwig")
             return make(type::dropbug, 0);
+        if (t == "tubeworm" || t == "grappleworm")
+            return make(type::tube_worm, 0);
         // a cicada's size: 1 the white CicadaA
         if (t == "cicadaa")
             return make(type::cicada, 0, 1.f);

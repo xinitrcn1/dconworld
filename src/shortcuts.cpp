@@ -8,6 +8,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "tube_worm.hpp"
 
 namespace shortcuts {
     using rw::ivec2;
@@ -42,6 +43,7 @@ namespace shortcuts {
                     w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             cicada::follow_player(state, p, room, false);
             centipede::follow_player(state, p, room, false);
+            tube_worm::follow_player(state, p, room, false);
         }
 
         // Creature/Player.SpitOutOfShortCut
@@ -61,6 +63,7 @@ namespace shortcuts {
             player_graphics::reset(state, p);
             cicada::follow_player(state, p, room.id, true);
             centipede::follow_player(state, p, room.id, true);
+            tube_worm::follow_player(state, p, room.id, true);
         }
 
         // the vessel heads back to where it came from

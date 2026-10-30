@@ -170,6 +170,13 @@ namespace sound {
         lizard_jaws_grab_npc,
         lizard_tongue_attatch_npc,
         red_lizard_spit_hit_npc,
+        // grapple worms (the loop with them, after the rest)
+        tube_worm_shoot_tongue,
+        tube_worm_tongue_hit_terrain,
+        tube_worm_tongue_hit_creature,
+        tube_worm_detach_tongue_terrain,
+        tube_worm_detatch_tongue_creature,
+        tube_worm_inch_along_tongue_loop,
         count
     };
     char const* to_string(sound_id id) noexcept;

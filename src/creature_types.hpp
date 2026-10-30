@@ -32,6 +32,7 @@
 #include "leech_types.hpp"
 #include "lizard_types.hpp"
 #include "math.hpp"
+#include "tube_worm_types.hpp"
 
 namespace creature {
     // CreatureTemplate.Type of the ported creatures. The order is the update
@@ -45,10 +46,11 @@ namespace creature {
         lizard,
         daddy,
         leech,
+        tube_worm,
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
-    inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech};
+    inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech, type::tube_worm};
 
     // Creature.DamageType, as far as the ports tell them apart
     enum class damage_type : uint8_t {
@@ -63,7 +65,7 @@ namespace creature {
     // CreatureTemplate.Type of everything ported, the slugcat included: the
     // relationship table's rows and columns (relationships.cpp). The lizard
     // breeds and the centipede, leech and long legs variants in their kinds'
-    // enum order
+    // enum order (the grapple worm, last ported, last)
     enum class tmpl : uint8_t {
         slugcat,
         pink_lizard, green_lizard, blue_lizard, yellow_lizard, white_lizard, red_lizard, black_lizard, salamander,
@@ -73,6 +75,7 @@ namespace creature {
         cicada_a, cicada_b,
         daddy_long_legs, brother_long_legs, terror_long_legs, hunter_daddy,
         drop_bug,
+        tube_worm,
         count
     };
     inline constexpr uint32_t tmpl_count = uint32_t(tmpl::count);
@@ -313,6 +316,29 @@ namespace creature {
         uint16_t data;
     };
 
+    struct tube_worm_payload {
+        // TubeWorm.lungs (it drowns under the water)
+        float lungs;
+        float goal_on_rope_pos;
+        float on_rope_pos;
+        float crawl_speed;
+        float walk_cycle;
+        float last_walk;
+        int32_t sleep_counter;
+        int32_t tried_move;
+        int32_t grappling_counter;
+        int32_t shoot_tries;
+        // the end it moves (step: its tongue reaches out, the other holds)
+        uint8_t step;
+        uint8_t sleeping;
+        // grabbed by a slugcat last tick (lastGrabbed); its jump button
+        // asked for the tongue (useBool)
+        uint8_t last_grabbed;
+        uint8_t use_bool;
+        // tube_worm_data
+        uint16_t data;
+    };
+
     // creature.payload: the struct of the creature's type
     union payload {
         slugcat_payload slugcat;
@@ -322,6 +348,7 @@ namespace creature {
         lizard_payload lizard;
         daddy_payload daddy;
         leech_payload leech;
+        tube_worm_payload tube_worm;
 
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
@@ -333,6 +360,7 @@ namespace creature {
     static_assert(sizeof(lizard_payload) <= 64);
     static_assert(sizeof(daddy_payload) <= 64);
     static_assert(sizeof(leech_payload) <= 64);
+    static_assert(sizeof(tube_worm_payload) <= 64);
     static_assert(sizeof(payload) <= 64);
     static_assert(std::is_trivially_copyable_v<payload>);
 

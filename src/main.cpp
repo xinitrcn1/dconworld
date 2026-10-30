@@ -15,6 +15,7 @@
 #include "audio.hpp"
 #include "centipede.hpp"
 #include "leech.hpp"
+#include "tube_worm.hpp"
 #include "cicada.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
@@ -116,6 +117,7 @@ namespace {
             "  --daddy <x,y[,variant]>  spawn a daddy long legs (default daddy): daddy\n"
             "                      brother mother (TerrorLongLegs) hunter (repeatable)\n"
             "  --leech <x,y[,variant]>  spawn a leech (default the red one): sea jungle (repeatable)\n"
+            "  --tubeworm <x,y>    spawn a grapple worm (repeatable)\n"
             "  --item <x,y,kind[,pearl]>  place an item (repeatable): rock spear explosive\n"
             "                      electric pearl (with a DataPearl type, e.g. cc)\n"
             "  --weaver            the Watcher starts decorated\n"
@@ -133,7 +135,8 @@ namespace {
             "          squidcada at the cursor (Shift+Q a dark one, Ctrl+Q removes them all),\n"
             "          Y a lizard at the cursor, the next breed each time (Shift+Y the same\n"
             "          breed again, Ctrl+Y removes them all), H a daddy long legs at the\n"
-            "          cursor (Shift+H the next variant, Ctrl+H removes them all), U a group of\n"
+            "          cursor (Shift+H the next variant, Ctrl+H removes them all), F a grapple\n"
+            "          worm at the cursor (Ctrl+F removes them all), U a group of\n"
             "          three NPC slugcats at the cursor (Ctrl+U removes every NPC slugcat),\n"
             "          PageUp/PageDown room, Home/End region, C camera mode, F1 HUD, F2 camera outlines,\n"
             "          G collision geometry overlay, B day/night,\n"
@@ -723,6 +726,10 @@ int main(int argc, char* argv[]) {
                     std::fprintf(stderr, "unknown leech %s, a leech instead\n", name);
                 spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::leech, -1.f, false, uint8_t(v)}});
             }
+        } else if (a == "--tubeworm") {
+            float x = 0.f, y = 0.f;
+            if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
+                spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::tube_worm}});
         } else if (a == "--dropbug") {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
@@ -1196,6 +1203,18 @@ int main(int argc, char* argv[]) {
                     for (int i = 0; i < 3; ++i)
                         leech::create(gs, a.room, at + vec2{float(i - 1) * 8.f, 0.f}, leech::variant(variant));
                     reports::add_log(std::string{"3 x "} + leech::to_string(leech::variant(variant)));
+                    break;
+                }
+                case SDLK_F: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        remove_all(creature::type::tube_worm);
+                        break;
+                    }
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    tube_worm::create(gs, a.room, at);
+                    reports::add_log("grapple worm");
                     break;
                 }
                 case SDLK_V: {

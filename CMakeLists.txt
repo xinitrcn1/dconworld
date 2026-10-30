@@ -95,6 +95,8 @@ add_executable(rwcpp
     src/daddy_graphics.cpp
     src/leech.cpp
     src/leech_graphics.cpp
+    src/tube_worm.cpp
+    src/tube_worm_graphics.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

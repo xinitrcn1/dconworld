@@ -5,6 +5,7 @@
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "creature.hpp"
+#include "tube_worm.hpp"
 #include "explosions.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
@@ -202,9 +203,9 @@ namespace items {
         grasp grasp_in_hand(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
             return grasp{creature::grasped_item(state.world, player::creature_of(state, p), hand), hand};
         }
-        // the hand holds something: an item or a baby centipede
+        // the hand holds something: an item, a baby centipede or a grapple worm
         bool hand_busy(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
-            return grasp_in_hand(state, p, hand) || centipede::held_in_hand(state, p, hand);
+            return grasp_in_hand(state, p, hand) || centipede::held_in_hand(state, p, hand) || tube_worm::held_in_hand(state, p, hand);
         }
 
         // Creature.ReleaseGrasp
@@ -1427,10 +1428,12 @@ namespace items {
                 dir = custom::deg_to_vec(80.f * flip);
             w.item_set_rotation(it, dir);
         }
-        // a carried cicada (HeavyCarry), a baby centipede in a hand
+        // a carried cicada (HeavyCarry), a baby centipede or a grapple worm in a hand
         cicada::carry_update(state, p);
-        for (uint32_t hand = 0; hand < 2; ++hand)
+        for (uint32_t hand = 0; hand < 2; ++hand) {
             centipede::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
+            tube_worm::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
+        }
     }
 
     void release_all(sys::game_state& state, dcon::player_id p) {
@@ -1439,6 +1442,7 @@ namespace items {
                 release_grasp(state, p, g);
         cicada::release_player(state, p);
         centipede::release_player(state, p);
+        tube_worm::release_player(state, p);
     }
 
 
@@ -1644,12 +1648,14 @@ namespace items {
         spearmaster_update(state, p, room);
         if (hunter(state, p))
             back_spear_logic(state, p);
-        float item_score = 0.f, cicada_score = 0.f, centipede_score = 0.f;
+        float item_score = 0.f, cicada_score = 0.f, centipede_score = 0.f, worm_score = 0.f;
         auto candidate = dont_grab < 1 ? pickup_candidate(state, p, room, 20.f, item_score) : dcon::item_id{};
-        // the creatures PickupCandidate looks at too: cicadas, baby centipedes
+        // the creatures PickupCandidate looks at too: cicadas, baby
+        // centipedes, grapple worms (both one handed)
+        bool const free_hand = !hand_busy(state, p, 0) || !hand_busy(state, p, 1);
         auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::creature_id{};
-        auto baby_candidate = dont_grab < 1 && (!hand_busy(state, p, 0) || !hand_busy(state, p, 1))
-            ? centipede::pickup_candidate(state, p, room, centipede_score) : dcon::creature_id{};
+        auto baby_candidate = dont_grab < 1 && free_hand ? centipede::pickup_candidate(state, p, room, centipede_score) : dcon::creature_id{};
+        auto worm_candidate = dont_grab < 1 && free_hand ? tube_worm::pickup_candidate(state, p, room, worm_score) : dcon::creature_id{};
         if (candidate && cicada_candidate) {
             if (cicada_score < item_score)
                 candidate = dcon::item_id{};
@@ -1661,6 +1667,14 @@ namespace items {
         if (baby_candidate) {
             candidate = dcon::item_id{};
             cicada_candidate = dcon::creature_id{};
+        }
+        if (worm_candidate && ((candidate && item_score <= worm_score) || (cicada_candidate && cicada_score <= worm_score)
+            || (baby_candidate && centipede_score <= worm_score)))
+            worm_candidate = dcon::creature_id{};
+        if (worm_candidate) {
+            candidate = dcon::item_id{};
+            cicada_candidate = dcon::creature_id{};
+            baby_candidate = dcon::creature_id{};
         }
         // a carried cicada takes both hands (grasps[0], HeavyCarry)
         auto const carried = cicada::held_by(state, p);
@@ -1762,6 +1776,12 @@ namespace items {
                     centipede::release(state, c);
                     return;
                 }
+                if (auto const c = tube_worm::held_in_hand(state, p, hand)) {
+                    want_pick = 0;
+                    state.play_sound(sound::sound_id::slugcat_lay_down_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, c, 0)));
+                    tube_worm::release(state, c);
+                    return;
+                }
             }
         } else if (cicada_candidate) {
             // TwoHands: whatever the hands hold is let go of first
@@ -1775,6 +1795,15 @@ namespace items {
                 if (!hand_busy(state, p, hand)) {
                     state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, baby_candidate, 0)));
                     centipede::grab(state, p, baby_candidate, hand);
+                    break;
+                }
+            want_pick = 0;
+        } else if (worm_candidate) {
+            // OneHand: into a free hand
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (!hand_busy(state, p, hand)) {
+                    state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, worm_candidate, 0)));
+                    tube_worm::grab(state, p, worm_candidate, hand);
                     break;
                 }
             want_pick = 0;

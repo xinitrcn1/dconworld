@@ -12,6 +12,7 @@
 #include "particles.hpp"
 #include "water.hpp"
 #include "shortcuts.hpp"
+#include "tube_worm.hpp"
 
 // Port notes
 // - Code is kept structurally close to Player.cs so it can be diffed against
@@ -674,8 +675,12 @@ namespace player {
         if (room.get_tile(x.pos(1) + vec2{0.f, -20.f}).t == terrain::air && (!x.solid(1, -1, -1) || !x.solid(1, 1, -1)))
             p.allow_roll() = 15;
 
-        // jump buffering, still looking at last tick's input like vanilla
-        bool const jump_pressed = x.in(0).jmp && !x.in(1).jmp;
+        // jump buffering, still looking at last tick's input like vanilla; a
+        // grapple worm in hand may take the jump (TubeWorm.JumpButton)
+        bool jump_pressed = x.in(0).jmp && !x.in(1).jmp;
+        if (jump_pressed)
+            if (auto const tw = tube_worm::held_by(state, id))
+                jump_pressed = tube_worm::jump_button(state, tw, id);
         if (p.want_to_jump() > 0) {
             --p.want_to_jump();
         } else if (jump_pressed) {
@@ -1246,6 +1251,16 @@ namespace player {
                         p.animation() = animation_index::surface_swim;
                     }
                 }
+            }
+
+            // hanging from a grapple worm's tongue (Player.tubeWorm)
+            {
+                auto const tw = tube_worm::held_by(x.state, p.id);
+                if (tw && tube_worm::swinging(x.state, tw) && p.body_mode() == body_mode_index::default_ && x.contact(1).y >= 0
+                && (p.animation() == animation_index::grappling_swing || p.animation() == animation_index::none))
+                    p.animation() = animation_index::grappling_swing;
+                else if (p.animation() == animation_index::grappling_swing)
+                    p.animation() = animation_index::none;
             }
 
             // grabbing a climbable vine (zero gravity vines aren't ported)
@@ -2597,8 +2612,16 @@ namespace player {
                 x.vel(0) += perp * 0.2f * float(std::fabs(perp.x) > std::fabs(perp.y) ? gd.x : gd.y);
                 break;
             }
+            case animation_index::grappling_swing:
+                // swinging from a grapple worm's tongue: pushing sideways
+                // pumps the swing
+                p.body_mode() = body_mode_index::default_;
+                p.standing() = false;
+                if (auto const tw = tube_worm::held_by(x.state, p.id))
+                    x.vel(0) -= custom::perpendicular_vector(custom::dir_vec(x.pos(0), tube_worm::attached_pos(x.state, tw))) * float(in.x) * 0.25f;
+                break;
             default:
-                // antlers, tube worms and zero gravity are not ported
+                // antlers and zero gravity are not ported
                 break;
             }
         }

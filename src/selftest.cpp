@@ -22,6 +22,7 @@
 #include "cicada.hpp"
 #include "dropbug.hpp"
 #include "leech.hpp"
+#include "tube_worm.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
@@ -777,6 +778,60 @@ namespace selftest {
             r.check("baby centipede eaten, or shocks", held && eaten && food == 2 && held2 && shocked && dropped && !s.dead(), s.describe() + d);
             if (creature::is(gs.world, c2, creature::type::centipede))
                 centipede::destroy(gs, c2);
+        }
+        {
+            // a grapple worm is picked up with one hand; jumping again in the
+            // air shoots its tongue up to the ceiling: the slugcat hangs from
+            // it and swings out over a pit, and the next jump lets go
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t x, int32_t y) { return x < 10 && y <= 8 ? '#' : ' '; }));
+            sim s(gs, pit, feet_at(5, 9));
+            auto const c = tube_worm::create(gs, pit, feet_at(6, 9));
+            s.run(10);
+            s.step(0, 0, false, false, true);
+            s.step();
+            bool const held = tube_worm::held_by(gs, s.p) == c;
+            // a jump off the ledge, then another one in the air, pushing up
+            s.run(4, 1, 0, true);
+            s.run(4, 1, 0, false);
+            bool const shot = s.until(40, [&] { return tube_worm::swinging(gs, c); }, 1, 1, true);
+            bool swung = false;
+            float lowest = 1e9f;
+            for (int t = 0; t < 120; ++t) {
+                s.step(1, 0, false);
+                swung = swung || s.animation() == player::animation_index::grappling_swing;
+                lowest = std::min(lowest, s.pos(0).y);
+            }
+            bool const hanging = tube_worm::swinging(gs, c);
+            s.step(0, 0, true);
+            s.run(4);
+            bool const let_go = !tube_worm::swinging(gs, c);
+            bool const landed = s.until(300, [&] { return s.contact(1).y < 0; });
+            char d[192];
+            std::snprintf(d, sizeof(d), " held=%d shot=%d swung=%d hanging=%d lowest=%.0f let_go=%d landed=%d tongues=%s", int(held), int(shot), int(swung),
+                int(hanging), lowest, int(let_go), int(landed), tube_worm::describe_tongues(gs, c).c_str());
+            r.check("grapple worm swing", held && shot && swung && hanging && lowest > 120.f && let_go && landed && !s.dead(), s.describe() + d);
+            tube_worm::destroy(gs, c);
+        }
+        {
+            // a grapple worm on its own sticks its tongues to the terrain and
+            // gets about on them
+            auto const pit = make_room(gs, region, box(40, 20, [](int32_t x, int32_t y) { return x < 10 && y <= 8 ? '#' : ' '; }));
+            sim s(gs, pit, feet_at(30, 1));
+            auto const c = tube_worm::create(gs, pit, feet_at(5, 9));
+            vec2 const start = gs.world.body_chunk_get_pos(tube_worm::chunk(gs, c, 0));
+            uint32_t stuck = 0;
+            float moved = 0.f;
+            for (int t = 0; t < 1200; ++t) {
+                s.step();
+                for (uint32_t i = 0; i < 2; ++i)
+                    stuck += tube_worm::tongue_of(gs, c, i).mode == tube_worm::tongue_mode::attached_to_terrain ? 1 : 0;
+                moved = std::max(moved, rw::distance(start, gs.world.body_chunk_get_pos(tube_worm::chunk(gs, c, 0))));
+            }
+            bool const ok = std::isfinite(gs.world.body_chunk_get_pos(tube_worm::chunk(gs, c, 0)).x);
+            char d[128];
+            std::snprintf(d, sizeof(d), " stuck=%u moved=%.0f alive=%d", stuck, moved, int(!gs.world.creature_get_dead(c)));
+            r.check("grapple worm gets about", ok && stuck > 100 && moved > 40.f && !gs.world.creature_get_dead(c), creature::describe(gs, c) + d);
+            tube_worm::destroy(gs, c);
         }
         {
             // an aquapede swims about under the water, lit by its Glower
@@ -2942,6 +2997,7 @@ namespace selftest {
         case creature::type::lizard: return lizard;
         case creature::type::daddy: return daddy;
         case creature::type::leech: return leeches[0];
+        case creature::type::tube_worm: return tube_worm;
         case creature::type::count: break;
         }
         return centipede;
@@ -2970,6 +3026,7 @@ namespace selftest {
             case creature::type::lizard: salt = 0x112A2Du; break;
             case creature::type::daddy: salt = 0xDADD1u; break;
             case creature::type::leech: salt = 0x1EEC4u; break;
+            case creature::type::tube_worm: salt = 0x7B3E4u; break;
             case creature::type::count: break;
             }
             rw::rng rng{(k0 ^ salt) | 1u};
@@ -3016,6 +3073,10 @@ namespace selftest {
                     ok = out.leech_variant == leech::variant::jungle ? pathing::accessible(room, tile, pathing::standard_ground) && !room.get_tile(tile).solid()
                                                                      : room.get_tile(tile).water == 1 && !room.get_tile(tile).solid();
                     d.variety = uint8_t(out.leech_variant);
+                    break;
+                case creature::type::tube_worm:
+                    // on the ground
+                    ok = pathing::accessible(room, tile, pathing::tube_worm) && !room.get_tile(tile).solid();
                     break;
                 case creature::type::count:
                     break;
@@ -3412,6 +3473,7 @@ namespace selftest {
         uint32_t eaten = 0;
         uint32_t lost = 0;
         uint32_t bugs_dropped = 0, bugs_lost = 0;
+        uint32_t worms_stuck = 0, worms_held = 0, worms_swung = 0, worms_lost = 0;
         uint32_t cicadas_sat = 0, cicadas_charged = 0, cicadas_lost = 0, cicadas_held = 0, cicadas_carried = 0;
         uint32_t lizards_hunted = 0, lizards_bit = 0, lizards_tongued = 0, lizards_jumped = 0, lizards_spat = 0, lizards_swam = 0, lizards_lost = 0;
         uint32_t daddies_gripped = 0, daddies_hunted = 0, daddies_held = 0, daddies_ate = 0, daddies_lost = 0;
@@ -3430,6 +3492,7 @@ namespace selftest {
             bool daddy_gripped = false, daddy_hunted = false, daddy_held = false, daddy_ate = false;
             bool wing_flew = false, baby_held = false, baby_eaten = false, aqua_swam = false;
             bool leech_latched = false;
+            bool worm_stuck = false, worm_held = false, worm_swung = false;
         };
         std::vector<dcon::room_id> all;
         w.for_each_room([&](dcon::room_id rid) { all.push_back(rid); });
@@ -3496,6 +3559,13 @@ namespace selftest {
                         finite = finite && finite_chunks(gs, dropbug::body(gs, c.dropbug));
                         x.bug_dropped = x.bug_dropped || w.creature_get_payload(c.dropbug).dropbug.from_ceiling_jump;
                     }
+                    if (c.tube_worm && creature::is(w, c.tube_worm, creature::type::tube_worm)) {
+                        finite = finite && finite_chunks(gs, tube_worm::body(gs, c.tube_worm));
+                        for (uint32_t i = 0; i < 2; ++i)
+                            x.worm_stuck = x.worm_stuck || tube_worm::tongue_of(gs, c.tube_worm, i).mode == tube_worm::tongue_mode::attached_to_terrain;
+                        x.worm_held = x.worm_held || tube_worm::held_by(gs, x.p) == c.tube_worm;
+                        x.worm_swung = x.worm_swung || w.player_get_animation(x.p) == player::animation_index::grappling_swing;
+                    }
                     if (c.cicada) {
                         finite = finite && finite_chunks(gs, cicada::body(gs, c.cicada));
                         x.cicada_sat = x.cicada_sat || !w.creature_get_payload(c.cicada).cicada.flying;
@@ -3546,6 +3616,14 @@ namespace selftest {
                         std::printf("  dropwig left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
                 }
                 bugs_dropped += x.bug_dropped ? 1 : 0;
+                if (c.tube_worm && creature::is(w, c.tube_worm, creature::type::tube_worm) && in_room(tube_worm::body(gs, c.tube_worm))) {
+                    vec2 const hp = w.body_chunk_get_pos(tube_worm::chunk(gs, c.tube_worm, 0));
+                    if (left_room(room, hp) && ++worms_lost <= 5)
+                        std::printf("  grapple worm left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
+                }
+                worms_stuck += x.worm_stuck ? 1 : 0;
+                worms_held += x.worm_held ? 1 : 0;
+                worms_swung += x.worm_swung ? 1 : 0;
                 if (c.cicada) {
                     vec2 const hp = w.body_chunk_get_pos(cicada::chunk(gs, c.cicada, 0));
                     if (!in_room(cicada::body(gs, c.cicada)) && dens::where_is(gs, c.cicada) == dens::where::room)
@@ -3640,6 +3718,8 @@ namespace selftest {
         std::printf("leeches: %u in %u schools (every variant in turn, in the rooms with water), %u latched on to the slugcat (%u of those slugcats died), %u died, %u fell out of their room\n",
             leeches, schools, leeches_latched, leeches_drowned_slugcat, leeches_dead, leeches_lost);
         std::printf("dropwigs: one per room, %u placed in the ceiling, %u dropped from it, %u fell out of their room\n", bugs_in_ceiling, bugs_dropped, bugs_lost);
+        std::printf("grapple worms: one per room, %u stuck a tongue to the terrain, %u picked up (%u swung from), %u fell out of their room\n",
+            worms_stuck, worms_held, worms_swung, worms_lost);
         std::printf("squidcadas: one per room, %u sat down, %u bump attacked, %u picked up (%u carried through a pipe), %u fell out of their room\n",
             cicadas_sat, cicadas_charged, cicadas_held, cicadas_carried, cicadas_lost);
         std::printf("lizards: %u (one per room, every breed in turn), %u hunted, %u bit the slugcat, %u shot a tongue, %u jumped, %u spat, %u swam, %u fell out of their room\n",

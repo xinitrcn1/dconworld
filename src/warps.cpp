@@ -11,6 +11,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "tube_worm.hpp"
 #include "dens.hpp"
 
 namespace warps {
@@ -322,6 +323,7 @@ namespace warps {
                         w.physical_object_set_room_from_object_location(items::body(state, it), dest.room);
                 });
                 centipede::follow_player(state, p, dest.room, false);
+                tube_worm::follow_player(state, p, dest.room, true);
                 items::carry_update(state, p);
                 player_graphics::reset(state, p);
             });

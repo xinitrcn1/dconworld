@@ -5,7 +5,7 @@
 // A creature is one `creature` object (creature_types.hpp, the definitions'
 // comments in dcon_generated.txt) whose `type` says which kind's code runs
 // it: player.* (the slugcat), centipede.*, dropbug.*, cicada.*, lizard.*,
-// daddy.*, leech.*. Whatever doesn't depend on the kind is here and runs the
+// daddy.*, leech.*, tube_worm.*. Whatever doesn't depend on the kind is here and runs the
 // same for all of them: the body and its chunks, Creature.Update's stun
 // countdown, being conscious, grasps, the other creatures it refers to (by
 // id: a tracked prey, a grasp, a bite), the projectile trace and Violence's
@@ -61,6 +61,9 @@ namespace creature {
     }
     inline dcon::leech_data_id leech_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::leech_data_id{dcon::leech_data_id::value_base_t(w.creature_get_payload(c).leech.data)};
+    }
+    inline dcon::tube_worm_data_id tube_worm_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::tube_worm_data_id{dcon::tube_worm_data_id::value_base_t(w.creature_get_payload(c).tube_worm.data)};
     }
 
     // every creature of kind `t`, in id order (setup, tests, the serial phases)

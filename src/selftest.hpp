@@ -50,6 +50,7 @@ namespace selftest {
         static constexpr uint32_t school = 3;
         dcon::creature_id leeches[school];
         leech::variant leech_variant{};
+        dcon::creature_id tube_worm;
         // (a leech: the school's first)
         dcon::creature_id& of(creature::type t) noexcept;
     };

@@ -10,6 +10,7 @@
 #include "creature.hpp"
 #include "player.hpp"
 #include "rot.hpp"
+#include "tube_worm.hpp"
 
 namespace player_graphics {
     using rw::ivec2;
@@ -335,8 +336,9 @@ namespace player_graphics {
                 h.quickness = 1.f;
                 flag = false;
             }
-            if (flag && items::held(state, p, uint32_t(limb))) {
-                // holding something: out to the side, spears swinging along while walking
+            if (flag && (items::held(state, p, uint32_t(limb)) || tube_worm::held_in_hand(state, p, uint32_t(limb)))) {
+                // holding something (a grapple worm too): out to the side,
+                // spears swinging along while walking
                 h.mode = limb_mode::hunt_relative_position;
                 h.relative_hunt_pos = vec2{-20.f + 40.f * float(limb), -12.f};
                 auto const& in = w.player_get_input(p)[0];

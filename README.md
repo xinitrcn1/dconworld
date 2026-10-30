@@ -57,7 +57,8 @@ ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada a
 the cursor (Shift+Q a dark one, Ctrl+Q removes them all), Y spawns a lizard at the
 cursor, the next breed each time (Shift+Y the same breed again, Ctrl+Y removes them
 all), H spawns a daddy long legs at the cursor (Shift+H the next variant: daddy,
-brother, mother, hunter; Ctrl+H removes them all), R respawn, left click teleports
+brother, mother, hunter; Ctrl+H removes them all), F spawns a grapple worm at the
+cursor (Ctrl+F removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera
 outlines, G collision geometry overlay, B day/night, F5 adds a co-op player (driven by the gamepad), P pause, N single
@@ -557,6 +558,28 @@ drains its food, then its strength. Rocks stun and spears kill them
 when it flees the rain (`fleeFromRain`; its trips to other rooms are
 migrate.hpp's), Remix's grasp wiggling (shaking one off), Safari
 control. Leeches and centipedes are the rot's prey.
+
+The grapple worms (`--tubeworm x,y`, F; `TubeWorm` in the world files)
+follow `TubeWorm`, `TubeWormAI` and `TubeWormGraphics`: two chunks with a
+tongue at each end. A tongue shoots out (`CheapAutoAim`: a nearby direction
+that hits the terrain), sticks to the terrain, a pole on its way back or a
+creature, and pulls its end along a `Rope` that wraps the tile corners
+(rot.hpp's). The worm inches along the rope between its two tongues, flops
+from grip to grip along its StandardPather path (floors and corridors at 1)
+to random spots of its room, grapples up to places it can't walk to
+(`FindInaccessibleGrapplingPos`, the pathing costs standing in for the
+pathing cells), sleeps hanging between two tongues, holds on to a creature
+its tongue caught, drowns under water and isn't afraid of the rain. A
+slugcat picks one up with one hand (one at a time; it is pacified and can't
+be hit by weapons while held): the front tongue then shoots from the
+slugcat, and a jump in the air (or with the tongue out) is the worm's
+(`JumpButton`): the tongue shoots where `ProperAutoAim` finds the terrain at
+the rope's length (straight up holding up), or lets go. Holding on, the
+slugcat hangs from it in `GrapplingSwing`, pushing sideways to pump the
+swing. The rope is pink, the tips Circle20 slivers; the body is the worm's
+colour over the palette's black (the TubeWorm shader's scrolling rings
+aren't ported). Lizards eat them. Not ported: Remix's old tongue option and
+zap coils, no spear stick zones, Safari control.
 
 The dropwig (`--dropbug x,y`, V) follows `DropBug`/`DropBugAI`: three
 chunks that cling to floors, walls and ceilings (its StaticWorld tile

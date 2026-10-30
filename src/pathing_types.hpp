@@ -63,6 +63,8 @@ namespace pathing {
     // DaddyLongLegs (and the templates inheriting it): Air at 1, so every
     // open tile at 1; its tentacles find the grips to get there
     inline constexpr movement daddy{{10, 10, 10, 10, 10, 10, 0}, 0, 0};
+    // TubeWorm: floors and corridors at 1 (it grapples to the rest)
+    inline constexpr movement tube_worm{{10, 10, 0, 0, 0, 0, 0}, 0};
     // the NPC slugcat: floors, corridors, poles at 1.5, swimming at 2
     inline constexpr movement slugcat{{10, 10, 15, 0, 0, 0, 0}, 20, 0, 0, 1};
 

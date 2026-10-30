@@ -158,6 +158,12 @@ namespace sound {
             "Lizard_Jaws_Grab_NPC",
             "Lizard_Tongue_Attatch_NPC",
             "Red_Lizard_Spit_Hit_NPC",
+            "Tube_Worm_Shoot_Tongue",
+            "Tube_Worm_Tongue_Hit_Terrain",
+            "Tube_Worm_Tongue_Hit_Creature",
+            "Tube_Worm_Detach_Tongue_Terrain",
+            "Tube_Worm_Detatch_Tongue_Creature",
+            "Tube_Worm_Inch_Along_Tongue_LOOP",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

@@ -35,6 +35,7 @@
 //     creature parts -> 131072; their segments, grab paths, tentacle
 //     chunks and graphic segments pooled
 //   leeches: 1 chunk
+//   grapple worms: 2 chunks, 1 connection each
 //   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
@@ -61,6 +62,7 @@ include{"centipede_types.hpp"}
 include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
 include{"leech_types.hpp"}
+include{"tube_worm_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
@@ -943,16 +945,17 @@ relationship{
 // whose index the payload keeps. The body is a physical_object
 // (creature_body) with the kind's chunks.
 //
-// Shared because at least half of the seven kinds (slugcat, centipede,
-// dropwig, squidcada, lizard, daddy long legs, leech) have it:
-//   random, stun, dead, rain_death, grasps: all seven (Creature; a
-//     daddy's grasps stay empty, its tentacles hold)
+// Shared because at least half of the eight kinds (slugcat, centipede,
+// dropwig, squidcada, lizard, daddy long legs, leech, grapple worm) have it:
+//   random, stun, dead, rain_death, grasps: all eight (Creature; a
+//     daddy's and a grapple worm's grasps stay empty, the tentacles and
+//     tongues hold)
 //   health: all but the slugcat (HealthState; Player dies outright)
-//   the pipes (entering_shortcut, the vessel, away): all seven
+//   the pipes (entering_shortcut, the vessel, away): all eight
 //   home den, remain_in_den, going home, spawn flags, trips to other
 //     rooms: every creature but the slugcat (AbstractCreature)
 //   behavior, destination, tracker: every AI (not the slugcat, not the
-//     leech)
+//     leech; the grapple worm's AI has a destination only)
 //   current_utility: centipede, dropwig, squidcada, lizard (UtilityComparer)
 //   graphics_random: every kind's graphics module's UnityEngine.Random
 // No longer shared with the slugcat counted: forbiddenIdlePos (3 of 7,
@@ -1197,6 +1200,28 @@ object{
 	property{ name{avoid_shortcut} type{rw::ivec2} }
 	// LeechGraphics: the body parts, their radii, the wiggle
 	property{ name{graphics} type{::leech::graphics_state} }
+}
+
+// Grapple worms (TubeWorm.cs + TubeWormAI + TubeWormGraphics): two chunks,
+// a tongue at each end
+object{
+	name{tube_worm_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed (the graphics' colour)
+	property{ name{seed} type{int32_t} }
+	property{ name{tongues} type{::tube_worm::tongue_pair} }
+	// grappleToPos, nextGrapplePos; lastAccessibleCell, as its tile
+	property{ name{grapple_to_pos} type{std::optional<rw::ivec2>} }
+	property{ name{next_grapple_pos} type{std::optional<rw::ivec2>} }
+	property{ name{last_accessible} type{std::optional<rw::ivec2>} }
+	// playerCheatAttachPos: where ProperAutoAim saw the tongue land
+	property{ name{player_cheat_attach_pos} type{std::optional<rw::vec2>} }
+	// TubeWormAI.destCounter
+	property{ name{dest_counter} type{int32_t} }
+	// TubeWormGraphics: the body parts, the rope segments, the colour
+	property{ name{graphics} type{::tube_worm::graphics_state} }
 }
 
 //

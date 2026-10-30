@@ -15,6 +15,8 @@
 #include "leech_graphics.hpp"
 #include "lizard.hpp"
 #include "lizard_graphics.hpp"
+#include "tube_worm.hpp"
+#include "tube_worm_graphics.hpp"
 #include "migrate.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -36,6 +38,7 @@ namespace creature {
         case type::lizard: return "lizard";
         case type::daddy: return "daddy long legs";
         case type::leech: return "leech";
+        case type::tube_worm: return "grapple worm";
         case type::count: break;
         }
         return "creature";
@@ -96,6 +99,10 @@ namespace creature {
             pl.leech = leech_payload{};
             pl.leech.data = uint16_t(w.create_leech_data().index());
             break;
+        case type::tube_worm:
+            pl.tube_worm = tube_worm_payload{};
+            pl.tube_worm.data = uint16_t(w.create_tube_worm_data().index());
+            break;
         case type::count:
             break;
         }
@@ -112,6 +119,7 @@ namespace creature {
         case type::lizard: w.delete_lizard_data(lizard_data(w, c)); break;
         case type::daddy: w.delete_daddy_data(daddy_data(w, c)); break;
         case type::leech: w.delete_leech_data(leech_data(w, c)); break;
+        case type::tube_worm: w.delete_tube_worm_data(tube_worm_data(w, c)); break;
         case type::count: break;
         }
         // its parts and their data objects
@@ -321,6 +329,7 @@ namespace creature {
         case type::lizard: return lizard::create(state, room, pos, lizard::breed(d.variety % lizard::breed_count));
         case type::daddy: return daddy::create(state, room, pos, daddy::variant(d.variety % daddy::variant_count));
         case type::leech: return leech::create(state, room, pos, leech::variant(d.variety % leech::variant_count));
+        case type::tube_worm: return tube_worm::create(state, room, pos);
         case type::count: break;
         }
         return dcon::creature_id{};
@@ -335,6 +344,7 @@ namespace creature {
         case type::lizard: lizard::destroy(state, c); return;
         case type::daddy: daddy::destroy(state, c); return;
         case type::leech: leech::destroy(state, c); return;
+        case type::tube_worm: tube_worm::destroy(state, c); return;
         case type::count: return;
         }
     }
@@ -387,6 +397,9 @@ namespace creature {
             return std::string{leech::to_string(pl.leech.variant)} + " at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + " school of "
                 + std::to_string(leech::school_size(state, c)) + (leech::attached_to(state, c) ? " latched on" : "")
                 + (pl.leech.hunt_prey ? " hunting" : "") + dead;
+        case type::tube_worm:
+            return "grapple worm at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + " tongues " + tube_worm::describe_tongues(state, c)
+                + (pl.tube_worm.sleeping ? " sleeping" : "") + (held(state, c) ? " held" : "") + dead;
         case type::count:
             break;
         }
@@ -462,6 +475,11 @@ namespace creature {
                 if (viewed)
                     leech_graphics::update(state, c, room);
                 return;
+            case type::tube_worm:
+                tube_worm::update(state, c, room);
+                if (viewed)
+                    tube_worm_graphics::update(state, c, room);
+                return;
             case type::count:
                 return;
             }
@@ -483,6 +501,7 @@ namespace creature {
             case type::daddy: return daddy::collides(state, c, t, room);
             // a leech is in another collision layer than the rest
             case type::leech: return false;
+            case type::tube_worm: return tube_worm::collides(state, c, t);
             case type::count: break;
             }
             return false;
@@ -498,6 +517,7 @@ namespace creature {
             case type::lizard: lizard::collide(state, c, room, i, t, j); return;
             case type::daddy: daddy::collide(state, c, i, t, j); return;
             case type::leech: return;
+            case type::tube_worm: tube_worm::collide(state, c); return;
             case type::count: return;
             }
         }
@@ -510,6 +530,10 @@ namespace creature {
             case type::centipede: centipede::collide_kin(state, c, i, other, j); return;
             case type::dropbug: dropbug::collide_kin(state, c, i, other, j); return;
             case type::cicada: cicada::collide_kin(state, c, i, other, j); return;
+            case type::tube_worm:
+                tube_worm::collide(state, c);
+                tube_worm::collide(state, other);
+                return;
             default: return;
             }
         }
@@ -620,6 +644,7 @@ namespace creature {
         }
         case type::daddy: daddy_graphics::reset(state, c); return;
         case type::leech: leech_graphics::reset_positions(state, c); return;
+        case type::tube_worm: tube_worm_graphics::reset_positions(state, c); return;
         case type::count: return;
         }
     }
@@ -633,6 +658,9 @@ namespace creature {
         auto& w = state.world;
         if (w.creature_get_type(c) == type::daddy)
             daddy::place_in_room(state, c, room, at);
+        // TubeWorm.SpitOutOfShortCut: the tongues back in
+        if (w.creature_get_type(c) == type::tube_worm)
+            tube_worm::place_in_room(state, c, at);
         // a leech out of the den is done fleeing the rain
         if (w.creature_get_type(c) == type::leech) {
             w.creature_get_payload(c).leech.flee_from_rain = 0;
@@ -664,6 +692,9 @@ namespace creature {
         }
         w.creature_set_dead(c, 1);
         release_all(state, c, room_of(state, c));
+        // TubeWorm.Die: the slugcat holding it lets go
+        if (w.creature_get_type(c) == type::tube_worm)
+            tube_worm::died(state, c);
     }
 
     void lose_all_grasps(sys::game_state& state, dcon::creature_id c) {
@@ -702,6 +733,9 @@ namespace creature {
         float const len2 = rw::sqr_magnitude(dv);
         rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
             if (c == thrown_by || (by_slugcat && is_slugcat(w, c)) || w.creature_get_away(c) != 0)
+                return;
+            // a grapple worm in a hand can't be hit (TubeWorm.canBeHitByWeapons)
+            if (w.creature_get_type(c) == type::tube_worm && held(state, c))
                 return;
             uint32_t const n = chunk_count(state, c);
             for (uint32_t i = 0; i < n; ++i) {
@@ -750,6 +784,7 @@ namespace creature {
         case type::lizard: lizard::violence(state, c, k, momentum, damage, stun_bonus, rock, explosion); return;
         case type::daddy: daddy::violence(state, c, part, momentum, damage, stun_bonus, explosion); return;
         case type::leech: leech::violence(state, c, momentum, damage, stun_bonus); return;
+        case type::tube_worm: tube_worm::violence(state, c, k, momentum, damage, stun_bonus); return;
         case type::count: return;
         }
     }
@@ -803,6 +838,7 @@ namespace creature {
         case type::lizard: lizard::release(state, c, t); break;
         case type::daddy: daddy::release(state, c, t); break;
         case type::leech: leech::release(state, c, t); break;
+        case type::tube_worm: tube_worm::release(state, c, t); break;
         case type::count: break;
         }
         // the generic grasps on it

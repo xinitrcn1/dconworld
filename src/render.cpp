@@ -19,6 +19,7 @@
 #include "centipede_graphics.hpp"
 #include "leech.hpp"
 #include "leech_graphics.hpp"
+#include "tube_worm_graphics.hpp"
 #include "cicada.hpp"
 #include "cicada_graphics.hpp"
 #include "dropbug.hpp"
@@ -1580,6 +1581,27 @@ void main() {
             });
         }
 
+        // Grapple worms through TubeWormGraphics (flat coloured meshes; the
+        // tongues' tips need the game's atlas)
+        void build_tube_worm_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool atlas) {
+            static std::vector<sprites::draw_cmd> cmds;
+            tube_worm_graphics::palette pal;
+            pal.black = palette_black(r, s, room.id);
+            pal.fog = palette_texel(r, s, room.id, 1, 7);
+            painter p{r.batch};
+            rooms::for_each_creature(s, room.id, creature::type::tube_worm, [&](dcon::creature_id c) {
+                cmds.clear();
+                tube_worm_graphics::build(s, c, alpha, pal, atlas, cmds);
+                if (atlas) {
+                    emit_game_cmds(r, cmds);
+                    return;
+                }
+                for (auto const& cmd : cmds)
+                    if (cmd.is_triangle)
+                        p.tri(cmd.tri[0], cmd.tri[1], cmd.tri[2], to_rgba(cmd.vertex_colors ? rw::vec3{cmd.vcol[0]} : cmd.color));
+            });
+        }
+
         // the room's palette as DropBugGraphics.ApplyPalette reads it
         dropbug_graphics::palette dropbug_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
             dropbug_graphics::palette pal;
@@ -2229,6 +2251,9 @@ void main() {
                     break;
                 case creature::type::leech:
                     build_leech_sprites(r, s, room, alpha, atlas);
+                    break;
+                case creature::type::tube_worm:
+                    build_tube_worm_sprites(r, s, room, alpha, atlas);
                     break;
                 case creature::type::count:
                     break;
