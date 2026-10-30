@@ -491,12 +491,13 @@ namespace npc {
             int8_t dir = 0;
             ivec2 beam{-1, -1};
         };
-        std::optional<spear_step> find_spear_step(sys::game_state& state, room_view const& room, dcon::player_id p, ivec2 at, ivec2 goal) {
+        // (`assume`: as if it held one: what a room ahead needs, update_world)
+        std::optional<spear_step> find_spear_step(sys::game_state& state, room_view const& room, dcon::player_id p, ivec2 at, ivec2 goal, bool assume = false) {
             auto& w = state.world;
             auto const reach = pathing::slugcat_reach_from(state, room, at);
             auto const reached = [&](ivec2 t) { return room.inside(t.x, t.y) && reach[size_t(t.y * room.width + t.x)] != 0; };
             // a spear to be had
-            bool spear = is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1));
+            bool spear = assume || is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1));
             rooms::for_each_item(state, room.id, [&](dcon::item_id it) {
                 if (!spear && is_spear(state, it) && w.item_get_mode(it) == world::weapon_mode::free && !items::grabber(state, it)) {
                     ivec2 const t = room_view::get_tile_position(w.body_chunk_get_pos(items::chunk(state, it)));
@@ -1588,7 +1589,47 @@ namespace npc {
                 }
                 if (auto const in = spear_way(goal))
                     return *in;
+                // a room ahead needs a spear (update_world): one lying here
+                // where it can get to is fetched first
+                if (nav.spear_needed && nav.spear_phase == 0 && !holding_spear())
+                    if (auto const t = spear_lying_here())
+                        return go(*t, false);
                 return go(goal, pipe);
+            }
+
+            bool holding_spear() { return is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1)); }
+
+            // the closest spear lying in the room where it can get to
+            std::optional<ivec2> spear_lying_here() {
+                std::optional<ivec2> best;
+                float best_d = 0.f;
+                rooms::for_each_item(state, room.id, [&](dcon::item_id it) {
+                    if (!is_spear(state, it) || w().item_get_mode(it) != world::weapon_mode::free || items::grabber(state, it))
+                        return;
+                    vec2 const ip = w().body_chunk_get_pos(items::chunk(state, it));
+                    ivec2 const t = room_view::get_tile_position(ip);
+                    auto const f = pathing::field_to(state, room.id, t, pathing::slugcat);
+                    if (pathing::distance(state, f, at) == pathing::unreachable && t != at)
+                        return;
+                    float const d = rw::distance(ip, pos(state, p, 1));
+                    if (!best || d < best_d) {
+                        best = t;
+                        best_d = d;
+                    }
+                });
+                return best;
+            }
+
+            // the target given up on (another one picked): the leader's
+            void give_up_target() {
+                if (!leads())
+                    return;
+                if (auto const target = w().slugcat_npc_get_target(n))
+                    nav.given_up = uint16_t(target.id.index() + 1);
+                w().slugcat_npc_set_target(n, dcon::room_id{});
+                migrate::cancel(state, c);
+                nav.spear_needed = 0;
+                ++stats().gave_up;
             }
 
             // The spear step (find_spear_step), only where no way on is known:
@@ -1603,8 +1644,12 @@ namespace npc {
                         return std::nullopt;
                     nav.spear_looked = here;
                     auto const step = find_spear_step(state, room, p, at, goal);
-                    if (!step)
+                    if (!step) {
+                        // (one would do, but there is no spear to be had here)
+                        if (!holding_spear() && find_spear_step(state, room, p, at, goal, true))
+                            give_up_target();
                         return std::nullopt;
+                    }
                     nav.spear_phase = 1;
                     nav.spear_from = step->from;
                     nav.spear_dir = step->dir;
@@ -1624,32 +1669,16 @@ namespace npc {
                     --nav.spear_wait;
                     return input(0, 0);
                 }
-                bool const holding = is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1));
-                if (!holding) {
+                if (!holding_spear()) {
                     if (nav.spear_throws >= 3) {
                         nav.spear_phase = 0;
                         return std::nullopt;
                     }
-                    // the closest spear lying where it can get to
-                    std::optional<ivec2> best;
-                    float best_d = 0.f;
-                    w().for_each_item([&](dcon::item_id it) {
-                        if (!is_spear(state, it) || w().item_get_mode(it) != world::weapon_mode::free || items::grabber(state, it)
-                            || w().physical_object_get_room_from_object_location(items::body(state, it)) != room.id)
-                            return;
-                        vec2 const ip = w().body_chunk_get_pos(items::chunk(state, it));
-                        ivec2 const t = room_view::get_tile_position(ip);
-                        auto const f = pathing::field_to(state, room.id, t, pathing::slugcat);
-                        if (pathing::distance(state, f, at) == pathing::unreachable && t != at)
-                            return;
-                        float const d = rw::distance(ip, pos(state, p, 1));
-                        if (!best || d < best_d) {
-                            best = t;
-                            best_d = d;
-                        }
-                    });
+                    auto const best = spear_lying_here();
                     if (!best) {
+                        // (none: it can't make it this way, another target)
                         nav.spear_phase = 0;
+                        give_up_target();
                         return std::nullopt;
                     }
                     // (picked up on the way: arm())
@@ -1746,7 +1775,7 @@ namespace npc {
             }
             auto const& hist = w.player_get_input(p);
             vec2 const head = pos(state, p, 0);
-            if (nav.spear_phase == 0 && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
+            if (nav.spear_phase == 0 && !nav.spear_needed && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
                 && (w.creature_get_stun(nav.threat) <= 0 || w.player_get_stats(p).name == player::slugcat_name::spear) && !hist[0].thrw && (weapon(state, items::held(state, p, 0)) || weapon(state, items::held(state, p, 1)))) {
                 vec2 const at = creature::main_pos(state, nav.threat);
                 if (std::fabs(at.y - head.y) < 60.f && std::fabs(at.x - head.x) < throw_range && room.visual_contact(head, at)) {
@@ -2204,8 +2233,83 @@ namespace npc {
         }
     }
 
+    namespace {
+        // a room's spear placed in it (ReliableSpear, spawned on the first
+        // visit) or a spear lying in it
+        bool spear_in_room(sys::game_state const& state, dcon::room_id r) {
+            auto const& w = state.world;
+            bool found = false;
+            w.room_for_each_thing_location(r, [&](dcon::thing_location_id l) {
+                found = found || w.placed_thing_get_kind(w.thing_location_get_thing(l)) == world::thing_kind::reliable_spear;
+            });
+            rooms::for_each_item(state, r, [&](dcon::item_id it) {
+                found = found || (is_spear(state, it) && w.item_get_mode(it) == world::weapon_mode::free && !items::grabber(state, it));
+            });
+            return found;
+        }
+
+        // Serial: the rooms ahead on its trip that need a spear step (no
+        // walkable way between where it comes in and where it leaves, one
+        // with a spear); a spear to be had before (in its hand, lying in a
+        // room on the way there or in that room): fetched on the way
+        // (spear_needed), else the target given up. Looked at again when
+        // the trip changes
+        void look_ahead(sys::game_state& state, dcon::slugcat_npc_id n) {
+            auto& w = state.world;
+            auto& nav = w.slugcat_npc_get_nav(n);
+            auto const p = w.slugcat_npc_get_player(n);
+            auto const c = player::creature_of(state, p);
+            auto const& t = w.creature_get_trip(c);
+            uint32_t sig = uint32_t(t.hops) * 131u + t.next;
+            for (uint32_t i = 0; i < t.hops; ++i)
+                sig = sig * 31u + t.room[i] * 7u + t.exit[i];
+            if (sig == nav.trip_sig)
+                return;
+            nav.trip_sig = sig;
+            nav.spear_needed = 0;
+            auto const here = rooms::room_of(state, p);
+            if (!here || t.next >= t.hops)
+                return;
+            bool spear = is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1)) || spear_in_room(state, here);
+            for (uint32_t i = t.next; i + 1 < t.hops; ++i) {
+                auto const r = room_at(t.room[i]);
+                uint8_t const out = t.exit[i + 1];
+                auto const prev = i == 0 ? here : room_at(t.room[i - 1]);
+                int32_t const in = back_node(state, r, prev);
+                if (in < 0 || out >= migrate::warp_hop || out >= routes::max_exits)
+                    continue;
+                spear = spear || spear_in_room(state, r);
+                if (state.slugcat_routes[size_t(r.index())].from_exit[size_t(in)] >> out & 1u)
+                    continue;
+                auto const a = dens::exit_entrance(state, r, uint8_t(in));
+                auto const b = dens::exit_entrance(state, r, out);
+                if (!a || !b)
+                    continue;
+                auto const view = world::get_room_view(state, r);
+                ivec2 const mouth = *a + view.shortcut_entrance_hole_direction(*a);
+                if (!find_spear_step(state, view, p, mouth, *b, true))
+                    continue;
+                if (spear) {
+                    nav.spear_needed = 1;
+                } else if (auto const l = w.slugcat_npc_get_leader(n); !l || l == n) {
+                    // (no spear on the way there: it can't make it this way)
+                    if (auto const target = w.slugcat_npc_get_target(n))
+                        nav.given_up = uint16_t(target.id.index() + 1);
+                    w.slugcat_npc_set_target(n, dcon::room_id{});
+                    migrate::cancel(state, c);
+                    ++stats().gave_up;
+                }
+                return;
+            }
+        }
+    }
+
     void update_world(sys::game_state& state) {
         auto& w = state.world;
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            if (!player::dead(state, w.slugcat_npc_get_player(n)) && !player::in_shortcut(state, w.slugcat_npc_get_player(n)))
+                look_ahead(state, n);
+        });
         // a dead (or gone) leader's place goes to the first living member
         std::vector<std::pair<dcon::slugcat_npc_id, dcon::slugcat_npc_id>> handed;
         w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
@@ -2389,12 +2493,12 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[460];
+        char buf[500];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

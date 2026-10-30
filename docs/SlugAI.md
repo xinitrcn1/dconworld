@@ -140,6 +140,23 @@ the tools for tracing them, and what is known not to work yet.
   x=30's tip onto it, up the wall beside it into a ledge grab onto (33,148).
   Tests: up a wall with a spear lying on the way; no spear, no step; on the
   pounce course a spear in its way stays where it is.
+  - **Looking ahead** (`look_ahead`, serial in `update_world`, again when
+    its trip changes): a room on the trip with no walkable way between where
+    it comes in and where it leaves but a spear step (as if it held a spear)
+    needs one. A spear to be had on the way there (in its hand, lying in a
+    room before or in that one, or a ReliableSpear placed there): fetched
+    first, in whatever room it is in (`spear_needed`), and kept (not thrown
+    at threats). None: it can't make it that way, the target is given up
+    and another picked ("gave up"); the same in the room itself when a
+    spear would do and none is to be had. Tests: carried from the shelter
+    it starts in to the room that needs it; no spear anywhere, another
+    target.
+- **Grapple worms** (tube_worm.cpp): a held worm's tongue, shot with a
+  jump in the air, sticks within 230 px and the slugcat swings 140 px under
+  it. In UW_B01 from the floor at (92,18) it sticks under the block pole
+  x=93 stands on and hangs at row 22; pumping the swing doesn't lift it
+  past the block. Not used by the NPC yet: B01's way with it is still to
+  be found.
 - **Platforms over pipes.** A jump never lands in a platform or a pipe's
   entrance tile; a jump into a pipe's mouth only into one facing it from the
   side (UW_E03's pipe at (29,89) opens up under a platform: drop through
@@ -539,6 +556,15 @@ the guessed trips 40 of them stood in their shelters for good; now every
 one sets off (no way: 0), 34 shelters are reached in 6000 ticks instead of
 19, and more of them die out there (23: falls, long legs, lizards; the
 falls were waiting under the rooms uncounted before).
+
+## Slugcats with slugcats
+
+They bump into each other (creature.cpp's `collide_slugcats`: each pair
+once, their two chunks pushed apart; not in a pipe, being eaten or held),
+and a slugcat's thrown weapons hit slugcats (`game_state::friendly_fire`,
+on; `--no-friendly-fire` for story mode's way, through them). NPCs never
+take a slugcat for a threat, so they don't throw at each other. Test:
+"slugcats collide, friendly fire".
 
 ## Gates
 

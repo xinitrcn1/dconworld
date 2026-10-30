@@ -1302,6 +1302,44 @@ namespace selftest {
             r.check("no warping straight back", simulation::player_room(gs, s.p) == b && !gs.warp.active, s.describe());
         }
         {
+            // slugcats bump into each other (they don't pass through), and with
+            // friendly fire (on by default) a spear the player throws hits an
+            // NPC slugcat; off, it flies through
+            auto& w = gs.world;
+            auto const run_case = [&](bool ff) {
+                auto const room = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+                gs.friendly_fire = ff;
+                sim s(gs, room, feet_at(10, 1));
+                rw::rng rng{0xFF01u};
+                // (on the same spot: pushed apart)
+                auto const q = npc::create(gs, room, feet_at(10, 1), rng, {}, player::slugcat_name::white);
+                w.slugcat_npc_get_nav(npc::of(gs, q)).goal_timer = -100000;
+                s.run(30);
+                float const apart = std::fabs(w.body_chunk_get_pos(player::body_chunk(gs, q, 0)).x - s.pos(0).x);
+                // a spear at the player's feet, picked up, thrown at the NPC
+                player::reset(gs, q, room, feet_at(16, 1));
+                auto const spear = items::create_spear(gs, room, feet_at(10, 1));
+                s.run(20);
+                s.step(0, 0, false, false, true);
+                s.run(10);
+                bool const held = items::grabber(gs, spear) == s.p;
+                s.step(1, 0, false, true);
+                bool hit = false;
+                for (int t = 0; t < 40 && !hit; ++t) {
+                    s.run(1);
+                    hit = w.creature_get_stun(player::creature_of(gs, q)) > 0 || player::dead(gs, q);
+                }
+                npc::destroy(gs, q);
+                gs.friendly_fire = true;
+                return std::tuple{apart, held, hit};
+            };
+            auto const [apart, held, hit] = run_case(true);
+            auto const [apart2, held2, hit2] = run_case(false);
+            char d[160];
+            std::snprintf(d, sizeof(d), " apart=%.1f px held=%d hit=%d; friendly fire off: held=%d hit=%d", apart, int(held), int(hit), int(held2), int(hit2));
+            r.check("slugcats collide, friendly fire", apart > 8.f && held && hit && held2 && !hit2, d);
+        }
+        {
             // only the Watcher can use warps
             auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
             auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
@@ -2680,7 +2718,9 @@ namespace selftest {
             // (at head height, its beam a hold up the wall) and goes on up.
             // Without a spear lying there it doesn't try; on the pounce course
             // (no need of one) a spear in its way stays where it is
-            auto const spear_course = [&](char const* name, bool with_spear) {
+            // (`spear_in`: none, the course, the shelter it starts in)
+            enum class spear_at { none, course, shelter };
+            auto const spear_course = [&](char const* name, spear_at spear_in) {
                 auto [st_ptr, rgn] = npc_world(name);
                 auto& st = *st_ptr;
                 auto const a = shelter_room(st, rgn, 1);
@@ -2697,8 +2737,12 @@ namespace selftest {
                 link(st, exits_of(st, a)[0], a, side_exit(st, room, false), room);
                 link(st, side_exit(st, room, true), room, exits_of(st, b)[0], b);
                 simulation::populate(st);
-                if (with_spear)
+                if (spear_in == spear_at::course)
                     items::create_on_tile(st, room, feet_at(10, 2), world::item_type::spear);
+                if (spear_in == spear_at::shelter) {
+                    items::spawn_room_items(st, a);
+                    items::create_on_tile(st, a, feet_at(9, 2), world::item_type::spear);
+                }
                 rw::rng rng{0x5EA4u};
                 auto const p = npc::create(st, a, feet_at(5, 2), rng, {}, player::slugcat_name::white);
                 st.world.slugcat_npc_set_target(npc::of(st, p), b);
@@ -2712,7 +2756,7 @@ namespace selftest {
             bool const was_guess = npc::debug().guess;
             npc::debug().guess = true; // (the planner knows no walkable way there: it has to find the spear step)
             {
-                auto [st_ptr, room, b, p] = spear_course("npc_spear_step", true);
+                auto [st_ptr, room, b, p] = spear_course("npc_spear_step", spear_at::course);
                 auto& st = *st_ptr;
                 auto& w = st.world;
                 uint32_t const steps = npc::stats().spear_steps;
@@ -2729,17 +2773,43 @@ namespace selftest {
                 r.check("NPC spear step up a wall", arrived && npc::stats().spear_steps > steps && stuck_spears(st, room) == 1, d);
             }
             {
-                auto [st_ptr, room, b, p] = spear_course("npc_no_spear", false);
+                // the spear lying in the shelter it starts in: needed in the room
+                // after, so it is fetched first and carried there
+                auto [st_ptr, room, b, p] = spear_course("npc_spear_carried", spear_at::shelter);
                 auto& st = *st_ptr;
+                auto& w = st.world;
                 uint32_t const steps = npc::stats().spear_steps;
-                bool arrived = false;
-                for (uint32_t t = 0; t < 2000 && !arrived; ++t) {
+                bool arrived = false, carried = false;
+                uint32_t t = 0;
+                for (; t < 5000 && !arrived; ++t) {
+                    tick_world(st, 1);
+                    trace_npc(st, p, t);
+                    carried = carried || (rooms::room_of(st, p) == room && (items::held(st, p, 0) || items::held(st, p, 1)));
+                    arrived = rooms::room_of(st, p) == b && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+                }
+                char d[200];
+                std::snprintf(d, sizeof(d), " carried=%d arrived=%d after %u ticks, spear steps %u, stuck spears %u; %s", int(carried), int(arrived), t,
+                    npc::stats().spear_steps - steps, stuck_spears(st, room), npc::describe(st, p).c_str());
+                r.check("NPC carries a spear to where it needs it", carried && arrived && stuck_spears(st, room) == 1, d);
+            }
+            {
+                // no spear anywhere: it can't make it that way, gives that
+                // target up (another one picked) rather than try
+                auto [st_ptr, room, b, p] = spear_course("npc_no_spear", spear_at::none);
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                uint32_t const steps = npc::stats().spear_steps, gave_up = npc::stats().gave_up;
+                bool arrived = false, other = false;
+                for (uint32_t t = 0; t < 2000 && !arrived && !other; ++t) {
                     tick_world(st, 1);
                     arrived = rooms::room_of(st, p) == b;
+                    auto const target = w.slugcat_npc_get_target(npc::of(st, p));
+                    other = target && target != b;
                 }
-                char d[120];
-                std::snprintf(d, sizeof(d), " arrived=%d spear steps %u", int(arrived), npc::stats().spear_steps - steps);
-                r.check("NPC no spear, no spear step", !arrived && npc::stats().spear_steps == steps, d);
+                char d[160];
+                std::snprintf(d, sizeof(d), " arrived=%d gave up %u, another target %d, spear steps %u", int(arrived), npc::stats().gave_up - gave_up, int(other),
+                    npc::stats().spear_steps - steps);
+                r.check("NPC no spear: gives that target up", !arrived && other && npc::stats().gave_up > gave_up && npc::stats().spear_steps == steps, d);
             }
             npc::debug().guess = was_guess;
             {
@@ -3118,6 +3188,8 @@ namespace selftest {
             char const* sc = std::strstr(exp, ",S,");
             if (!sc)
                 sc = std::strstr(exp, ",S+,");
+            if (!sc)
+                sc = std::strstr(exp, ",SW,");
             if (sc) {
                 char rn[64];
                 int fx = 0, fy = 0;
@@ -3128,6 +3200,8 @@ namespace selftest {
                 auto const room = gs.find_room(rn);
                 auto p = player::create(gs, room, world::room_view::middle_of_tile(fx, fy) + vec2{0.f, -2.f}, name == player::slugcat_name::count ? player::slugcat_name::white : name);
                 bool const spear = sc[2] == '+';
+                // ("...,SW,<script>": a grapple worm at its feet, `P` picks it up)
+                bool const worm = sc[2] == 'W';
                 // ("...,S+,<script>": a spear at its feet to start with, `P` picks it up)
                 if (spear)
                     items::create_on_tile(gs, room, w.body_chunk_get_pos(player::body_chunk(gs, p, 1)), world::item_type::spear);
@@ -3135,7 +3209,9 @@ namespace selftest {
                     auto const in = player::make_input(0.f, 0.f, false, false, false);
                     simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
                 }
-                std::string const script = sc + (spear ? 4 : 3);
+                if (worm)
+                    tube_worm::create(gs, room, w.body_chunk_get_pos(player::body_chunk(gs, p, 1)));
+                std::string const script = sc + (spear || worm ? 4 : 3);
                 size_t pos = 0;
                 int t = 0;
                 float top = -1e9f;
@@ -3143,7 +3219,7 @@ namespace selftest {
                     vec2 const h = w.body_chunk_get_pos(player::body_chunk(gs, p, 0)), f = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
                     top = std::max(top, f.y);
                     std::printf("  t=%3d %-4s head %.1f,%.1f feet %.1f,%.1f anim %s mode %s%s\n", t, l, h.x, h.y, f.x, f.y, player::to_string(w.player_get_animation(p)),
-                        player::to_string(w.player_get_body_mode(p)), items::held(gs, p, 0) || items::held(gs, p, 1) ? " holding" : "");
+                        player::to_string(w.player_get_body_mode(p)), items::held(gs, p, 0) || items::held(gs, p, 1) || tube_worm::held_by(gs, p) ? " holding" : "");
                 };
                 show("-");
                 while (pos < script.size()) {

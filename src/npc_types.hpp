@@ -120,6 +120,10 @@ namespace npc {
         // (not tried again here)
         uint8_t vault_fails = 0;
         rw::ivec2 vault_bad[2] = {{-1, -1}, {-1, -1}};
+        // a room ahead on its trip needs a spear step (a spear is fetched on
+        // the way and kept), the trip that was looked at
+        uint8_t spear_needed = 0;
+        uint32_t trip_sig = 0;
         uint8_t spear_phase = 0;
         int8_t spear_dir = 0;
         rw::ivec2 spear_from{-1, -1};

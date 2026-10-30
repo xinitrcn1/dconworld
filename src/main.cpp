@@ -74,6 +74,7 @@ namespace {
             "  --bench-mode <m>    only one of them: none, each, dens\n"
             "  --rain-in <ticks>   every region's rain comes in that many ticks\n"
             "  --no-dens           no world file creatures in their dens\n"
+            "  --no-friendly-fire  a slugcat's thrown weapons pass through slugcats (NPCs included)\n"
             "  --npcs <share>      the share of shelters with a group of NPC slugcats (0..1, default 0.25)\n"
             "  --no-npcs           no NPC slugcats\n"
             "  --npc-trip <from> <to> [ticks]  one NPC slugcat (--slugcat, else random; --npc-seed) from\n"
@@ -639,6 +640,7 @@ int main(int argc, char* argv[]) {
     std::string bench_mode;
     int32_t rain_in = -1;
     bool no_dens = false;
+    bool friendly_fire = true;
     float npc_chance = npc::default_shelter_chance;
     player::slugcat_name slugcat = player::slugcat_name::white;
     for (int i = 1; i < argc; ++i) {
@@ -690,6 +692,8 @@ int main(int argc, char* argv[]) {
             rain_in = std::atoi(next().c_str());
         } else if (a == "--no-dens") {
             no_dens = true;
+        } else if (a == "--no-friendly-fire") {
+            friendly_fire = false;
         } else if (a == "--npcs") {
             npc_chance = float(std::atof(next().c_str()));
         } else if (a == "--no-npcs") {
@@ -827,6 +831,7 @@ int main(int argc, char* argv[]) {
     auto const gs_ptr = load_world(true);
     auto& gs = *gs_ptr;
     gs.spawn_dens = !no_dens;
+    gs.friendly_fire = friendly_fire;
     // (not for the fuzz: it drives slugcats of its own)
     gs.npc_shelter_chance = fuzz_ticks >= 0 ? 0.f : npc_chance;
     // --npc-human-complete: the trip test's world (no creatures, no other

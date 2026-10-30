@@ -266,6 +266,10 @@ namespace sys {
         // still (tests)
         bool rain_ready = false;
         bool rain_frozen = false;
+        // a slugcat's weapons hit slugcats too (Jolly Co-op's friendly fire;
+        // `--no-friendly-fire` as in plain story mode). They bump into each
+        // other either way
+        bool friendly_fire = true;
         // NPC slugcats (npc.hpp): the share of shelters that get a group
         // when the world is populated (0 none), and the slugcats' routes
         float npc_shelter_chance = 0.f;

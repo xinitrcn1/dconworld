@@ -608,8 +608,31 @@ namespace creature {
         }
     }
 
+    namespace {
+        // Slugcats bump into each other too (players are in collision layer
+        // 1 like the rest): each pair once, both pushed apart. Not one in a
+        // pipe, being eaten or held
+        void collide_slugcats(sys::game_state& state, world::room_view const& room) {
+            auto const& w = state.world;
+            std::vector<dcon::creature_id> cats;
+            rooms::for_each_creature(state, room.id, type::slugcat, [&](dcon::creature_id c) {
+                if (w.creature_get_away(c) == 0 && collides(state, c, c, room.id) && !held(state, c))
+                    cats.push_back(c);
+            });
+            for (size_t a = 0; a < cats.size(); ++a)
+                for (size_t b = a + 1; b < cats.size(); ++b) {
+                    if (!custom::dist_less(w.body_chunk_get_pos(chunk(state, cats[a], 0)), w.body_chunk_get_pos(chunk(state, cats[b], 0)), 80.f))
+                        continue;
+                    for (uint32_t i = 0; i < 2; ++i)
+                        for (uint32_t j = 0; j < 2; ++j)
+                            push_apart(state, chunk(state, cats[a], i), chunk(state, cats[b], j));
+                }
+        }
+    }
+
     void update_room(sys::game_state& state, world::room_view const& room) {
         bool const viewed = state.viewed(room.id);
+        collide_slugcats(state, room);
         for (auto const t : all_types) {
             // (the slugcats ran first, player.cpp, and collide in the others' turns)
             if (t == type::slugcat)
@@ -724,8 +747,9 @@ namespace creature {
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::creature_id thrown_by, dcon::creature_id& hit, hit_part& part) {
         auto const& w = state.world;
         // Weapon.HitThisObject: not its thrower, and a slugcat's weapon
-        // passes through the slugcats (no friendly fire in story mode)
-        bool const by_slugcat = thrown_by && w.creature_is_valid(thrown_by) && is_slugcat(w, thrown_by);
+        // passes through the slugcats only with friendly fire off (story
+        // mode's default; here it is on, game_state::friendly_fire)
+        bool const by_slugcat = thrown_by && w.creature_is_valid(thrown_by) && is_slugcat(w, thrown_by) && !state.friendly_fire;
         // the closest of every creature's chunks along the segment, then
         // the appendages (a daddy's tentacles) when they are closer still
         float best = 2.f;
