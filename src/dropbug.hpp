@@ -32,12 +32,12 @@ namespace dropbug {
     void destroy(sys::game_state& state, dcon::creature_id d);
     // DropBug.Update
     void update(sys::game_state& state, dcon::creature_id d, world::room_view const& room);
-    // Room object collisions: whether it collides with the slugcat (not
-    // with what it holds), DropBug.Collide biting and grabbing (its chunk
-    // `i` touched the slugcat's `j`), climbing over another dropbug and
-    // following the dominant ones (CollideWithKin)
-    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::player_id p);
-    void collide_player(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::player_id p, uint32_t j);
+    // Room object collisions: whether it collides with a creature or
+    // slugcat (not with what it holds), DropBug.Collide biting and grabbing
+    // (its chunk `i` touched the other's `j`), climbing over another
+    // dropbug and following the dominant ones (CollideWithKin)
+    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t);
+    void collide(sys::game_state& state, dcon::creature_id d, world::room_view const& room, uint32_t i, creature::target t, uint32_t j);
     void collide_kin(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id other, uint32_t j);
     void touched_kin(sys::game_state& state, dcon::creature_id d, dcon::creature_id other);
     // DropBug.Violence (+ Creature.Violence)
@@ -50,8 +50,8 @@ namespace dropbug {
     bool footing(sys::game_state const& state, dcon::creature_id d) noexcept;
     // CeilingSitModule.SittingInCeiling
     bool sitting_in_ceiling(sys::game_state const& state, dcon::creature_id d) noexcept;
-    // the player it holds (grasps[0]), if any
-    dcon::player_id grasped(sys::game_state const& state, dcon::creature_id d) noexcept;
-    // lets go of `p` if it holds it
-    void release_player(sys::game_state& state, dcon::creature_id d, dcon::player_id p);
+    // what it holds (grasps[0]), if any
+    creature::target grasped(sys::game_state const& state, dcon::creature_id d) noexcept;
+    // lets go of `t` if it holds it
+    void release(sys::game_state& state, dcon::creature_id d, creature::target t);
 }

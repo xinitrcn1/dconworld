@@ -166,6 +166,10 @@ namespace sound {
         death_rain_approaching_loop,
         death_rain_approaching_heard_from_underground_loop,
         screen_shake_loop,
+        // creatures fighting creatures
+        lizard_jaws_grab_npc,
+        lizard_tongue_attatch_npc,
+        red_lizard_spit_hit_npc,
         count
     };
     char const* to_string(sound_id id) noexcept;

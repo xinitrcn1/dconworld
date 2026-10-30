@@ -51,6 +51,8 @@ namespace spawns {
         uint8_t flags = 0;
         int32_t seed = -1;
         float size = -1.f;
+        // {Mean:x}: a lizard's spawnDataEvil
+        float mean = 0.f;
     };
     spawn_data parse_data(std::string_view data) noexcept;
 

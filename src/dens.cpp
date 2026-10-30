@@ -57,10 +57,34 @@ namespace dens {
             return h;
         }
 
-        // the slugcat it carries into a pipe is done for (IsEnteringDen: the
-        // prey dies; it is carried off, eaten)
+        // what it carries into a pipe is done for (IsEnteringDen: the prey
+        // dies; it is carried off, eaten): a slugcat is eaten, a creature
+        // goes with it and is gone
         void take_prey(sys::game_state& state, dcon::creature_id c, dcon::room_id room) {
             auto& w = state.world;
+            // carrying prey, it stays in the den a while (OpportunityToEnterDen)
+            if (creature::grasped(w, c, 0) || creature::grasped(w, c, 1) || w.creature_get_grasp_player(c)[0] || w.creature_get_grasp_player(c)[1])
+                w.creature_set_remain_in_den(c, std::max(w.creature_get_remain_in_den(c), 200));
+            for (uint32_t g = 0; g < 2; ++g) {
+                auto const t = creature::grasped(w, c, g);
+                if (auto const p = creature::as_player(state, t); p && rooms::room_of(state, p) == room) {
+                    items::release_all(state, p);
+                    creature::release_target(state, t, room);
+                    if (!w.player_get_dead(p))
+                        player::die(state, p);
+                    w.player_set_eaten(p, 1);
+                    ++stats().prey_taken;
+                } else if (auto const o = creature::as_creature(state, t); o && rooms::room_of(state, o) == room) {
+                    creature::release_target(state, t, room);
+                    creature::kill(state, t, creature::template_of(state, c));
+                    ++stats().prey_taken;
+                    ++stats().creatures_eaten;
+                    state.defer(room, [o](sys::game_state& st) {
+                        if (st.world.creature_is_valid(o))
+                            creature::destroy(st, o);
+                    });
+                }
+            }
             for (uint32_t g = 0; g < 2; ++g) {
                 auto const p = creature::player_of(state, w.creature_get_grasp_player(c)[g]);
                 if (!p || rooms::room_of(state, p) != room)
@@ -131,21 +155,6 @@ namespace dens {
             return best;
         }
 
-        // the room an exit of `room` leads to, if the pipe can be travelled
-        // both ways (the target's exit back, its pipe) and isn't a gate or
-        // a shelter (creatures keep out of those)
-        dcon::room_id exit_target(sys::game_state const& state, dcon::room_exit_id e, dcon::room_id from) {
-            auto const& w = state.world;
-            auto const target = w.room_exit_get_target_from_exit_connection(e);
-            if (!target || w.room_get_is_gate(target) || w.room_get_is_shelter(target))
-                return dcon::room_id{};
-            bool back = false;
-            w.room_for_each_exit_location(target, [&](dcon::exit_location_id el) {
-                back = back || w.room_exit_get_target_from_exit_connection(w.exit_location_get_exit(el)) == from;
-            });
-            return back ? target : dcon::room_id{};
-        }
-
         // the away creatures of a room
         template<typename F>
         void for_each_away(sys::game_state const& state, dcon::room_id room, F&& f) {
@@ -159,6 +168,23 @@ namespace dens {
                     f(c);
             });
         }
+    }
+
+    dcon::room_id exit_target(sys::game_state const& state, dcon::room_exit_id e, dcon::room_id from, bool gates) {
+        auto const& w = state.world;
+        auto const target = w.room_exit_get_target_from_exit_connection(e);
+        if (!target || w.room_get_is_shelter(target) || (!gates && w.room_get_is_gate(target)))
+            return dcon::room_id{};
+        bool back = false;
+        w.room_for_each_exit_location(target, [&](dcon::exit_location_id el) {
+            back = back || w.room_exit_get_target_from_exit_connection(w.exit_location_get_exit(el)) == from;
+        });
+        return back ? target : dcon::room_id{};
+    }
+
+    std::optional<ivec2> exit_entrance(sys::game_state const& state, dcon::room_id room, uint8_t node) {
+        auto const s = shortcut_to_node(state, room, shortcut_type::room_exit, node);
+        return s ? std::optional<ivec2>{state.world.shortcut_get_start(s)} : std::nullopt;
     }
 
     counters& stats() noexcept {

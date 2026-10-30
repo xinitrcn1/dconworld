@@ -5,22 +5,28 @@
 
 #include "lizard_ai.hpp"
 #include "dens.hpp"
+#include "migrate.hpp"
 #include "rooms.hpp"
+#include "tracker.hpp"
 #include "lizard_graphics.hpp"
 #include "items.hpp"
 #include "physics.hpp"
-#include "player.hpp"
 
 // LizardAI: DetermineBehavior's utility comparison and the behaviours, over
-// the modules it keeps: a Tracker of the slugcat (vision with the breed's
-// angles and the Black lizard's SuperHearing), the PreyTracker, NoiseTracker,
-// StuckTracker, LurkTracker, LizardSpitTracker and the Yellow pack's YellowAI.
-// Nothing threatens a lizard here (no vultures, no masks), there is no
-// migration, and lizards don't fight each other, so the Flee, Travelling,
-// Fighting, ActingOutMission and FollowFriend behaviours don't come up. The
+// the modules it keeps: the shared Tracker, RelationshipTracker, PreyTracker,
+// ThreatTracker and AgressionTracker (tracker.hpp) over every creature and
+// slugcat of the room (vision with the breed's angles and the Black
+// lizard's SuperHearing), the NoiseTracker, StuckTracker, LurkTracker,
+// LizardSpitTracker, the Yellow pack's YellowAI and the lizards'
+// communication (aggression and submission between rivals). It hunts its
+// prey (the slugcat by how much it likes it, the rest by StaticWorld's
+// relationships), flees what it is afraid of (Flee, ThreatTracker.FleeTo
+// within the room), fights rivals (Fighting) and wanders to other rooms
+// (AbstractBehavior's migration roll, Travelling: migrate.hpp). The
 // RainTracker sends it home to its den as the rain approaches (EscapeRain),
 // and it carries its prey there (ReturnPrey) or goes there hurt (Injured):
-// dens.hpp, through other rooms when the den is elsewhere.
+// dens.hpp, through other rooms when the den is elsewhere. No friends,
+// missions (but LeaveRoom after submitting), masks or spears.
 
 namespace lizard::ai {
     using rw::ivec2;
@@ -46,10 +52,13 @@ namespace lizard::ai {
         }
 
         // LizardAI.LikeOfPlayer: the community's like (0, nothing changes it
-        // here; a Cyan isn't mean outside the arena) leaning on the temporary like
+        // here; a Cyan isn't mean outside the arena) leaning on the spawn
+        // data's {Mean}, then on the temporary like
         float like_of_player(sys::game_state const& state, dcon::creature_id l) {
+            float const evil = state.world.creature_get_payload(l).lizard.spawn_data_evil;
+            float num = mathf::lerp(0.f, -evil, std::fabs(evil));
             float const temp = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).temp_like;
-            return mathf::lerp(0.f, temp, std::fabs(temp));
+            return mathf::lerp(num, temp, std::fabs(temp));
         }
 
         // LizardAI.VisualScore (+ ArtificialIntelligence.VisualScore): within
@@ -87,145 +96,109 @@ namespace lizard::ai {
             return visual_score(state, l, room, pos, 0.f) > 0.f && room.visual_contact(chunk_pos(state, l, 0), pos);
         }
 
+        // the lizard's tracker modules (LizardAI's constructor)
+        tracker::params const& tracker_params(breed b) {
+            static tracker::params const normal = [] {
+                tracker::params p;
+                p.see_around_corners = 10;
+                p.frames_to_remember = -1;
+                p.ghost_dismissal_range = 10;
+                p.prey_max = 5;
+                p.persistance_bias = 2.f;
+                p.sure_to_get = 3.f;
+                p.sure_to_lose = 70.f;
+                p.threat_max = 3;
+                p.anger_up = 0.001f;
+                p.anger_down = 0.001f;
+                return p;
+            }();
+            static tracker::params const red = [] {
+                tracker::params p = normal;
+                p.give_up_unreachable = 1800;
+                return p;
+            }();
+            return b == breed::red ? red : normal;
+        }
+
+        // the tracker's questions, answered by the lizard
+        struct ai_ctx {
+            sys::game_state& state;
+            dcon::creature_id l;
+            room_view const& room;
+        };
+        bool hook_sees(void* u, dcon::body_chunk_id k) {
+            auto& x = *static_cast<ai_ctx*>(u);
+            return sees_chunk(x.state, x.l, x.room, k);
+        }
+        bool hook_sees_point(void* u, vec2 pos) {
+            auto& x = *static_cast<ai_ctx*>(u);
+            return sees_point(x.state, x.l, x.room, pos);
+        }
+        relationship hook_relate(void* u, creature::tracked const& r) {
+            auto& x = *static_cast<ai_ctx*>(u);
+            return relationship_to(x.state, x.l, r.who);
+        }
         // LizardAI.CreatureSpotted
-        void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first, dcon::player_id p) {
-            if (state.viewed(room_of(state, l)))
-                lizard_graphics::creature_spotted(state, l, first, p);
-            auto const rel = player_relationship(state, l, p);
-            if (rel.go_for_kill() && rel.intensity > (first ? 0.2f : 0.45f) && grasped(state, l) != p)
-                enter_animation(state, l, first ? animation::prey_spotted : animation::prey_re_spotted, false);
+        void hook_spotted(void* u, creature::tracked const& r, bool first) {
+            auto& x = *static_cast<ai_ctx*>(u);
+            if (x.state.viewed(x.room.id))
+                lizard_graphics::creature_spotted(x.state, x.l, first, r.who);
+            if (r.rel.go_for_kill() && r.rel.intensity > (first ? 0.2f : 0.45f) && grasped(x.state, x.l) != r.who)
+                enter_animation(x.state, x.l, first ? animation::prey_spotted : animation::prey_re_spotted, false);
+        }
+        bool hook_reach(void* u, ivec2 t) {
+            auto& x = *static_cast<ai_ctx*>(u);
+            return reachable_and_getbackable(x.state, x.l, x.room, t);
+        }
+        tracker::hooks make_hooks(ai_ctx& x) {
+            tracker::hooks h;
+            h.user = &x;
+            h.sees = hook_sees;
+            h.sees_point = hook_sees_point;
+            h.relate = hook_relate;
+            h.module = tracker::default_module;
+            h.spotted = hook_spotted;
+            h.reach = hook_reach;
+            return h;
         }
 
-        // the Tracker forgets the slugcat: the creature's representation of it
-        // and the lizard's own part
-        void forget_player(sys::game_state& state, dcon::creature_id l) {
+        // the representation of what it hunts, fights or flees, if any
+        creature::tracked const* rep_of(sys::game_state const& state, dcon::creature_id l, creature::target t) {
+            return t ? tracker::find(state, l, t) : nullptr;
+        }
+        creature::tracked const* prey_rep(sys::game_state const& state, dcon::creature_id l) {
+            return tracker::prey(tracker::of(state, l));
+        }
+        float chance_of_finding(creature::tracked const& r) {
+            return tracker::chance_of_finding(r, 10);
+        }
+
+        // SuperHearing.Update (the Black lizard): what moves on the terrain
+        // within 350 of its head is heard as if seen
+        void super_hearing(sys::game_state& state, dcon::creature_id l, room_view const& room, tracker::hooks const& h) {
             auto& w = state.world;
-            w.creature_set_seen_player(l, 0);
-            w.creature_set_sees_player(l, 0);
-            w.creature_set_ticks_since_seen(l, 0);
-            w.creature_set_last_seen_pos(l, vec2{0.f, 0.f});
-            w.lizard_data_get_ai(creature::lizard_data(w, l)).rep = tracked_player{};
-        }
-
-        // Tracker.CreatureRepresentation.EstimatedChanceOfFinding (no ghosts)
-        float chance_of_finding(sys::game_state const& state, dcon::creature_id l) {
-            if (state.world.creature_get_sees_player(l))
-                return 1.f;
-            float const num = float(state.world.creature_get_ticks_since_seen(l)) / 4.f;
-            if (num < 45.f)
-                return mathf::clamp(1.f / -(1.f + std::exp(-(num / 12.f - 5.f))) + 1.007f, 0.f, 1.f);
-            return 1.f / (num - 7.f) * 30.f;
-        }
-
-        // Tracker.Update + SuperHearing.Update: the slugcats it sees (or, the
-        // Black lizard, hears moving on the terrain close by)
-        void tracker_update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
-            auto& w = state.world;
-            auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& r = a.rep;
-            bool const black = breed_of(state, l) == breed::black;
             vec2 const head = chunk_pos(state, l, 0);
-            dcon::player_id seen;
-            float best = float_max;
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (!player_here(state, p, room.id))
-                    return;
-                bool sees = false;
-                for (uint32_t i = 0; i < 2; ++i) {
-                    auto const c = player::body_chunk(state, p, i);
-                    sees = sees || sees_chunk(state, l, room, c);
-                    if (black && w.body_chunk_get_contact_point(c) != ivec2{0, 0}) {
-                        float const loud = mathf::min((rw::distance(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c)) - 3.f) * 4.f, 10.f) * 0.1f * 350.f;
-                        sees = sees || custom::dist_less(w.body_chunk_get_pos(c), head, loud);
+            auto const hear = [&](creature::target t) {
+                uint32_t const n = creature::chunk_count_of(state, t);
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const c = creature::chunk_of(state, t, i);
+                    if (w.body_chunk_get_contact_point(c) == ivec2{0, 0})
+                        continue;
+                    float const loud = mathf::min((rw::distance(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c)) - 3.f) * 4.f, 10.f) * 0.1f * 350.f;
+                    if (custom::dist_less(w.body_chunk_get_pos(c), head, loud)) {
+                        tracker::see(state, l, room, t, h);
+                        return;
                     }
                 }
-                float const d = rw::distance(head, w.body_chunk_get_pos(player::body_chunk(state, p, 0)));
-                if (sees && d < best) {
-                    best = d;
-                    seen = p;
-                }
+            };
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
+                if (creature::here(state, creature::of(p), room.id))
+                    hear(creature::of(p));
             });
-            if (w.creature_get_seen_player(l) && !player_of(state, w.creature_get_seen_player(l)))
-                forget_player(state, l);
-            if (seen)
-                see_player(state, l, seen);
-            else
-                w.creature_set_sees_player(l, 0);
-            auto const p = player_of(state, w.creature_get_seen_player(l));
-            if (!p)
-                return;
-            if (!w.creature_get_sees_player(l))
-                ++w.creature_get_ticks_since_seen(l);
-            ++r.age;
-            if (!player_here(state, p, room.id))
-                w.creature_set_sees_player(l, 0);
-        }
-
-        // the slugcat's tile it hunts (BestGuessForPosition)
-        ivec2 best_guess(sys::game_state const& state, dcon::creature_id l) {
-            return room_view::get_tile_position(state.world.creature_get_last_seen_pos(l));
-        }
-
-        // PreyTracker.TrackedPrey.PathFinderCanGetToPrey
-        bool can_get_to_prey(sys::game_state& state, dcon::creature_id l, room_view const& room, ivec2 t) {
-            for (auto const d : custom::eight_directions_and_zero)
-                if (reachable_and_getbackable(state, l, room, t + d))
-                    return true;
-            for (auto const d : custom::four_directions)
-                if (reachable_and_getbackable(state, l, room, t + d * 2))
-                    return true;
-            return false;
-        }
-
-        // PreyTracker.TrackedPrey.Reachable
-        float prey_reachable(sys::game_state const& state, dcon::creature_id l, room_view const& room) {
-            auto const& r = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).rep;
-            if (room.get_tile(best_guess(state, l)).solid())
-                return 0.f;
-            int32_t const give_up = breed_of(state, l) == breed::red ? 1800 : 400;
-            return mathf::inverse_lerp(float(give_up), 0.f, float(r.unreachable_counter)) * mathf::inverse_lerp(200.f, 100.f, float(r.at_position_but_cant_see_counter));
-        }
-
-        // PreyTracker.Update with the one prey it can have (TrackedPrey.Update)
-        void prey_tracker_update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
-            auto& w = state.world;
-            auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& r = a.rep;
-            auto const p = player_of(state, w.creature_get_seen_player(l));
-            if (!p || !player_relationship(state, l, p).eats) {
-                a.frustration = mathf::clamp(a.frustration - 0.0125f * 4.f, 0.f, 1.f);
-                return;
-            }
-            ivec2 const g = best_guess(state, l);
-            bool ok = reachable_and_getbackable(state, l, room, g);
-            for (int i = 0; i < 4 && !ok; ++i)
-                ok = reachable_and_getbackable(state, l, room, g + custom::four_directions[i]);
-            r.unreachable_counter = ok ? 0 : r.unreachable_counter + 1;
-            ivec2 const at = here(state, l);
-            if (r.last_best_guess == g && float_dist(at, g) < 5.f && float_dist(state.world.creature_get_destination(l), g) < 5.f
-            && room.visual_contact(room_view::middle_of_tile(at), room_view::middle_of_tile(g)))
-                r.at_position_but_cant_see_counter += 5;
-            else
-                --r.at_position_but_cant_see_counter;
-            r.at_position_but_cant_see_counter = custom::int_clamp(r.at_position_but_cant_see_counter, 0, 200);
-            r.last_best_guess = g;
-            if (!can_get_to_prey(state, l, room, g))
-                a.frustration = mathf::clamp(a.frustration + 0.0125f, 0.f, 1.f);
-            else
-                a.frustration = mathf::clamp(a.frustration - 0.0125f * 4.f, 0.f, 1.f);
-        }
-
-        // PreyTracker.Utility (PreyTracker(5, 2, 3, 70, 0.5))
-        float prey_utility(sys::game_state const& state, dcon::creature_id l, room_view const& room) {
-            auto const p = player_of(state, state.world.creature_get_seen_player(l));
-            if (!p)
-                return 0.f;
-            auto const rel = player_relationship(state, l, p);
-            if (!rel.eats)
-                return 0.f;
-            float const dist = mathf::max(0.01f, float_dist(here(state, l), best_guess(state, l)));
-            float const num = mathf::lerp(1.f - mathf::inverse_lerp(3.f, 70.f, dist), mathf::lerp(3.f, 70.f, 0.25f) / dist, 0.5f);
-            return mathf::min(num, chance_of_finding(state, l)) * mathf::pow(rel.intensity, 0.75f) * prey_reachable(state, l, room);
+            rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) {
+                if (o != l && creature::here(state, creature::of(o), room.id))
+                    hear(creature::of(o));
+            });
         }
 
         // LizardAI.LizardInjuryTracker.Utility
@@ -271,19 +244,36 @@ namespace lizard::ai {
                 // ignoreSeenNoises
                 if (sees_point(state, l, room, n.pos))
                     continue;
-                bool const from_prey = state.world.creature_get_seen_player(l) && rw::distance(n.pos, state.world.creature_get_last_seen_pos(l)) < custom::lerp_map(float(state.world.creature_get_ticks_since_seen(l)), 20.f, 600.f, 200.f, 1000.f);
-                if (!from_prey) {
+                // TheorizedSource: the noise of a creature it tracks when
+                // close to where it was last known to be (noises carry
+                // their source object here: its creature, if it tracks it)
+                creature::tracked const* source = nullptr;
+                auto const& ts = tracker::of(state, l);
+                for (uint32_t i = 0; i < ts.count && !source; ++i) {
+                    auto const& r = ts.reps[i];
+                    if (n.source && creature::body_of(state, r.who) == n.source)
+                        source = &r;
+                    else if (!n.source && rw::distance(n.pos, r.last_seen) < custom::lerp_map(float(r.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f))
+                        source = &r;
+                }
+                auto const* pr = prey_rep(state, l);
+                bool const from_prey = source && pr && source->who == pr->who;
+                if (source)
+                    // CreatureRepresentation.HeardThisCreature
+                    if (auto* r = tracker::find(tracker::of(state, l), source->who); r && r->ticks_since_seen > 10 + 5)
+                        r->ticks_since_seen = (r->ticks_since_seen - 10) / 2;
+                if (!source) {
                     a.mysterious_noises += 1.f;
                     a.mysterious_noise_counter = 200;
                     a.examining = true;
                     a.examine_pos = room_view::get_tile_position(n.pos);
                 }
                 // LizardAI.ReactToNoise
-                if (from_prey && b == breed::black) {
+                if (source && b == breed::black) {
                     z.bubble = std::max(z.bubble, 4);
-                } else if (from_prey && player_relationship(state, l, player_of(state, state.world.creature_get_seen_player(l))).eats) {
+                } else if (from_prey) {
                     enter_animation(state, l, animation::prey_re_spotted, false);
-                } else if (!from_prey && (behavior(state.world.creature_get_behavior(l)) == behavior::idle || behavior(state.world.creature_get_behavior(l)) == behavior::investigate_sound || behavior(state.world.creature_get_behavior(l)) == behavior::lurk)) {
+                } else if (!source && (behavior(state.world.creature_get_behavior(l)) == behavior::idle || behavior(state.world.creature_get_behavior(l)) == behavior::investigate_sound || behavior(state.world.creature_get_behavior(l)) == behavior::lurk)) {
                     enter_animation(state, l, animation::hear_sound, false);
                 } else {
                     make_sound(state, l, emotion::general_small_noise);
@@ -404,19 +394,23 @@ namespace lizard::ai {
             s.want_to_spit = false;
             if (behavior(state.world.creature_get_behavior(l)) == behavior::flee || behavior(state.world.creature_get_behavior(l)) == behavior::travelling || behavior(state.world.creature_get_behavior(l)) == behavior::escape_rain)
                 return;
-            auto const p = player_of(state, state.world.creature_get_seen_player(l));
-            if (!p || !player_relationship(state, l, p).eats)
+            auto const* pr = prey_rep(state, l);
+            if (!pr)
                 return;
-            ivec2 const g = best_guess(state, l);
+            auto const p = pr->who;
+            bool const sees = pr->visual != 0;
+            ivec2 const g = tracker::best_guess(*pr);
             ivec2 const at = here(state, l);
             if (float_dist(g, at) < 6.f)
                 return;
             if (at_spit_pos(state, l)) {
                 if (behavior(state.world.creature_get_behavior(l)) == behavior::go_to_spit_pos)
                     s.spitting = true;
-                if (!state.world.creature_get_sees_player(l) && player_here(state, p, room.id)
-                && room.visual_contact(chunk_pos(state, l, 0), w.body_chunk_get_pos(player::body_chunk(state, p, uint32_t(rng.range(0, 2))))))
-                    see_player(state, l, p);
+                if (!sees && creature::here(state, p, room.id)) {
+                    uint32_t const n = creature::chunk_count_of(state, p);
+                    if (room.visual_contact(chunk_pos(state, l, 0), w.body_chunk_get_pos(creature::chunk_of(state, p, uint32_t(rng.range(0, int32_t(n)))))))
+                        see(state, l, p);
+                }
             }
             if (s.random_cycle < 0)
                 s.want_to_spit = true;
@@ -436,7 +430,7 @@ namespace lizard::ai {
             if ((s.want_to_spit && s.random_cycle >= 0) || (alt > 4 && float_dist(at, g) > 20.f - float(alt))) {
                 s.want_to_spit = false;
                 if (pathing::tile_access(room, g) >= access::climb) {
-                    vec2 const danger = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
+                    vec2 const danger = creature::main_pos(state, p);
                     float const side = mathf::sign(danger.x - chunk_pos(state, l, 0).x);
                     for (int k = 0; k < 2 && !s.want_to_spit; ++k) {
                         vec2 d = danger;
@@ -472,11 +466,11 @@ namespace lizard::ai {
             }
             if (spit_from_pos_score(state, l, room, s.temp_spit_from_pos) > spit_from_pos_score(state, l, room, s.spit_from_pos) + 10.f)
                 s.spit_from_pos = s.temp_spit_from_pos;
-            if (!player_here(state, p, room.id))
+            if (!creature::here(state, p, room.id))
                 return;
             if (s.wanna_spit_counter > 100 && !at_spit_pos(state, l))
                 return;
-            if (s.wanna_spit_counter <= 100 && !state.world.creature_get_sees_player(l))
+            if (s.wanna_spit_counter <= 100 && !sees)
                 return;
             s.spitting = true;
             s.general_aim_up = mathf::lerp(s.general_aim_up, mathf::lerp(rng.value(), 0.5f, rng.value()), 0.003f);
@@ -501,14 +495,18 @@ namespace lizard::ai {
             rooms::for_each_creature(state, room.id, ::creature::type::lizard, [&](dcon::creature_id o) {
                 if (o == l || breed_of(state, o) != breed_of(state, l) || !consious(state, o))
                     return;
-                // PackMemberIsSeeingCreature: what a pack member sees and this one doesn't
+                // PackMemberIsSeeingCreature: what a pack member hunts and
+                // sees and this one doesn't
                 auto& oa = w.lizard_data_get_ai(creature::lizard_data(w, o));
-                auto const p = player_of(state, w.creature_get_seen_player(o));
-                if (!p || !w.creature_get_sees_player(o) || (state.world.creature_get_seen_player(l) == w.creature_get_seen_player(o) && state.world.creature_get_sees_player(l)))
+                auto const* orep = prey_rep(state, o);
+                if (!orep || !orep->visual || !creature::here(state, orep->who, room.id))
+                    return;
+                auto const p = orep->who;
+                if (auto const* mine = rep_of(state, l, p); mine && mine->visual)
                     return;
                 // RecieveInfoOnCritter
-                see_player(state, l, p);
-                float const intensity = player_relationship(state, l, p).intensity;
+                see(state, l, p);
+                float const intensity = tracker::dynamic_relationship(state, l, p).intensity;
                 a.communicating = std::max(a.communicating, rng.range(3, int32_t(mathf::lerp(3.f, 50.f, intensity))));
                 oa.communicating = std::max(oa.communicating, rng.range(3, int32_t(mathf::lerp(3.f, 50.f, intensity))));
             });
@@ -585,17 +583,18 @@ namespace lizard::ai {
         }
 
         // LizardAI.AggressiveBehavior towards the slugcat
-        void aggressive_behavior(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::player_id p, float tongue_chance) {
+        void aggressive_behavior(sys::game_state& state, dcon::creature_id l, room_view const& room, creature::tracked const& target, float tongue_chance) {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
             auto& rng = w.creature_get_random(l);
             auto const& par = params_of(state, l);
-            a.casual_aggression = false;
-            state.world.creature_get_destination(l) = best_guess(state, l);
+            auto const p = target.who;
+            a.casual_aggression = creature::target{};
+            state.world.creature_get_destination(l) = tracker::best_guess(target);
             vec2 const head = chunk_pos(state, l, 0);
-            vec2 const prey = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
-            bool const seen = state.world.creature_get_sees_player(l) && player_here(state, p, room.id);
+            bool const seen = target.visual && creature::here(state, p, room.id);
+            vec2 const prey = seen ? creature::main_pos(state, p) : target.last_seen;
             if (z.anim == animation::prepare_to_lounge)
                 set_jaw_open(state, l, mathf::lerp(jaw_open(state, l), 0.2f, 0.2f));
             else if (z.anim == animation::lounge)
@@ -611,7 +610,7 @@ namespace lizard::ai {
                 set_jaw_open(state, l, mathf::clamp(jaw_open(state, l) + 0.1f, 0.f, 1.f));
             if (b == breed::caramel && seen)
                 set_jaw_open(state, l, mathf::clamp(jaw_open(state, l) + 0.01f, 0.f, 0.5f));
-            a.focus = true;
+            a.focus = p;
             if (!seen)
                 return;
             ivec2 const at = here(state, l);
@@ -622,14 +621,15 @@ namespace lizard::ai {
                 enter_animation(state, l, animation::prepare_to_lounge, false);
             } else if (par.tongue && tongue_ready(state, l) && !grasped(state, l) && custom::dist_less(head, prey, par.tongue_attack_range)
             && !custom::dist_less(head, prey, mathf::lerp(par.attempt_bite_radius, par.tongue_attack_range, 0.2f))
-            && (physics::object_submersion(state, room, body(state, l)) < 0.5f || physics::object_submersion(state, room, player::body(state, p)) < 0.5f)
+            && (physics::object_submersion(state, room, body(state, l)) < 0.5f || physics::object_submersion(state, room, creature::body_of(state, p)) < 0.5f)
             && rng.value() < par.tongue_chance * tongue_chance) {
                 enter_animation(state, l, animation::shoot_tongue, false);
             }
-            if (a.rep.age > 120 && jaw_ready_for_bite(state, l)) {
+            if (target.age > 120 && jaw_ready_for_bite(state, l)) {
                 ++a.attempt_bite_frames;
-                for (uint32_t i = 0; i < 2; ++i)
-                    if (custom::dist_less(w.body_chunk_get_pos(player::body_chunk(state, p, i)), head, par.attempt_bite_radius)) {
+                uint32_t const n = creature::chunk_count_of(state, p);
+                for (uint32_t i = 0; i < n; ++i)
+                    if (custom::dist_less(w.body_chunk_get_pos(creature::chunk_of(state, p, i)), head, par.attempt_bite_radius)) {
                         attempt_bite(state, l, p);
                         return;
                     }
@@ -640,9 +640,22 @@ namespace lizard::ai {
             a.attempt_bite_frames = 0;
         }
 
+        // LizardAI.TravelUtility
+        float travel_utility(sys::game_state const& state, dcon::creature_id l, room_view const& room) {
+            if (!migrate::want_to(state, l))
+                return 0.f;
+            float const num = migrate::attraction(state, l, room.id);
+            float const num2 = migrate::attraction(state, l, migrate::destination(state, l));
+            if (num > num2)
+                return 0.f;
+            float const num3 = mathf::lerp(0.99f, 0.1f, mathf::pow(num, 0.25f));
+            return num == num2 ? num3 * 0.5f : num3;
+        }
+
         // LizardAI.DetermineBehavior
-        behavior determine_behavior(sys::game_state& state, dcon::creature_id l) {
+        behavior determine_behavior(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& a = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l));
+            auto const& ts = tracker::of(state, l);
             behavior b = behavior::idle;
             state.world.creature_get_current_utility(l) = a.u.best_utility;
             switch (a.u.best) {
@@ -661,14 +674,20 @@ namespace lizard::ai {
                 state.world.creature_get_current_utility(l) = 0.05f;
                 b = behavior::idle;
             }
-            if (b != behavior::flee && grasped(state, l) && player_relationship(state, l, grasped(state, l)).eats) {
+            if (auto const g = grasped(state, l); b != behavior::flee && g && tracker::dynamic_relationship(state, l, g).type == creature::rel::eats) {
                 b = behavior::return_prey;
                 state.world.creature_get_current_utility(l) = 1.f;
             }
-            if (b == behavior::hunt && state.world.creature_get_seen_player(l) && a.frustration > 0.75f && breed_of(state, l) != breed::red
-            && chance_of_finding(state, l) > 0.4f && custom::dist_less(chunk_pos(state, l, 0), room_view::middle_of_tile(best_guess(state, l)), 350.f))
+            auto const* pr = tracker::prey(ts);
+            if (b == behavior::hunt && pr && ts.frustration > 0.75f && breed_of(state, l) != breed::red
+            && chance_of_finding(*pr) > 0.4f && custom::dist_less(chunk_pos(state, l, 0), room_view::middle_of_tile(tracker::best_guess(*pr)), 350.f))
                 b = behavior::frustrated;
-            // (no migration: TravelUtility is 0)
+            float const travel = travel_utility(state, l, room);
+            if (b != behavior::return_prey && b != behavior::injured && b != behavior::escape_rain && b != behavior::flee && b != behavior::acting_out_mission
+            && state.world.creature_get_current_utility(l) < travel) {
+                state.world.creature_get_current_utility(l) = travel;
+                b = behavior::travelling;
+            }
             if ((breed_of(state, l) == breed::red || breed_of(state, l) == breed::caramel) && a.spit.go_to_spit_pos_counter > 0)
                 b = behavior::go_to_spit_pos;
             return b;
@@ -679,18 +698,24 @@ namespace lizard::ai {
         void compare_utilities(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
+            auto const& ts = tracker::of(state, l);
             breed const b = breed_of(state, l);
-            // threat: FloatTweenUpAndDown(lerp 0.5, tick), nothing threatens it here
+            // threat: FloatTweenUpAndDown(lerp 0.5 up, tick 1 / ((lastDistressLength + 20) * 3) down), weight 1
+            float const threat = tracker::threat_utility(ts);
             float const down = 1.f / ((float(a.last_distress_length) + 20.f) * 3.f);
-            a.u.threat = a.u.threat < 0.f ? mathf::lerp(a.u.threat, 0.f, 0.5f) : mathf::max(a.u.threat - down, 0.f);
+            a.u.threat = threat > a.u.threat ? mathf::lerp(a.u.threat, threat, 0.5f) : mathf::max(a.u.threat - down, threat);
             // prey: lerp 0.15, weight 0.6
-            a.u.prey = mathf::lerp(a.u.prey, prey_utility(state, l, room) * 0.6f, 0.15f);
+            a.u.prey = mathf::lerp(a.u.prey, tracker::prey_utility(state, l, room, here(state, l), tracker_params(b)) * 0.6f, 0.15f);
             float const injury = injury_utility(state, l) * (b == breed::red ? 0.4f : 0.9f);
+            // aggression: weight 0.25 * health in a story session
+            float const aggression = tracker::aggression_utility(ts) * 0.25f * w.creature_get_health(l);
+            // MissionTracker.LeaveRoom: 0.4 while it lasts, weight 0.8
+            float const mission = a.leave_room > 0 ? 0.4f * 0.8f : 0.f;
             float const noise = noise_utility(state, l) * 0.2f;
             float const lurk = lurker(b) ? lurk_utility(state, l, room) * mathf::lerp(0.4f, 0.3f, w.creature_get_payload(l).lizard.energy) : 0.f;
             // rain: weight 0.9 (FriendTracker.CareAboutRain: no friend to stay with)
             a.u.rain = dens::rain_utility(state, l, room.id) * 0.9f;
-            float const values[] = {a.u.threat, a.u.prey, a.u.rain, injury, 0.f, 0.f, noise, 0.f, lurk};
+            float const values[] = {a.u.threat, a.u.prey, a.u.rain, injury, aggression, mission, noise, 0.f, lurk};
             float best = std::numeric_limits<float>::lowest();
             a.u.best = module::none;
             for (uint32_t i = 0; i < 9; ++i) {
@@ -703,15 +728,76 @@ namespace lizard::ai {
             }
             a.u.best_utility = best;
         }
+
+        // LizardAI.SendCommunication / RecieveCommunication between two
+        // lizards of the room: aggression makes the other angrier (or makes
+        // it submit, and leave the room), submission calms the sender
+        enum class communication : uint8_t { aggression, submission };
+        void receive_communication(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::creature_id other, communication signal);
+        void send_communication(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::creature_id other, communication signal) {
+            auto& w = state.world;
+            if (!w.creature_is_valid(other) || w.creature_get_dead(other) || rooms::room_of(state, other) != room.id)
+                return;
+            auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
+            auto& rng = w.creature_get_random(l);
+            a.focus = creature::of(other);
+            auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
+            // (graphicsModule != null: rolled either way)
+            float const r = rng.value();
+            if (signal == communication::aggression) {
+                if (state.viewed(room.id))
+                    g.show_dominance += r;
+                make_sound(state, l, emotion::dominance);
+            } else {
+                if (state.viewed(room.id))
+                    g.show_dominance -= r;
+                make_sound(state, l, emotion::submission);
+            }
+            receive_communication(state, other, room, l, signal);
+        }
+        void receive_communication(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::creature_id other, communication signal) {
+            auto& w = state.world;
+            if (!sees_chunk(state, l, room, chunk(state, other, 0)))
+                return;
+            auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
+            auto& rng = w.creature_get_random(l);
+            auto const ot = creature::of(other);
+            a.focus = ot;
+            if (signal == communication::aggression) {
+                auto const& oa = w.lizard_data_get_ai(creature::lizard_data(w, other));
+                if (oa.submitted_to == creature::of(l))
+                    return;
+                if (a.submitted_to != ot)
+                    tracker::increment_anger(state, l, ot, 0.1f);
+                if (rng.value() < 0.041666668f) {
+                    send_communication(state, l, room, other, communication::submission);
+                    tracker::set_anger(state, l, ot, 0.f, 0.f);
+                    a.submitted_to = ot;
+                    // MissionTracker.LeaveRoom(0.4, 1000)
+                    a.leave_room = 1000;
+                }
+            } else {
+                tracker::set_anger(state, l, ot, 0.f, -1.f);
+            }
+        }
+
+        // LizardAI.DoIWantToBiteThisCreature
+        bool want_to_bite(sys::game_state& state, dcon::creature_id l, creature::tracked const& r) {
+            auto& rng = state.world.creature_get_random(l);
+            if (rng.value() < 0.1f && rng.value() > state.world.creature_get_health(l))
+                return true;
+            return r.rel.go_for_kill() || (rng.value() < 0.5f && r.rel.type == creature::rel::agressive_rival);
+        }
     }
 
-    dcon::player_id tracked(sys::game_state const& state, dcon::creature_id l) noexcept {
-        return player_of(state, state.world.creature_get_seen_player(l));
+    creature::target tracked(sys::game_state const& state, dcon::creature_id l) noexcept {
+        auto const* r = prey_rep(state, l);
+        return r ? r->who : creature::target{};
     }
 
-    dcon::player_id focus(sys::game_state const& state, dcon::creature_id l) noexcept {
-        auto const& a = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l));
-        return a.focus ? player_of(state, state.world.creature_get_seen_player(l)) : dcon::player_id{};
+    creature::target focus(sys::game_state const& state, dcon::creature_id l) noexcept {
+        auto const t = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).focus;
+        return t && tracker::find(state, l, t) ? t : creature::target{};
     }
 
     pathing::field_id field(sys::game_state& state, dcon::creature_id l, room_view const& room) {
@@ -764,37 +850,32 @@ namespace lizard::ai {
         return room.get_tile(f).water != 0 || f.y < 0 || f.y < tile.y - 20 || (f.y < tile.y - 10 && !reachable_and_getbackable(state, l, room, f));
     }
 
-    bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::player_id p, uint32_t k) {
-        auto const c = player::body_chunk(state, p, k);
-        return player_here(state, p, room.id) && physics::submersion(state, room, c) <= 0.5f
+    bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, room_view const& room, creature::target p, uint32_t k) {
+        if (!creature::here(state, p, room.id))
+            return false;
+        auto const c = creature::chunk_of(state, p, k);
+        return physics::submersion(state, room, c) <= 0.5f
             && (!unpleasant_fall_risk(state, l, room, here(state, l)) || !unpleasant_fall_risk(state, l, room, room_view::get_tile_position(state.world.body_chunk_get_pos(c))))
-            && player_relationship(state, l, p).go_for_kill();
+            && tracker::dynamic_relationship(state, l, p).go_for_kill();
     }
 
-    relationship player_relationship(sys::game_state const& state, dcon::creature_id l, dcon::player_id p) {
-        (void)p;
-        // (spears and vulture masks the slugcat carries: masks don't exist here)
-        float const num = like_of_player(state, l);
-        if (num < 0.5f)
-            return relationship{true, mathf::pow(mathf::inverse_lerp(0.5f, -1.f, num), params_of(state, l).aggression_curve_exponent)};
-        return relationship{false, 0.f};
-    }
-
-    void see_player(sys::game_state& state, dcon::creature_id l, dcon::player_id p) {
-        auto& w = state.world;
-        bool first = false, again = false;
-        if (w.creature_get_seen_player(l) != player_ref(p)) {
-            forget_player(state, l);
-            w.creature_set_seen_player(l, player_ref(p));
-            first = true;
-        } else if (!w.creature_get_sees_player(l)) {
-            again = true;
+    relationship relationship_to(sys::game_state const& state, dcon::creature_id l, creature::target t) {
+        // UpdateDynamicRelationship: the slugcat by how much it is liked
+        // (spears and vulture masks the slugcat carries: masks don't exist
+        // here), the rest by the static relationship (no friends)
+        if (t.is_player()) {
+            float const num = like_of_player(state, l);
+            if (num < 0.5f)
+                return relationship{creature::rel::eats, mathf::pow(mathf::inverse_lerp(0.5f, -1.f, num), params_of(state, l).aggression_curve_exponent)};
+            return relationship{creature::rel::ignores, 0.f};
         }
-        w.creature_set_sees_player(l, 1);
-        w.creature_set_ticks_since_seen(l, 0);
-        w.creature_set_last_seen_pos(l, w.body_chunk_get_pos(player::body_chunk(state, p, 0)));
-        if (first || again)
-            creature_spotted(state, l, first, p);
+        return creature::static_relationship(state, l, t);
+    }
+
+    void see(sys::game_state& state, dcon::creature_id l, creature::target t) {
+        auto const room = world::get_room_view(state, room_of(state, l));
+        ai_ctx x{state, l, room};
+        tracker::see(state, l, room, t, make_hooks(x));
     }
 
     void bit_creature(sys::game_state& state, dcon::creature_id l, room_view const& room) {
@@ -811,14 +892,15 @@ namespace lizard::ai {
         auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
         auto& s = a.spit;
         auto& rng = w.creature_get_random(l);
-        auto const p = player_of(state, state.world.creature_get_seen_player(l));
-        if (!p || !state.world.creature_get_sees_player(l))
+        auto const* pr = prey_rep(state, l);
+        if (!pr || !pr->visual || !creature::live(state, pr->who))
             return false;
-        uint32_t const k = uint32_t(rng.range(0, 2));
-        auto const c = player::body_chunk(state, p, k);
+        auto const p = pr->who;
+        uint32_t const k = uint32_t(rng.range(0, int32_t(creature::chunk_count_of(state, p))));
+        auto const c = creature::chunk_of(state, p, k);
         vec2 v = w.body_chunk_get_pos(c);
         vec2 const lead = v - w.body_chunk_get_last_pos(c);
-        s.aim_player = player_ref(p);
+        s.aim = p;
         s.aim_chunk = uint8_t(k);
         s.aim_up = s.general_aim_up + mathf::lerp(-0.15f, 0.15f, rng.value());
         vec2 const head = chunk_pos(state, l, 0);
@@ -844,6 +926,15 @@ namespace lizard::ai {
             s.general_aim_up = mathf::clamp(s.general_aim_up - 0.3f * mathf::inverse_lerp(0.f, 0.5f, s.general_aim_up) * state.world.creature_get_random(l).value(), 0.f, am);
     }
 
+    void collided(sys::game_state& state, dcon::creature_id l, creature::target t) {
+        // Lizard.Collide: seen, and a rival it hasn't submitted to angers it
+        see(state, l, t);
+        auto& a = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l));
+        auto const r = tracker::dynamic_relationship(state, l, t);
+        if (r.type == creature::rel::agressive_rival && a.submitted_to != t)
+            tracker::increment_anger(state, l, t, 0.05f * r.intensity);
+    }
+
     void reset(sys::game_state& state, dcon::creature_id l) {
         auto& w = state.world;
         auto& rng = w.creature_get_random(l);
@@ -856,6 +947,7 @@ namespace lizard::ai {
         a.spit.spit_from_pos = at;
         a.spit.temp_spit_from_pos = at;
         w.lizard_data_set_ai(creature::lizard_data(w, l), a);
+        tracker::clear(state, l);
     }
 
     void update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
@@ -868,6 +960,19 @@ namespace lizard::ai {
         if (a.panic > 0)
             --a.panic;
         ++a.time_in_room;
+        if (a.leave_room > 0)
+            --a.leave_room;
+        // AbstractBehavior(1): a chance to plan a trip to another room, more
+        // the less it likes this one (a Red lizard: 1 in 50)
+        {
+            float like = migrate::size_dependent_attraction(state, l, room.id);
+            rooms::for_each_creature(state, room.id, ::creature::type::lizard, [&](dcon::creature_id o) {
+                if (o != l)
+                    like *= 0.9f;
+            });
+            if (rng.value() < 1.f / (b == breed::red ? 50.f : custom::lerp_map(like, 0.35f, 1.f, 10.f, 1000.f)))
+                migrate::abstract_behavior(state, l, room);
+        }
         // SocialMemory.EvenOutAllTemps
         a.temp_like = a.temp_like > 0.f ? mathf::max(0.f, a.temp_like - 0.0005f) : mathf::min(0.f, a.temp_like + 0.0005f);
         // the utilities as the comparer smoothed them last tick
@@ -880,18 +985,71 @@ namespace lizard::ai {
             a.last_distress_length = custom::int_clamp(a.last_distress_length + 1, 0, 500);
         else if (a.fear < 0.2f)
             a.last_distress_length = 0;
-        state.world.creature_set_behavior(l, uint8_t(determine_behavior(state, l)));
+        state.world.creature_set_behavior(l, uint8_t(determine_behavior(state, l, room)));
         set_jaw_open(state, l, jaw_open(state, l) - 0.01f);
-        auto const prey = player_of(state, state.world.creature_get_seen_player(l));
-        if (lurker(b) && behavior(state.world.creature_get_behavior(l)) == behavior::hunt && prey && a.run_speed < 0.1f && float_dist(here(state, l), best_guess(state, l)) > 17.f)
+        auto const& ts = tracker::of(state, l);
+        auto const* prey = tracker::prey(ts);
+        if (lurker(b) && behavior(state.world.creature_get_behavior(l)) == behavior::hunt && prey && a.run_speed < 0.1f && float_dist(here(state, l), tracker::best_guess(*prey)) > 17.f)
             state.world.creature_set_behavior(l, uint8_t(behavior::lurk));
         ivec2 const at = here(state, l);
+        ai_ctx hx{state, l, room};
+        tracker::hooks const h = make_hooks(hx);
         // DenFinder: the pipe home (only asked for by the behaviours heading there)
         auto const den_tile = [&] { return dens::home_tile(state, l, room); };
         switch (behavior(state.world.creature_get_behavior(l))) {
+        case behavior::flee: {
+            // ThreatTracker.FleeTo (within the room)
+            state.world.creature_get_destination(l) = tracker::flee_to(state, l, room, at, 5, 20, tracker_params(b), h);
+            if (tracker::threat_of_tile(ts, at, 10) > 1.f) {
+                a.panic = a.panic < 40 ? 40 : a.panic + 2;
+                if (rng.value() < 0.05f)
+                    if (auto const* th = tracker::threat(ts); th && float_dist(tracker::best_guess(*th), at) < 15.f)
+                        enter_animation(state, l, animation::threat_spotted, false);
+            }
+            // CombinedFear: the fear and the rain's
+            a.run_speed = mathf::lerp(a.run_speed, mathf::pow(mathf::max(a.fear, mathf::pow(a.rain_fear, 3.f)), 0.1f), 0.5f);
+            a.focus = ts.threat;
+            break;
+        }
+        case behavior::travelling:
+            a.run_speed = mathf::lerp(a.run_speed, 0.5f + 0.5f * travel_utility(state, l, room), 0.01f);
+            if (auto const t = migrate::travel_tile(state, l, room))
+                state.world.creature_get_destination(l) = *t;
+            break;
+        case behavior::acting_out_mission:
+            // MissionTracker.LeaveRoom: the way out of the room
+            if (!migrate::want_to(state, l))
+                migrate::move_to_more_attractive_neighbor(state, l, room);
+            if (auto const t = migrate::travel_tile(state, l, room))
+                state.world.creature_get_destination(l) = *t;
+            a.run_speed = mathf::lerp(a.run_speed, 0.8f, 0.1f);
+            break;
+        case behavior::fighting:
+            a.focus = ts.aggression;
+            if (auto const* f = tracker::aggression(ts)) {
+                vec2 const head = chunk_pos(state, l, 0);
+                auto const other = creature::as_creature(state, f->who);
+                bool const lizard = other && creature::type_of(w, other) == ::creature::type::lizard;
+                vec2 const fp = creature::main_pos(state, f->who);
+                if (f->visual && creature::here(state, f->who, room.id) && custom::dist_less(head, fp, 160.f)
+                && (!lizard || rw::distance(head, fp) < rw::distance(head, w.body_chunk_get_pos(chunk(state, other, 2))))) {
+                    if (rng.value() < 0.05f)
+                        enter_animation(state, l, animation::fighting_stance, false);
+                    a.run_speed = mathf::lerp(a.run_speed, 0.2f, 0.15f);
+                } else {
+                    a.run_speed = mathf::lerp(a.run_speed, 0.8f, 0.15f);
+                    if (rng.value() < 0.0055555557f)
+                        enter_animation(state, l, animation::fighting_stance, false);
+                }
+                if (lizard && rng.value() < 0.05f && rng.value() < f->rel.intensity)
+                    send_communication(state, l, room, other, communication::aggression);
+                if (auto const* f2 = tracker::aggression(tracker::of(state, l)))
+                    aggressive_behavior(state, l, room, *f2, 0.025f);
+            }
+            break;
         case behavior::hunt:
-            if (prey && player_relationship(state, l, prey).eats)
-                aggressive_behavior(state, l, room, prey, 1.f);
+            if (prey)
+                aggressive_behavior(state, l, room, *prey, 1.f);
             a.run_speed = mathf::lerp(a.run_speed, mathf::max(a.hunger, 0.3f), 0.1f);
             if (rng.value() < 0.0125f && b != breed::black)
                 make_sound(state, l, emotion::blood_lust);
@@ -948,11 +1106,11 @@ namespace lizard::ai {
             }
             if (rng.value() < 0.00125f)
                 make_sound(state, l, emotion::boredom);
-            a.focus = false;
+            a.focus = creature::target{};
             break;
         }
         case behavior::return_prey:
-            // (carried into the den, the slugcat is eaten: dens.hpp)
+            // (carried into the den, the prey is eaten: dens.hpp)
             if (auto const t = den_tile())
                 state.world.creature_get_destination(l) = *t;
             a.run_speed = mathf::lerp(a.run_speed, mathf::pow(mathf::max(a.fear, 0.5f), 0.5f), 0.1f);
@@ -971,7 +1129,7 @@ namespace lizard::ai {
                 make_sound(state, l, emotion::pain_idle, 1.f - w.creature_get_health(l));
             break;
         case behavior::frustrated:
-            a.focus = prey != dcon::player_id{};
+            a.focus = prey ? prey->who : creature::target{};
             a.run_speed = mathf::lerp(a.run_speed, 1.f, 0.5f);
             if (rng.value() < 0.1f || custom::manhattan_distance(at, state.world.creature_get_destination(l)) < 10) {
                 ivec2 const t{rng.range(0, room.width), rng.range(0, room.height)};
@@ -1015,24 +1173,29 @@ namespace lizard::ai {
         if (behavior(state.world.creature_get_behavior(l)) != behavior::idle && b == breed::red)
             a.run_speed = mathf::pow(a.run_speed, 0.7f);
         a.run_speed = mathf::max(a.run_speed, stuck_utility(state, l));
-        // casualAggressionTarget: biting at the slugcat close by, whatever it is doing
-        if (!grasped(state, l) && prey) {
-            bool const want = player_relationship(state, l, prey).go_for_kill() || (rng.value() < 0.1f && rng.value() > w.creature_get_health(l))
-                || (rng.value() > w.creature_get_health(l) && rng.value() < 0.05f);
-            if (want && state.world.creature_get_sees_player(l))
-                a.casual_aggression = true;
+        // casualAggressionTarget: biting at what is close by, whatever it is doing
+        if (!grasped(state, l) && ts.count > 0) {
+            auto const& r = ts.reps[rng.range(0, ts.count)];
+            vec2 const head = chunk_pos(state, l, 0);
+            auto const* cur = rep_of(state, l, a.casual_aggression);
+            if ((want_to_bite(state, l, r) || (rng.value() > w.creature_get_health(l) && rng.value() < 0.05f)) && r.visual && creature::here(state, r.who, room.id)
+            && (!cur || !creature::here(state, cur->who, room.id) || rw::distance(head, creature::main_pos(state, r.who)) < rw::distance(head, creature::main_pos(state, cur->who))))
+                a.casual_aggression = r.who;
         }
-        if (a.casual_aggression && prey && rng.value() < 0.5f && state.world.creature_get_sees_player(l) && player_here(state, prey, room.id)
-        && custom::dist_less(w.body_chunk_get_pos(player::body_chunk(state, prey, 0)), chunk_pos(state, l, 0), par.attempt_bite_radius))
-            attempt_bite(state, l, prey);
+        if (auto const* cur = rep_of(state, l, a.casual_aggression); cur && rng.value() < 0.5f && cur->visual && creature::here(state, cur->who, room.id)
+        && custom::dist_less(creature::main_pos(state, cur->who), chunk_pos(state, l, 0), par.attempt_bite_radius))
+            attempt_bite(state, l, cur->who);
         if ((b == breed::red || b == breed::caramel) && a.spit.spitting)
             enter_animation(state, l, animation::spit, false);
         // (the Blizzard's beam isn't ported)
 
-        // ArtificialIntelligence.Update: the modules, in the order LizardAI added them
-        tracker_update(state, l, room);
+        // ArtificialIntelligence.Update: the modules, in the order LizardAI
+        // added them (the tracker's together: Tracker, SuperHearing,
+        // PreyTracker, ThreatTracker, AgressionTracker, RelationshipTracker)
+        tracker::update(state, l, room, at, tracker_params(b), h);
+        if (b == breed::black)
+            super_hearing(state, l, room, h);
         noise_update(state, l, room);
-        prey_tracker_update(state, l, room);
         compare_utilities(state, l, room);
         stuck_update(state, l);
         if (lurker(b))

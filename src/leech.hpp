@@ -37,10 +37,10 @@ namespace leech {
     // Creature.Violence (+ Leech.Stun)
     void violence(sys::game_state& state, dcon::creature_id c, rw::vec2 momentum, float damage, float stun_bonus);
     // lets go of `p` if it is latched on to it
-    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p);
+    void release(sys::game_state& state, dcon::creature_id c, creature::target t);
 
     // the slugcat it is latched on to (grasps[0]), if any
-    dcon::player_id attached_to(sys::game_state const& state, dcon::creature_id c) noexcept;
+    creature::target attached_to(sys::game_state const& state, dcon::creature_id c) noexcept;
     // its school's size (LeechSchool.leeches.Count)
     uint32_t school_size(sys::game_state const& state, dcon::creature_id c);
 }

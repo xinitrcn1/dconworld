@@ -35,7 +35,7 @@ namespace daddy_graphics {
     void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
 
     // DaddyGraphics.TentOwnerFeelSomethingWithTentacle (the slugcat's index + 1)
-    void feel_something(sys::game_state& state, dcon::creature_id d, uint8_t player, rw::vec2 feel_pos);
+    void feel_something(sys::game_state& state, dcon::creature_id d, creature::target felt, rw::vec2 feel_pos);
     // DaddyGraphics.ReactToNoise: an eye turns to the noise's source
     void react_to_noise(sys::game_state& state, dcon::creature_id d, uint16_t source, rw::vec2 noise_pos, float strength);
 

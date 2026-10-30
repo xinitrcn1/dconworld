@@ -7,6 +7,7 @@
 
 #include "math.hpp"
 #include "player_types.hpp"
+#include "target_types.hpp"
 
 namespace leech {
     // CreatureTemplate.Type of the templates running Leech.cs: Leech, SeaLeech
@@ -18,15 +19,15 @@ namespace leech {
     };
     inline constexpr uint32_t variant_count = 3;
 
-    // LeechSchool.LeechPrey: a slugcat the school hunts (index + 1)
+    // LeechSchool.LeechPrey: a creature or slugcat the school hunts
     struct school_prey {
-        uint8_t player = 0;
+        creature::target who;
         // Creature.leechedOut, as far as this school is concerned
         uint8_t leeched_out = 0;
         int32_t forget_counter = 0;
         float bites_after_death = 1.f;
     };
-    // the slugcats a school can be after at once
+    // the prey a school can be after at once
     inline constexpr uint32_t max_prey = 4;
     struct school_prey_list {
         school_prey items[max_prey];

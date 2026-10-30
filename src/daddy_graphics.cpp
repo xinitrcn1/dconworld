@@ -313,14 +313,14 @@ namespace daddy_graphics {
             uint32_t const n = daddy::chunk_count(state, d);
             auto& e = g.eyes[index];
             bool flag = false;
-            if (w.creature_get_seen_player(d) != 0) {
+            if (ai.seen) {
                 flag = true;
                 r.range(0, 1);
                 for (uint32_t k = 0; k < n && flag; ++k)
-                    if (g.eyes[k].creature_player == w.creature_get_seen_player(d))
+                    if (g.eyes[k].creature_seen == ai.seen)
                         flag = false;
                 if (flag) {
-                    e.creature_player = w.creature_get_seen_player(d);
+                    e.creature_seen = ai.seen;
                     e.light = mathf::max(0.75f, e.light);
                 }
             }
@@ -359,15 +359,14 @@ namespace daddy_graphics {
                     look = s->pos;
                 if (s == nullptr || s->slated_for_deletion)
                     e.sound_source = 0;
-            } else if (e.creature_player != 0) {
-                auto const p = daddy::detail::player_of(state, e.creature_player);
-                if (p && w.creature_get_seen_player(d) == e.creature_player) {
-                    if (w.creature_get_sees_player(d))
-                        look = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
+            } else if (bool(e.creature_seen)) {
+                if (creature::live(state, e.creature_seen) && ai.seen == e.creature_seen) {
+                    if (ai.sees)
+                        look = creature::main_pos(state, e.creature_seen);
                     else
-                        look = room_view::middle_of_tile(room_view::get_tile_position(w.creature_get_last_seen_pos(d)));
+                        look = room_view::middle_of_tile(room_view::get_tile_position(ai.last_seen_pos));
                 } else {
-                    e.creature_player = 0;
+                    e.creature_seen = creature::target{};
                 }
             }
             float num = 0.f;
@@ -796,7 +795,7 @@ namespace daddy_graphics {
                 float num3 = rw::dot(custom::dir_vec(middle, w.body_chunk_get_pos(chunk(state, d, i))), custom::dir_vec(middle, at));
                 if (g.eyes[i].sound_source != 0)
                     num3 -= 1.f;
-                if (g.eyes[i].creature_player != 0)
+                if (bool(g.eyes[i].creature_seen))
                     num3 -= 2.f;
                 if (num3 > best) {
                     best = num3;
@@ -807,7 +806,7 @@ namespace daddy_graphics {
         }
     }
 
-    void feel_something(sys::game_state& state, dcon::creature_id d, uint8_t player, vec2 feel_pos) {
+    void feel_something(sys::game_state& state, dcon::creature_id d, creature::target felt, vec2 feel_pos) {
         auto& w = state.world;
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         if (g.feel_something_reaction_delay > 0)
@@ -820,7 +819,7 @@ namespace daddy_graphics {
         auto& e = g.eyes[pick_eye(state, d, feel_pos)];
         // Eye.ReactToCreature
         e.sound_source = 0;
-        e.creature_player = player;
+        e.creature_seen = felt;
         e.light = mathf::max(e.light, w.creature_get_graphics_random(d).value());
     }
 
@@ -833,19 +832,19 @@ namespace daddy_graphics {
         uint32_t const idx = pick_eye(state, d, noise_pos);
         auto& e = g.eyes[idx];
         // Eye.ReactToSound
-        e.creature_player = 0;
+        e.creature_seen = creature::target{};
         e.sound_source = source;
         e.light = 1.f;
         e.flash = 1.f;
         auto const* s = daddy::detail::source(ai, source);
-        uint8_t const rep = s != nullptr ? s->player : 0;
+        creature::target const rep = s != nullptr ? s->who : creature::target{};
         float num4 = 0.5f;
-        if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::hunt && w.creature_get_seen_player(d) != 0)
-            num4 = w.creature_get_seen_player(d) == rep ? 1.f : 0.2f;
+        if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::hunt && ai.seen)
+            num4 = ai.seen == rep ? 1.f : 0.2f;
         else if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::examine_sound && ai.noise.sound_to_examine != 0)
             num4 = ai.noise.sound_to_examine == source ? 1.f : 0.2f;
         num4 = mathf::clamp01((num4 + mathf::inverse_lerp(150.f, 400.f, strength) + num4) / 3.f);
-        if (rep != 0 && w.creature_get_sees_player(d))
+        if (rep && ai.sees)
             num4 *= 0.1f;
         if (num4 * 40.f > float(g.reaction_sound_delay)) {
             // (the DaddyBubbles and DaddyRipple it lets out aren't ported, nor

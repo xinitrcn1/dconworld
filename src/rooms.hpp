@@ -36,6 +36,14 @@ namespace rooms {
     inline bool reachable(sys::game_state const& state, dcon::player_id p) noexcept {
         return !state.parallel || room_of(state, p) == updating;
     }
+    // the same for a creature: in the updating room, or in its pipes or dens
+    inline bool reachable(sys::game_state const& state, dcon::creature_id c) noexcept {
+        if (!state.parallel)
+            return true;
+        if (state.world.creature_get_away(c) != 0)
+            return state.world.creature_get_away_room(c) == updating;
+        return room_of(state, c) == updating;
+    }
 
     namespace detail {
         template<typename ID, typename All, typename F>

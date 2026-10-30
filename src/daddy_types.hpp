@@ -11,6 +11,7 @@
 
 #include "math.hpp"
 #include "player_types.hpp"
+#include "target_types.hpp"
 #include "world_types.hpp"
 
 namespace daddy {
@@ -100,15 +101,15 @@ namespace daddy {
         rw::vec2 preliminary_grab_dest{0.f, 0.f};
         rw::vec2 ideal_grab_pos{0.f, 0.f};
         uint8_t needed_for_locomotion = 0;
-        // huntCreature: the tracked slugcat (player index + 1, 0 none)
-        uint8_t hunt_player = 0;
+        // huntCreature: the creature or slugcat it tracks
+        creature::target hunt;
         // checkSound: the noise source's id (0 none)
         uint16_t check_sound = 0;
         int32_t sound_check_counter = 0;
         int32_t sound_check_timer = 0;
         std::optional<rw::vec2> examine_sound_pos;
-        // grabChunk: a slugcat's chunk (player index + 1, 0 none)
-        uint8_t grab_player = 0;
+        // grabChunk: a creature's or slugcat's chunk
+        creature::target grab;
         uint8_t grab_chunk = 0;
         float sticky = 0.f;
         task current = task::none;
@@ -141,9 +142,9 @@ namespace daddy {
         float leg_pos = 0.f;
     };
 
-    // DaddyLongLegs.EatObject: a slugcat's chunk pulled into the body
+    // DaddyLongLegs.EatObject: a creature's or slugcat's chunk pulled into the body
     struct eat_object {
-        uint8_t player = 0; // index + 1
+        creature::target who;
         uint8_t chunk = 0;
         float distance = 0.f;
         float progression = 0.f;
@@ -176,7 +177,7 @@ namespace daddy {
         rw::vec2 pos{0.f, 0.f};
         int32_t age = 0;
         uint16_t id = 0;
-        uint8_t player = 0; // creatureRep: player index + 1
+        creature::target who; // creatureRep
         uint8_t slated_for_deletion = 0;
     };
     struct noise_tracker {
@@ -189,12 +190,16 @@ namespace daddy {
         int32_t forget_time = 320;
     };
 
-    // DaddyAI with its Tracker (one representation: the slugcat its
-    // tentacles felt, a blind creature sees nothing else), PreyTracker and
-    // NoiseTracker. The behavior, the destination and the Tracker's
-    // representation (the slugcat, felt this tick, ticks since and where)
-    // are the creature's
+    // DaddyAI with its Tracker, PreyTracker and NoiseTracker. A blind
+    // creature knows only what its tentacles feel (and hears): one
+    // representation here, the creature or slugcat it hunts (felt this
+    // tick, ticks since, where); the behavior and destination are the
+    // creature's
     struct ai_state {
+        creature::target seen;
+        uint8_t sees = 0;
+        int32_t ticks_since_seen = 0;
+        rw::vec2 last_seen_pos{0.f, 0.f};
         int32_t new_idle_pos_counter = 0;
         // the goal of the field it follows (see daddy.cpp's destination_field)
         rw::ivec2 path_goal{0, 0};
@@ -220,7 +225,7 @@ namespace daddy {
         float last_closed = 0.f;
         int32_t eyes_closed_delay = 0;
         uint16_t sound_source = 0;
-        uint8_t creature_player = 0;
+        creature::target creature_seen;
         float light = 0.f;
         float flash = 0.f;
         // the JaggedCircle's rim, rolled once (the shader's noise)

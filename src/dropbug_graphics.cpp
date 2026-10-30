@@ -178,8 +178,8 @@ namespace dropbug_graphics {
         float const body_deg = custom::aim(p1, p0);
         vec2 const fwd = custom::dir_vec(p1, p0);
         std::optional<vec2> held;
-        if (auto const p = dropbug::grasped(state, d))
-            held = w.body_chunk_get_pos(player::body_chunk(state, p, w.creature_get_grasp_chunk(d)[0]));
+        if (auto const p = dropbug::grasped(state, d); p && creature::live(state, p))
+            held = w.body_chunk_get_pos(creature::chunk_of(state, p, creature::grasp_chunk(w, d, 0)));
         float const still = g.deep_ceiling_mode * mathf::pow(1.f - anticipation, 3.f);
         for (int m = 0; m < 2; ++m) {
             float const side = m == 0 ? -1.f : 1.f;

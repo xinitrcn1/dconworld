@@ -54,6 +54,12 @@ namespace dens {
     void build_route(sys::game_state& state, dcon::room_id home);
     // the pipe entrance of a room's den node, of the exit leading to `next`
     std::optional<rw::ivec2> den_entrance(sys::game_state const& state, dcon::room_id room, uint8_t den);
+    // the pipe entrance of the room exit node `node` of `room`
+    std::optional<rw::ivec2> exit_entrance(sys::game_state const& state, dcon::room_id room, uint8_t node);
+    // the room an exit of `from` leads to, if its pipe can be travelled
+    // both ways; gates and shelters only when `gates` (migrate.hpp's
+    // trips through a gate; creatures keep out of shelters)
+    dcon::room_id exit_target(sys::game_state const& state, dcon::room_exit_id e, dcon::room_id from, bool gates = false);
     // puts a creature (out in a room, at its den) straight into its den
     // (world load: AbstractRoom.MoveEntityToDen) to come out in `remain` ticks
     void put_in_den(sys::game_state& state, dcon::creature_id c, int32_t remain);
@@ -90,6 +96,7 @@ namespace dens {
         std::atomic<uint32_t> out_of_dens{0};
         std::atomic<uint32_t> room_changes{0};
         std::atomic<uint32_t> prey_taken{0};
+        std::atomic<uint32_t> creatures_eaten{0};
     };
     counters& stats() noexcept;
 }

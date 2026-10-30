@@ -11,6 +11,9 @@
 #include "pathing.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "migrate.hpp"
+#include "rooms.hpp"
+#include "tracker.hpp"
 
 namespace centipede {
     using rw::ivec2;
@@ -19,6 +22,7 @@ namespace centipede {
     using world::room_view;
     namespace custom = rw::custom;
     namespace mathf = rw::mathf;
+    using creature::relationship;
 
     char const* to_string(variant v) noexcept {
         switch (v) {
@@ -59,14 +63,6 @@ namespace centipede {
             }
         }
 
-        float object_mass(sys::game_state const& state, dcon::physical_object_id o) {
-            float m = 0.f;
-            state.world.physical_object_for_each_chunk_ownership_as_owner(o, [&](dcon::chunk_ownership_id co) {
-                m += state.world.body_chunk_get_mass(state.world.chunk_ownership_get_chunk(co));
-            });
-            return m;
-        }
-
         using creature::consious;
         using creature::room_of;
 
@@ -91,8 +87,8 @@ namespace centipede {
             return pl(state, c).variant == v;
         }
 
-        dcon::player_id grasped(sys::game_state const& state, dcon::creature_id c, int g) {
-            return creature::player_of(state, state.world.creature_get_grasp_player(c)[size_t(g)]);
+        creature::target grasped(sys::game_state const& state, dcon::creature_id c, int g) {
+            return creature::grasped(state.world, c, uint32_t(g));
         }
         dcon::player_id holder(sys::game_state const& state, dcon::creature_id c) {
             return creature::player_of(state, state.world.centipede_data_get_held_by(data(state, c)));
@@ -147,13 +143,7 @@ namespace centipede {
         }
 
         void release(sys::game_state& state, dcon::creature_id c, int g) {
-            auto& w = state.world;
-            if (auto const p = grasped(state, c, g)) {
-                uint8_t& n = w.physical_object_get_grabbed_by_count(player::body(state, p));
-                if (n > 0)
-                    --n;
-            }
-            w.creature_get_grasp_player(c)[size_t(g)] = 0;
+            creature::release_grasp(state, c, uint32_t(g));
         }
 
         void lose_all_grasps(sys::game_state& state, dcon::creature_id c) {
@@ -188,66 +178,101 @@ namespace centipede {
             return mathf::inverse_lerp(0.f, 5.9f, num);
         }
 
-        // CentipedeAI's relationship to a slugcat
-        // (IUseARelationshipTracker.UpdateDynamicRelationship): afraid of what
-        // outweighs it, else prey; the red centipede wants the heavy ones
-        // most, the centiwing is wary of a new slugcat and keeps away from
-        // one over a chasm
-        struct relationship {
-            bool eats = false;
-            float intensity = 0.f;
-        };
-        relationship relationship_to(sys::game_state const& state, dcon::creature_id c, dcon::player_id p) {
-            auto const& w = state.world;
-            if (w.player_get_dead(p))
-                return {};
+        // the tracker's settings (CentipedeAI's constructor)
+        tracker::params const& tracker_params(variant v) {
+            static tracker::params const normal = [] {
+                tracker::params p;
+                p.see_around_corners = 10;
+                p.frames_to_remember = -1;
+                p.ghost_dismissal_range = 20;
+                p.discard_dead_always = true;
+                p.prey_max = 5;
+                p.persistance_bias = 1.f;
+                p.sure_to_get = 5.f;
+                p.sure_to_lose = 150.f;
+                p.threat_max = 3;
+                return p;
+            }();
+            static tracker::params const red = [] {
+                tracker::params p = normal;
+                p.sure_to_get = 100.f;
+                return p;
+            }();
+            return v == variant::red ? red : normal;
+        }
+
+        // CentipedeAI.UpdateDynamicRelationship: afraid of what outweighs it,
+        // else prey; the red centipede wants the heavy ones most, the
+        // centiwing is wary of what it has just noticed and keeps away from
+        // what is over a chasm
+        relationship relationship_to(sys::game_state const& state, dcon::creature_id c, creature::tracked const& r) {
+            auto const st = creature::static_relationship(state, c, r.who);
+            if (st.type == creature::rel::ignores || !creature::live(state, r.who))
+                return st;
+            if (creature::dead(state, r.who))
+                return relationship{};
             float const mine = total_mass(state, c);
-            float const theirs = object_mass(state, player::body(state, p));
-            if (theirs >= mine)
-                return relationship{false, 0.2f + 0.8f * mathf::inverse_lerp(mine, mine * 1.5f, theirs)};
+            float const theirs = creature::mass_of(state, r.who);
+            if (st.type != creature::rel::eats || theirs >= mine)
+                return relationship{creature::rel::afraid, 0.2f + 0.8f * mathf::inverse_lerp(mine, mine * 1.5f, theirs)};
             switch (pl(state, c).variant) {
             case variant::wing: {
                 float num = mathf::pow(mathf::inverse_lerp(0.f, mine, theirs), 0.75f);
-                float const age = float(w.centipede_data_get_seen_age(data(state, c)));
-                num *= 1.f - over_chasm(world::get_room_view(state, room_of(state, c)), room_view::get_tile_position(w.creature_get_last_seen_pos(c)));
-                if (age < 300.f)
-                    return relationship{false, num * mathf::inverse_lerp(300.f, 0.f, age)};
-                return relationship{true, num * mathf::inverse_lerp(300.f, 800.f, age)};
+                num *= 1.f - over_chasm(world::get_room_view(state, room_of(state, c)), tracker::best_guess(r));
+                if (r.age < 300)
+                    return relationship{creature::rel::afraid, num * mathf::inverse_lerp(300.f, 0.f, float(r.age))};
+                return relationship{creature::rel::eats, num * mathf::inverse_lerp(300.f, 800.f, float(r.age))};
             }
             case variant::red:
-                return relationship{true, mathf::pow(mathf::inverse_lerp(0.f, mine, theirs), custom::lerp_map(theirs, 0.2f, 0.7f, 3.f, 0.1f))};
+                return relationship{creature::rel::eats, mathf::pow(mathf::inverse_lerp(0.f, mine, theirs), custom::lerp_map(theirs, 0.2f, 0.7f, 3.f, 0.1f)) * st.intensity};
             default:
-                return relationship{true, mathf::inverse_lerp(0.f, mine, theirs)};
+                return relationship{creature::rel::eats, mathf::inverse_lerp(0.f, mine, theirs) * st.intensity};
             }
         }
 
+        // CentipedeAI.ModuleToTrackRelationship: Antagonizes is prey too
+        creature::track_module module_of(relationship r) noexcept {
+            if (r.type == creature::rel::antagonizes)
+                return creature::track_module::prey;
+            return tracker::module_without_aggression(r);
+        }
+
         // CentipedeAI.DoIWantToShockCreature
-        bool want_to_shock(sys::game_state const& state, dcon::creature_id c, dcon::player_id p) {
+        bool want_to_shock(sys::game_state const& state, dcon::creature_id c, creature::target t) {
             auto const& w = state.world;
             auto const behavior = world::centipede_behavior(w.creature_get_behavior(c));
             if (pl(state, c).annoying_collisions < 150 && (behavior == centipede_behavior::flee || behavior == centipede_behavior::escape_rain) && w.creature_get_current_utility(c) > 0.1f)
                 return false;
-            if (w.player_get_dead(p))
+            if (!creature::live(state, t) || creature::dead(state, t))
                 return false;
-            // (one slugcat's own annoyance isn't kept apart from the rest)
-            if (!is(state, c, variant::small) && pl(state, c).annoying_collisions > 150)
+            auto const* r = tracker::find(state, c, t);
+            if (!is(state, c, variant::small) && pl(state, c).annoying_collisions > 150
+            && (!r || float(r->state) > mathf::lerp(210.f, 30.f, pl(state, c).size) * w.creature_get_health(c)))
                 return true;
-            return relationship_to(state, c, p).eats;
+            if (r)
+                return r->rel.type == creature::rel::eats;
+            return creature::static_relationship(state, c, t).type == creature::rel::eats;
         }
 
-        // CentipedeAI.AnnoyingCollision
-        void annoying_collision(sys::game_state& state, dcon::creature_id c, dcon::player_id p) {
-            if (state.world.player_get_dead(p) || is(state, c, variant::small))
+        // CentipedeAI.AnnoyingCollision (CentipedeTrackState.annoyingCollisions
+        // is the representation's `state`)
+        void annoying_collision(sys::game_state& state, dcon::creature_id c, creature::target t) {
+            if (creature::dead(state, t) || is(state, c, variant::small))
                 return;
             pl(state, c).annoying_collisions += 10;
+            if (pl(state, c).annoying_collisions < 150)
+                return;
+            if (auto* r = tracker::find(tracker::of(state, c), t); r && r->state < 255)
+                ++r->state;
         }
 
         // Centipede.Shock
-        void shock(sys::game_state& state, dcon::creature_id c, dcon::player_id p) {
+        void shock(sys::game_state& state, dcon::creature_id c, creature::target p) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
             auto const room = room_of(state, c);
             uint32_t const n = chunk_count(state, c);
+            auto const me = creature::template_of(state, c);
             state.play_sound(sound::sound_id::centipede_shock, room, pos(state, c, n / 2));
             // (the sparks are the shock sound's, particles.cpp)
             w.centipede_data_set_light_flash(data(state, c), 1.f);
@@ -259,42 +284,103 @@ namespace centipede {
             };
             for (uint32_t i = 0; i < n; ++i)
                 jolt(chunk(state, c, i));
-            for (uint32_t i = 0; i < 2; ++i)
-                jolt(player::body_chunk(state, p, i));
-            float const theirs = object_mass(state, player::body(state, p));
+            uint32_t const m = creature::chunk_count_of(state, p);
+            for (uint32_t i = 0; i < m; ++i)
+                jolt(creature::chunk_of(state, p, i));
+            float const theirs = creature::mass_of(state, p);
             float const mine = total_mass(state, c);
+            // Creature.LoseAllGrasps of what was shocked
+            auto const lose_all = [&] {
+                if (auto const pp = creature::as_player(state, p))
+                    items::release_all(state, pp);
+                else if (auto const o = creature::as_creature(state, p))
+                    creature::release_all(state, o, room);
+            };
             switch (pl(state, c).variant) {
-            case variant::aqua:
+            case variant::aqua: {
                 // Violence(Electric, 2, 200): a slugcat's instantDeathDamageLimit
-                // is 1 (the UnderwaterShock through the water isn't ported)
-                player::stun(state, p, int32_t((2.f * 30.f + 200.f) / 1.f));
-                player::die(state, p);
-                items::release_all(state, p);
+                // is 1; and the UnderwaterShock through the water around it
+                creature::violence_on(state, p, creature::main_chunk_of(state, p), vec2{0.f, 0.f}, 2.f, 200.f, creature::damage_type::electric, me);
+                lose_all();
+                auto const view = world::get_room_view(state, room);
+                bool submerged = false;
+                for (uint32_t i = 0; i < m && !submerged; ++i)
+                    submerged = physics::submersion(state, view, creature::chunk_of(state, p, i)) > 0.f;
+                if (submerged) {
+                    w.centipede_data_set_underwater_shock(data(state, c), 0);
+                    w.centipede_data_set_underwater_shock_pos(data(state, c), pos(state, c, head_index(state, c)));
+                }
                 return;
+            }
             case variant::small:
-                player::stun(state, p, 120);
-                items::release_all(state, p);
+                creature::stun_target(state, p, 120);
+                lose_all();
                 return;
             default:
                 break;
             }
             if (theirs < mine) {
-                player::die(state, p);
-                items::release_all(state, p);
+                creature::kill(state, p, me);
+                lose_all();
             } else {
-                player::stun(state, p, int32_t(custom::lerp_map(theirs, 0.f, mine * 2.f, 300.f, 30.f)));
-                items::release_all(state, p);
+                creature::stun_target(state, p, int32_t(custom::lerp_map(theirs, 0.f, mine * 2.f, 300.f, 30.f)));
+                lose_all();
                 stun(state, c, 6);
                 pl(state, c).shock_give_up_counter = std::max(pl(state, c).shock_give_up_counter, 30);
                 pl(state, c).annoying_collisions = std::min(pl(state, c).annoying_collisions / 2, 150);
             }
         }
 
-        void grab(sys::game_state& state, dcon::creature_id c, int g, dcon::player_id p, uint32_t player_chunk) {
+        // UnderwaterShock (the aquapede's, 14 frames of radius 80 and 1
+        // damage): every creature and slugcat in the water around it,
+        // the aquapede aside
+        void underwater_shock(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            w.creature_get_grasp_player(c)[size_t(g)] = uint8_t(p.index() + 1);
-            w.creature_get_grasp_chunk(c)[size_t(g)] = uint8_t(player_chunk);
-            ++w.physical_object_get_grabbed_by_count(player::body(state, p));
+            auto const d = data(state, c);
+            int32_t const frame = w.centipede_data_get_underwater_shock(d);
+            if (frame < 0)
+                return;
+            constexpr int32_t life = 14;
+            constexpr float rad = 80.f, damage = 1.f;
+            vec2 const at = w.centipede_data_get_underwater_shock_pos(d);
+            float const r = rad * (0.25f + 0.75f * std::sin(mathf::inverse_lerp(0.f, float(life), float(frame)) * mathf::pi));
+            auto& rng = w.creature_get_random(c);
+            auto const me = creature::template_of(state, c);
+            auto const hit = [&](creature::target t) {
+                if (!creature::here(state, t, room.id))
+                    return;
+                uint32_t const n = creature::chunk_count_of(state, t);
+                bool any = false;
+                for (uint32_t i = 0; i < n; ++i)
+                    any = any || physics::submersion(state, room, creature::chunk_of(state, t, i)) > 0.f;
+                if (!any)
+                    return;
+                float num = 0.f;
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk_of(state, t, i);
+                    vec2 const kp = w.body_chunk_get_pos(k);
+                    if (custom::dist_less(at, kp, r))
+                        num = mathf::max(num, custom::lerp_map(rw::distance(at, kp), r / 2.f, r, 1.f, 0.f, 0.5f) * physics::submersion(state, room, k));
+                }
+                if (w.room_get_is_shelter(room.id) || num <= 0.f)
+                    return;
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk_of(state, t, i);
+                    w.body_chunk_get_vel(k) += rnv(rng) * num * mathf::min(5.f, w.body_chunk_get_rad(k));
+                }
+                creature::violence_on(state, t, uint32_t(rng.range(0, int32_t(n))), vec2{0.f, 0.f}, damage * num, damage * num * 240.f + 30.f,
+                    creature::damage_type::electric, me);
+            };
+            rooms::for_each_player(state, room.id, [&](dcon::player_id p) { hit(creature::of(p)); });
+            rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) {
+                if (o != c)
+                    hit(creature::of(o));
+            });
+            w.centipede_data_set_underwater_shock(d, frame + 1 > life ? -1 : frame + 1);
+        }
+
+        void grab(sys::game_state& state, dcon::creature_id c, int g, creature::target p, uint32_t k) {
+            creature::grab(state, c, uint32_t(g), p, k);
             uint32_t const end = g == 0 ? 0 : chunk_count(state, c) - 1;
             state.play_sound(sound::sound_id::centipede_attach, room_of(state, c), pos(state, c, end));
         }
@@ -303,8 +389,11 @@ namespace centipede {
         void update_grasp(sys::game_state& state, dcon::creature_id c, int g) {
             auto& w = state.world;
             auto const p = grasped(state, c, g);
-            if (!p) {
-                w.creature_get_grasp_player(c)[size_t(g)] = 0;
+            if (!p)
+                return;
+            auto const room = room_of(state, c);
+            if (!creature::here(state, p, room) || creature::grasp_chunk(w, c, uint32_t(g)) >= creature::chunk_count_of(state, p)) {
+                release(state, c, g);
                 return;
             }
             if (w.creature_get_random(c).value() < 0.025f && (!want_to_shock(state, c, p) || !consious(state, c) || grasped(state, c, 1 - g))) {
@@ -313,7 +402,7 @@ namespace centipede {
             }
             uint32_t const n = chunk_count(state, c);
             auto const end = chunk(state, c, g == 0 ? 0 : n - 1);
-            auto const held = player::body_chunk(state, p, w.creature_get_grasp_chunk(c)[size_t(g)]);
+            auto const held = creature::chunk_of(state, p, creature::grasp_chunk(w, c, uint32_t(g)));
             vec2& ep = w.body_chunk_get_pos(end);
             vec2& hp = w.body_chunk_get_pos(held);
             float const num = rw::distance(ep, hp);
@@ -333,8 +422,9 @@ namespace centipede {
                 return;
             // the free end reaching the prey charges the shock
             auto const other = chunk(state, c, g != 0 ? 0 : n - 1);
-            for (uint32_t i = 0; i < 2; ++i) {
-                auto const k = player::body_chunk(state, p, i);
+            uint32_t const m = creature::chunk_count_of(state, p);
+            for (uint32_t i = 0; i < m; ++i) {
+                auto const k = creature::chunk_of(state, p, i);
                 vec2& op = w.body_chunk_get_pos(other);
                 vec2& kp = w.body_chunk_get_pos(k);
                 if (!custom::dist_less(op, kp, w.body_chunk_get_rad(other) + w.body_chunk_get_rad(k) + 10.f))
@@ -396,6 +486,44 @@ namespace centipede {
             return score > 0.05f;
         }
 
+        // the trackers' questions, answered by the centipede
+        struct hook_ctx {
+            sys::game_state& state;
+            dcon::creature_id c;
+            room_view const& room;
+        };
+        bool hook_sees(void* u, dcon::body_chunk_id k) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return sees(x.state, x.c, x.room, x.state.world.body_chunk_get_pos(k));
+        }
+        bool hook_sees_point(void* u, vec2 p) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return sees(x.state, x.c, x.room, p);
+        }
+        relationship hook_relate(void* u, creature::tracked const& r) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return relationship_to(x.state, x.c, r);
+        }
+        // PathFinder.CoordinateReachableAndGetbackable, by the field to its
+        // destination: the tile leads there and so does the centipede
+        bool hook_reach(void* u, ivec2 t) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            if (!x.room.inside(t.x, t.y) || !pathing::accessible(x.room, t, movement(x.state, x.c)))
+                return false;
+            auto const f = pathing::field_to(x.state, x.room.id, x.state.world.creature_get_destination(x.c), movement(x.state, x.c));
+            return pathing::distance(x.state, f, t) != pathing::unreachable;
+        }
+        tracker::hooks make_hooks(hook_ctx& x) {
+            tracker::hooks h;
+            h.user = &x;
+            h.sees = hook_sees;
+            h.sees_point = hook_sees_point;
+            h.relate = hook_relate;
+            h.module = module_of;
+            h.reach = hook_reach;
+            return h;
+        }
+
         // CentipedeAI.IdleScore (no attractors, the other centipedes' spots
         // aren't taken into account)
         float idle_score(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 t) {
@@ -436,82 +564,63 @@ namespace centipede {
                 --pl(state, c).annoying_collisions;
             ivec2 const here = room_view::get_tile_position(pos(state, c, head_index(state, c)));
 
-            // tracker: the closest slugcat it can see
-            dcon::player_id prey;
-            float best = 1e9f;
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p))
-                    return;
-                vec2 const pp = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
-                float const dist = rw::distance(pp, pos(state, c, head_index(state, c)));
-                if (dist < best && sees(state, c, room, pp)) {
-                    best = dist;
-                    prey = p;
-                }
-            });
-            int32_t& since = w.creature_get_ticks_since_seen(c);
-            if (prey) {
-                if (w.creature_get_seen_player(c) != prey.index() + 1)
-                    w.centipede_data_set_seen_age(d, 0);
-                w.creature_set_seen_player(c, uint8_t(prey.index() + 1));
-                w.creature_set_last_seen_pos(c, w.body_chunk_get_pos(player::body_chunk(state, prey, 0)));
-                since = 0;
-            } else if (w.creature_get_seen_player(c)) {
-                if (++since > 1200)
-                    w.creature_set_seen_player(c, 0);
-            }
-            dcon::player_id tracked;
-            if (uint8_t const sp = w.creature_get_seen_player(c)) {
-                tracked = dcon::player_id{dcon::player_id::value_base_t(sp - 1)};
-                if (!w.player_is_valid(tracked) || !rooms::reachable(state, tracked))
-                    tracked = dcon::player_id{};
-            }
-            // Tracker.CreatureRepresentation.age
-            if (tracked)
-                ++w.centipede_data_get_seen_age(d);
-            else
-                w.centipede_data_set_seen_age(d, 0);
-
-            // UtilityComparer: prey (its weight follows how long ago it was
-            // seen, the red centipede's stays at 0.9), threat (1), rain (1),
-            // injury (0.7)
-            float prey_utility = 0.f, threat_utility = 0.f;
-            if (tracked) {
-                auto const rel = relationship_to(state, c, tracked);
-                float const dist = rw::distance(w.creature_get_last_seen_pos(c), pos(state, c, head_index(state, c)));
-                float const weight = v == variant::red ? 0.9f : mathf::inverse_lerp(50.f, 10.f, float(since));
-                if (rel.eats)
-                    prey_utility = rel.intensity * weight * custom::lerp_map(dist, 100.f, 1200.f, 1.f, 0.3f);
-                else
-                    threat_utility = rel.intensity * mathf::inverse_lerp(500.f, 100.f, float(since)) * custom::lerp_map(dist, 60.f, 500.f, 1.f, 0.f);
-            }
+            // the trackers (Tracker, PreyTracker, ThreatTracker, RelationshipTracker)
+            hook_ctx hx{state, c, room};
+            tracker::update(state, c, room, here, tracker_params(v), make_hooks(hx));
+            auto const& ts = tracker::of(state, c);
+            auto const* prey = tracker::prey(ts);
+            auto const* threat = tracker::threat(ts);
+            // CentipedeAI.Update: the prey's weight follows how long ago it
+            // was seen (the red centipede's stays), the threat's too
+            auto const since = [](creature::tracked const& r) { return float(std::max(0, r.ticks_since_seen - 10)); };
+            float prey_weight = v == variant::wing ? 0.12f : 0.9f;
+            if (prey && v != variant::red)
+                prey_weight = mathf::inverse_lerp(50.f, 10.f, since(*prey));
+            float const threat_weight = threat ? mathf::inverse_lerp(500.f, 100.f, since(*threat)) : 1.f;
+            // UtilityComparer: threat (1), prey, rain (1), injury (0.7)
+            float const prey_utility = tracker::prey_utility(state, c, room, here, tracker_params(v)) * prey_weight;
+            float const threat_utility = tracker::threat_utility(ts) * threat_weight;
             float const health = w.creature_get_health(c);
             float const injury_utility = health < 0.6f ? (0.6f - health) / 0.6f * 0.7f : 0.f;
-            float utility = prey_utility;
-            centipede_behavior behavior = centipede_behavior::hunt;
-            if (threat_utility > utility) {
-                utility = threat_utility;
-                behavior = centipede_behavior::flee;
-            }
+            float utility = threat_utility;
+            centipede_behavior behavior = centipede_behavior::flee;
             if (float const rain = dens::rain_utility(state, c, room.id); rain > utility) {
                 utility = rain;
                 behavior = centipede_behavior::escape_rain;
+            }
+            if (prey_utility > utility) {
+                utility = prey_utility;
+                behavior = centipede_behavior::hunt;
             }
             if (injury_utility > utility) {
                 utility = injury_utility;
                 behavior = centipede_behavior::injured;
             }
-            if (utility < 0.1f)
+            if (utility < 0.1f || (behavior == centipede_behavior::hunt && !prey))
                 behavior = centipede_behavior::idle;
             w.creature_set_current_utility(c, utility);
             w.creature_set_behavior(c, uint8_t(behavior));
+            // (no realized migration in CentipedeAI: the abstract roll, now and then)
+            if (behavior == centipede_behavior::idle)
+                migrate::idle_roll(state, c, room);
 
             float excitement_goal = 0.f;
             ivec2& dest = w.creature_get_destination(c);
             switch (behavior) {
             case centipede_behavior::idle:
+                if (auto const t = migrate::travel_tile(state, c, room)) {
+                    dest = *t;
+                    break;
+                }
+                [[fallthrough]];
             case centipede_behavior::injured: {
                 excitement_goal = behavior == centipede_behavior::injured ? 1.f : 0.f;
+                if (behavior == centipede_behavior::injured) {
+                    if (auto const t = dens::home_tile(state, c, room)) {
+                        dest = *t;
+                        break;
+                    }
+                }
                 int32_t const dx = rng.range(-10, 11);
                 ivec2 test = here + ivec2{dx, rng.range(-10, 11)};
                 // a centiwing looks anywhere in the room far more often
@@ -540,27 +649,13 @@ namespace centipede {
                     dest = idle;
                 break;
             }
-            case centipede_behavior::flee: {
+            case centipede_behavior::flee:
                 excitement_goal = 1.f;
-                // ThreatTracker.FleeTo: the walkable tile furthest from the threat
-                vec2 const threat = w.creature_get_last_seen_pos(c);
-                float best_d = rw::distance(room_view::middle_of_tile(dest), threat);
-                for (int k = 0; k < 6; ++k) {
-                    int32_t const dx = rng.range(-30, 31);
-                    ivec2 const t = here + ivec2{dx, rng.range(-30, 31)};
-                    if (!room.inside(t.x, t.y) || !pathing::accessible(room, t, movement(state, c)))
-                        continue;
-                    float const dist = rw::distance(room_view::middle_of_tile(t), threat);
-                    if (dist > best_d + 40.f) {
-                        best_d = dist;
-                        dest = t;
-                    }
-                }
+                dest = tracker::flee_to(state, c, room, here, 1, 30, tracker_params(v), make_hooks(hx));
                 break;
-            }
             case centipede_behavior::hunt:
-                excitement_goal = relationship_to(state, c, tracked).intensity;
-                dest = room_view::get_tile_position(w.creature_get_last_seen_pos(c));
+                excitement_goal = prey->rel.intensity;
+                dest = tracker::best_guess(*prey);
                 break;
             case centipede_behavior::escape_rain:
                 // the den (DenFinder, dens.hpp)
@@ -881,8 +976,9 @@ namespace centipede {
                 w.centipede_data_set_want_to_fly(d, 0);
             // close enough to the prey it is hunting: reach for it (the path ends
             // two tiles short of the prey's tile)
-            if (world::centipede_behavior(w.creature_get_behavior(c)) == centipede_behavior::hunt && w.creature_get_ticks_since_seen(c) < 10) {
-                vec2 const prey = w.creature_get_last_seen_pos(c);
+            auto const* hunted = tracker::prey(tracker::of(state, c));
+            if (world::centipede_behavior(w.creature_get_behavior(c)) == centipede_behavior::hunt && hunted && hunted->ticks_since_seen < 10) {
+                vec2 const prey = hunted->last_seen;
                 if (custom::dist_less(w.body_chunk_get_pos(head), prey, 70.f) && room.visual_contact(w.body_chunk_get_pos(head), prey))
                     pl(state, c).move_to_pos = prey;
             }
@@ -909,7 +1005,9 @@ namespace centipede {
                 auto const p = grasped(state, c, g);
                 if (!p || grasped(state, c, 1 - g) || !want_to_shock(state, c, p))
                     continue;
-                vec2 const held = w.body_chunk_get_pos(player::body_chunk(state, p, w.creature_get_grasp_chunk(c)[size_t(g)]));
+                if (!creature::live(state, p))
+                    continue;
+                vec2 const held = w.body_chunk_get_pos(creature::chunk_of(state, p, creature::grasp_chunk(w, c, uint32_t(g))));
                 vec2 const hp = w.body_chunk_get_pos(head);
                 pl(state, c).move_to_pos = held;
                 if (!room.visual_contact(hp, held)) {
@@ -983,6 +1081,8 @@ namespace centipede {
         float const size = pl(state, c).size;
         variant const v = pl(state, c).variant;
         auto& rng = w.creature_get_random(c);
+        if (v == variant::aqua)
+            underwater_shock(state, c, room);
         // the aquapede's Glower: lit while it is calm
         if (v == variant::aqua) {
             float& glow = w.centipede_data_get_glow(d);
@@ -1001,7 +1101,7 @@ namespace centipede {
                     w.body_chunk_get_vel(chunk(state, c, i)) += r * rng.value() * 2.f;
                 }
                 if (charge >= 1.f) {
-                    shock(state, c, p);
+                    shock(state, c, creature::of(p));
                     stun(state, c, 14);
                     for (uint32_t i = 0; i < n; ++i) {
                         vec2 const r = rnv(rng);
@@ -1067,10 +1167,10 @@ namespace centipede {
     // Centipede.HeadIndex: the free end when holding on with one, else the leading one
     uint32_t head_index(sys::game_state const& state, dcon::creature_id c) noexcept {
         uint32_t const last = chunk_count(state, c) - 1;
-        auto const& g = state.world.creature_get_grasp_player(c);
-        if (g[0] != 0 && g[1] == 0)
+        auto const& g = state.world.creature_get_grasps(c).who;
+        if (g[0] && !g[1])
             return last;
-        if (g[0] == 0 && g[1] != 0)
+        if (!g[0] && g[1])
             return 0;
         return pl(state, c).body_direction ? 0 : last;
     }
@@ -1180,8 +1280,7 @@ namespace centipede {
         x.change_dir_counter = 0;
         x.direction_change_block = 0;
         x.no_follow_con_counter = 0;
-        w.creature_set_grasp_player(c, world::byte_pair{});
-        w.creature_set_grasp_chunk(c, world::byte_pair{});
+        w.creature_set_grasps(c, creature::grasp_pair{});
         x.shock_charge = 0.f;
         x.double_grab_charge = 0.f;
         x.shock_give_up_counter = 0;
@@ -1194,9 +1293,7 @@ namespace centipede {
         x.temp_idle_pos = tile;
         w.creature_set_forbidden_idle_pos(c, ivec2{-1000, -1000});
         x.annoying_collisions = 0;
-        w.creature_set_seen_player(c, 0);
-        w.creature_set_ticks_since_seen(c, 0);
-        w.creature_set_last_seen_pos(c, at);
+        tracker::clear(state, c);
         w.centipede_data_set_idle_counter(d, 0);
         w.centipede_data_set_seen_age(d, 0);
         w.centipede_data_set_light_flash(d, 0.f);
@@ -1214,6 +1311,7 @@ namespace centipede {
         w.centipede_data_set_held_by(d, 0);
         w.centipede_data_set_held_hand(d, 0);
         w.centipede_data_set_glow(d, 0.f);
+        w.centipede_data_set_underwater_shock(d, -1);
         centipede_graphics::reset(state, c);
         return c;
     }
@@ -1224,30 +1322,33 @@ namespace centipede {
         creature::erase(state, c);
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id c, dcon::player_id p) {
-        return !state.world.player_get_in_shortcut(p) && state.world.centipede_data_get_held_by(data(state, c)) != p.index() + 1;
+    bool collides(sys::game_state const& state, dcon::creature_id c, creature::target t) {
+        // the slugcat holding the baby keeps it in its hand
+        return !t.is_player() || state.world.centipede_data_get_held_by(data(state, c)) != creature::player_id_of(t).index() + 1;
     }
 
-    void collide_player(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::player_id p, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, creature::target p, uint32_t j) {
         auto& w = state.world;
         if (!consious(state, c))
             return;
         // Centipede.Collide: noticed, annoyed, and grabbed with an end
         uint32_t const n = chunk_count(state, c);
-        if (w.creature_get_seen_player(c) != p.index() + 1)
-            w.centipede_data_set_seen_age(data(state, c), 0);
-        w.creature_set_seen_player(c, uint8_t(p.index() + 1));
-        w.creature_set_ticks_since_seen(c, 0);
-        w.creature_set_last_seen_pos(c, w.body_chunk_get_pos(player::body_chunk(state, p, 0)));
-        annoying_collision(state, c, p);
+        hook_ctx hx{state, c, room};
+        tracker::see(state, c, room, p, make_hooks(hx));
+        if (!(p.is_creature() && creature::type_of(w, creature::creature_id_of(p)) == creature::type::centipede))
+            annoying_collision(state, c, p);
         if (!want_to_shock(state, c, p))
             return;
         for (int g = 0; g < 2; ++g) {
             if (i != (g == 0 ? 0 : n - 1) || grasped(state, c, g))
                 continue;
-            // not the slugcat holding it; a centiwing doesn't grab over a
-            // pit (and only half the time anyway)
-            bool ok = holder(state, c) != p;
+            // not what holds it; a centiwing doesn't grab over a pit (and
+            // only half the time anyway)
+            bool ok = creature::of(holder(state, c)) != p;
+            creature::for_each_holder(state, room.id, creature::of(c), [&](dcon::creature_id o, uint32_t) {
+                if (creature::of(o) == p)
+                    ok = false;
+            });
             if (is(state, c, variant::wing)) {
                 auto const room = world::get_room_view(state, room_of(state, c));
                 if (lizard::ai::fall_risk_tile(room, room_view::get_tile_position(pos(state, c, i))).y < 0 || w.creature_get_random(c).value() < 0.5f)
@@ -1373,11 +1474,11 @@ namespace centipede {
             die(state, c);
     }
 
-    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p) {
+    void release(sys::game_state& state, dcon::creature_id c, creature::target p) {
         for (int g = 0; g < 2; ++g)
             if (grasped(state, c, g) == p)
                 release(state, c, g);
-        if (state.world.centipede_data_get_held_by(data(state, c)) == p.index() + 1)
+        if (p.is_player() && state.world.centipede_data_get_held_by(data(state, c)) == creature::player_id_of(p).index() + 1)
             release(state, c);
     }
 
@@ -1440,7 +1541,7 @@ namespace centipede {
         ++w.physical_object_get_grabbed_by_count(body(state, c));
         // it can't hold the slugcat holding it
         for (int g = 0; g < 2; ++g)
-            if (grasped(state, c, g) == p)
+            if (grasped(state, c, g) == creature::of(p))
                 release(state, c, g);
     }
 

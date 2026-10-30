@@ -22,6 +22,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "target_types.hpp"
 #include "centipede_types.hpp"
 #include "cicada_types.hpp"
 #include "daddy_types.hpp"
@@ -44,6 +45,130 @@ namespace creature {
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
     inline constexpr type all_types[type_count] = {type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech};
+
+    // Creature.DamageType, as far as the ports tell them apart
+    enum class damage_type : uint8_t {
+        blunt,
+        stab,
+        explosion,
+        electric,
+        bite,
+    };
+
+
+    // CreatureTemplate.Type of everything ported, the slugcat included: the
+    // relationship table's rows and columns (relationships.cpp). The lizard
+    // breeds and the centipede, leech and long legs variants in their kinds'
+    // enum order
+    enum class tmpl : uint8_t {
+        slugcat,
+        pink_lizard, green_lizard, blue_lizard, yellow_lizard, white_lizard, red_lizard, black_lizard, salamander,
+        cyan_lizard, spit_lizard, eel_lizard, zoop_lizard, train_lizard, blizzard_lizard, basilisk_lizard, indigo_lizard, peach_lizard,
+        centipede, small_centipede, centiwing, red_centipede, aqua_centi,
+        leech, sea_leech, jungle_leech,
+        cicada_a, cicada_b,
+        daddy_long_legs, brother_long_legs, terror_long_legs, hunter_daddy,
+        drop_bug,
+        count
+    };
+    inline constexpr uint32_t tmpl_count = uint32_t(tmpl::count);
+
+    // CreatureTemplate.Relationship.Type (DoesntTrack has no use here)
+    enum class rel : uint8_t {
+        ignores,
+        eats,
+        attacks,
+        afraid,
+        uncomfortable,
+        agressive_rival,
+        stay_out_of_way,
+        antagonizes,
+        plays_with,
+        social_dependent,
+        pack,
+    };
+    struct relationship {
+        rel type = rel::ignores;
+        float intensity = 0.f;
+        // Relationship.GoForKill
+        constexpr bool go_for_kill() const noexcept { return (type == rel::eats || type == rel::attacks) && intensity > 0.f; }
+    };
+
+    // A creature's grasps (Creature.grasps[0], [1]): what each holds and the
+    // chunk it holds it by
+    struct grasp_pair {
+        target who[2];
+        uint8_t chunk[2] = {0, 0};
+    };
+
+    // the AI module a tracked creature is sorted into
+    // (IUseARelationshipTracker.ModuleToTrackRelationship)
+    enum class track_module : uint8_t { none, prey, threat, aggression };
+
+    // Tracker.CreatureRepresentation with its RelationshipTracker
+    // DynamicRelationship, and what the module tracking it keeps of it
+    // (PreyTracker.TrackedPrey, ThreatTracker.ThreatCreature's severity,
+    // AgressionTracker.AngerRelationship). Positions are in the tracker's
+    // room: a creature in another room is out of sight
+    struct tracked {
+        target who;
+        uint8_t visual = 0;
+        track_module module = track_module::none;
+        // a kind's TrackedCreatureState (LizardTrackState.spear,
+        // CicadaTrackState: armed, caught...), bits
+        uint8_t state = 0;
+        // the dynamic relationship (currentRelationship)
+        relationship rel;
+        int32_t age = 0;
+        int32_t ticks_since_seen = 0;
+        int32_t forget_counter = 0;
+        // lastSeenCoord, as the chunk position it was seen at
+        rw::vec2 last_seen{0.f, 0.f};
+        // PreyTracker.TrackedPrey
+        int32_t unreachable_counter = 0;
+        int32_t at_position_cant_see = 0;
+        rw::ivec2 last_best_guess{-1, -1};
+        // AgressionTracker.AngerRelationship
+        float anger = 0.f;
+        float base_anger = 0.f;
+    };
+    inline constexpr uint32_t max_tracked = 10;
+
+    // Tracker (maxTrackedCreatures 10 for every ported AI), with the
+    // PreyTracker's, ThreatTracker's and AgressionTracker's picks
+    struct tracker_state {
+        tracked reps[max_tracked];
+        uint8_t count = 0;
+        // PreyTracker.currentPrey, ThreatTracker.mostThreateningCreature,
+        // AgressionTracker.highestAgressionTarget
+        target prey;
+        target threat;
+        target aggression;
+        float frustration = 0.f;
+        // ThreatTracker
+        float current_threat = 0.f;
+        int32_t threat_reset_counter = 0;
+        int32_t flee_anti_flicker = 0;
+        rw::ivec2 flee_dest{-1, -1};
+        float highest_anger = 0.f;
+    };
+
+    // AbstractRoom.CreatureRoomAttraction
+    enum class attraction : uint8_t { neutral, forbidden, avoid, like, stay };
+    struct attractions {
+        attraction v[tmpl_count] = {};
+    };
+
+    // A trip to other rooms (AbstractCreatureAI.path and migrationDestination):
+    // the rooms ahead, each with the exit node of the room before it that
+    // leads there, the next one first
+    struct trip {
+        static constexpr uint32_t max_hops = 12;
+        uint16_t room[max_hops] = {};
+        uint8_t exit[max_hops] = {};
+        uint8_t hops = 0;
+        uint8_t next = 0;
+    };
 
     // the payload of a kind: what only that kind has, the hottest of it here
     // and its data object's index
@@ -89,9 +214,9 @@ namespace creature {
         uint8_t swimming;
         uint8_t jumping;
         uint8_t from_ceiling_jump;
-        // jumpAtChunk: a player's chunk (player index + 1, 0 none), else
-        // dropbug_data's jump_at_pos
-        uint8_t jump_at_player;
+        // jumpAtChunk: a creature's or slugcat's chunk, else dropbug_data's
+        // jump_at_pos
+        target jump_at;
         uint8_t jump_at_chunk;
         // dropbug_data
         uint16_t data;
@@ -112,8 +237,8 @@ namespace creature {
         uint8_t gender;
         uint8_t flying;
         int8_t flip_h;
-        // stickyCling: a player's chunk (player index + 1, 0 none)
-        uint8_t sticky_player;
+        // stickyCling: a creature's or slugcat's chunk
+        target sticky;
         uint8_t sticky_chunk;
         uint8_t cant_pick_up_player;
         uint8_t currently_lifting_player;
@@ -131,6 +256,8 @@ namespace creature {
         // AbstractCreature.personality
         float dominance;
         float energy;
+        // Lizard.spawnDataEvil ({Mean:x})
+        float spawn_data_evil;
         // LizardState
         float throat_health;
         lizard::limb_health limb_health;
@@ -172,8 +299,8 @@ namespace creature {
         uint16_t school;
         int8_t land_walk_dir;
         leech::variant variant;
-        // huntPrey: a slugcat (index + 1, 0 none)
-        uint8_t hunt_prey;
+        // huntPrey
+        target hunt_prey;
         uint8_t has_goal;
         uint8_t flee_from_rain;
         // leech_data

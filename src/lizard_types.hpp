@@ -11,6 +11,7 @@
 #include "math.hpp"
 #include "pathing_types.hpp"
 #include "player_types.hpp"
+#include "target_types.hpp"
 
 namespace lizard {
     // CreatureTemplate.Type of the lizard breeds (vanilla, Downpour, Watcher)
@@ -256,7 +257,7 @@ namespace lizard {
         stuck_in_terrain,
     };
 
-    // LizardTongue: what it sticks to is a slugcat's chunk (player index + 1)
+    // LizardTongue
     struct tongue {
         tongue_state state = tongue_state::hidden;
         rw::vec2 pos{0.f, 0.f};
@@ -267,7 +268,8 @@ namespace lizard {
         float reel_in = 0.f;
         int32_t stuck_counter = 0;
         int32_t delay = 0;
-        uint8_t attached_player = 0;
+        // what it is attached to (a creature or a slugcat) and the chunk
+        creature::target attached;
         uint8_t attached_chunk = 0;
         bool bite_inanimate = false;
     };
@@ -344,8 +346,8 @@ namespace lizard {
         int32_t go_to_spit_pos_counter = 0;
         float aim_up = 0.f;
         float general_aim_up = 0.5f;
-        // aimForChunk: the player's chunk (player index + 1, chunk)
-        uint8_t aim_player = 0;
+        // aimForChunk
+        creature::target aim;
         uint8_t aim_chunk = 0;
     };
 
@@ -369,17 +371,6 @@ namespace lizard {
         float best_utility = 0.f;
     };
 
-    // Tracker's creature representation of the slugcat it knows of (the
-    // slugcat, visual contact, ticks since seen and where are the
-    // creature's seen_player, sees_player, ticks_since_seen, last_seen_pos)
-    struct tracked_player {
-        int32_t age = 0;
-        // PreyTracker.TrackedPrey
-        int32_t unreachable_counter = 0;
-        int32_t at_position_but_cant_see_counter = 0;
-        rw::ivec2 last_best_guess{0, 0};
-    };
-
     // LizardAI and the modules it keeps (its behavior, current utility,
     // destination and forbidden idle spot are the creature's)
     struct ai_state {
@@ -394,14 +385,15 @@ namespace lizard {
         int32_t idle_spot_win_streak = 0;
         int32_t idle_restlessness = 0;
         int32_t unable_to_find_comfortable_position = 0;
-        // focusCreature / casualAggressionTarget: the tracked slugcat
-        bool focus = false;
-        bool casual_aggression = false;
+        // focusCreature, casualAggressionTarget, submittedTo
+        creature::target focus;
+        creature::target casual_aggression;
+        creature::target submitted_to;
         int32_t time_in_room = 0;
         int32_t attempt_bite_frames = 0;
-        tracked_player rep;
-        // PreyTracker.frustration
-        float frustration = 0.f;
+        // MissionTracker.LeaveRoom after submitting to another lizard: ticks
+        // left of wanting to leave the room
+        int32_t leave_room = 0;
         utilities u;
         stuck_tracker stuck;
         // NoiseTracker: the sound it examines (soundToExamine)
@@ -644,8 +636,8 @@ namespace lizard {
         float breath = 0.f;
         rw::vec2 tail_direction{0.f, 0.f};
         rw::vec2 look_pos{0.f, 0.f};
-        // CreatureLooker: whether it looks at the slugcat, and its timer
-        bool look_creature = false;
+        // CreatureLooker: what it looks at (none: lookPos), and its timer
+        creature::target look_creature;
         int32_t look_counter = 0;
         float head_color_setter = 0.f;
         rw::vec2 eyes[2][3];
@@ -752,9 +744,9 @@ namespace lizard {
         float mass_left = 1.f;
         float dissapear_speed = 0.f;
         float my_aim_up = 0.f;
-        uint8_t my_aim_player = 0;
+        creature::target my_aim;
         uint8_t my_aim_chunk = 0;
-        uint8_t stick_player = 0;
+        creature::target stick;
         uint8_t stick_chunk = 0;
         int32_t slime_count = 0;
         spit_slime slime[max_slime];

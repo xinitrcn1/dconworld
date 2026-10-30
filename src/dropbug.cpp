@@ -12,6 +12,8 @@
 #include "pathing.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "migrate.hpp"
+#include "tracker.hpp"
 
 namespace dropbug {
     using rw::ivec2;
@@ -32,7 +34,8 @@ namespace dropbug {
         constexpr int32_t voice_ticks = 40;
         constexpr float float_max = std::numeric_limits<float>::max();
 
-        using creature::player_of;
+        using creature::relationship;
+        using creature::target;
         using creature::room_of;
         using creature::total_mass;
 
@@ -49,14 +52,6 @@ namespace dropbug {
         // abstractCreature.pos: the head's tile
         ivec2 here(sys::game_state const& state, dcon::creature_id d) {
             return room_view::get_tile_position(pos(state, d, 0));
-        }
-
-        float object_mass(sys::game_state const& state, dcon::physical_object_id o) {
-            float m = 0.f;
-            state.world.physical_object_for_each_chunk_ownership_as_owner(o, [&](dcon::chunk_ownership_id co) {
-                m += state.world.body_chunk_get_mass(state.world.chunk_ownership_get_chunk(co));
-            });
-            return m;
         }
 
         bool accessible(room_view const& room, ivec2 t) {
@@ -209,18 +204,6 @@ namespace dropbug {
             return num;
         }
 
-        // the first room exit's entrance: where LeaveRoom heads (there is no
-        // migration between rooms yet)
-        std::optional<ivec2> exit_tile(sys::game_state const& state, room_view const& room) {
-            std::optional<ivec2> e;
-            state.world.room_for_each_shortcut_location(room.id, [&](dcon::shortcut_location_id l) {
-                auto const s = state.world.shortcut_location_get_shortcut(l);
-                if (!e && state.world.shortcut_get_type(s) == world::shortcut_type::room_exit)
-                    e = state.world.shortcut_get_start(s);
-            });
-            return e;
-        }
-
         //
         // DropBugAI
         //
@@ -238,20 +221,6 @@ namespace dropbug {
             return c.anywhere_to_sit || c.anywhere_to_sit_counter < int32_t(ceiling_tiles(state, room).size());
         }
 
-        dcon::player_id tracked(sys::game_state const& state, dcon::creature_id d) {
-            return player_of(state, state.world.creature_get_seen_player(d));
-        }
-
-        // DropBugAI.UpdateDynamicRelationship towards a slugcat: Eats (its
-        // default relationship), by body size, and much more for the one it
-        // attacked last
-        float prey_intensity(sys::game_state const& state, dcon::creature_id d, dcon::player_id p) {
-            float intensity = mathf::inverse_lerp(0.1f, 1.5f, slugcat_body_size);
-            if (auto const target = player_of(state, state.world.dropbug_data_get_target_player(creature::dropbug_data(state.world, d))))
-                intensity = mathf::pow(intensity, target == p ? 0.1f : 3.f);
-            return intensity;
-        }
-
         // ArtificialIntelligence.VisualScore + DropBugAI.VisualScore: it sees
         // ahead of its head (the chunks' movement based bonus isn't ported)
         bool visual_contact(sys::game_state const& state, dcon::creature_id d, room_view const& room, vec2 look) {
@@ -265,47 +234,106 @@ namespace dropbug {
             return score > 0.f && room.visual_contact(eye, look);
         }
 
-        // Tracker: the closest slugcat it can see, remembered for a while
-        void tracker_update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
-            auto& w = state.world;
-            dcon::player_id prey;
-            float best = float_max;
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p))
-                    return;
-                for (uint32_t i = 0; i < 2; ++i) {
-                    vec2 const pp = w.body_chunk_get_pos(player::body_chunk(state, p, i));
-                    float const dist = rw::distance(pp, pos(state, d, 0));
-                    if (dist < best && visual_contact(state, d, room, pp)) {
-                        best = dist;
-                        prey = p;
-                    }
-                }
-            });
-            int32_t& since = w.creature_get_ticks_since_seen(d);
-            w.creature_set_sees_player(d, prey ? 1 : 0);
-            if (prey) {
-                w.creature_set_seen_player(d, uint8_t(prey.index() + 1));
-                w.creature_set_last_seen_pos(d, w.body_chunk_get_pos(player::body_chunk(state, prey, 0)));
-                since = 0;
-            } else if (w.creature_get_seen_player(d) && ++since > 1500) {
-                // Tracker(forgetCounter 1500)
-                w.creature_set_seen_player(d, 0);
-            }
+        // the tracker's settings (DropBugAI's constructor)
+        tracker::params const& tracker_params() {
+            static tracker::params const p = [] {
+                tracker::params q;
+                q.see_around_corners = 10;
+                q.frames_to_remember = 1500;
+                q.ghost_dismissal_range = 10;
+                q.prey_max = 5;
+                q.persistance_bias = 1.5f;
+                q.sure_to_get = 5.f;
+                q.sure_to_lose = 40.f;
+                q.threat_max = 3;
+                return q;
+            }();
+            return p;
         }
 
-        // PreyTracker.Utility (distance estimated in tiles, the chance of
-        // finding it from how long ago it was seen)
-        float prey_utility(sys::game_state const& state, dcon::creature_id d) {
-            auto const p = tracked(state, d);
-            if (!p)
-                return 0.f;
+        // DropBugAI.UpdateDynamicRelationship: small creatures don't matter;
+        // something dead and lighter is food; prey by its body size, much
+        // more the one it attacked last; what would eat it walking under its
+        // ceiling spot is a threat, less so when there is other food for it
+        // (TrackedCreatureState.alive: the representation's `state`, 1 dead)
+        relationship relationship_to(sys::game_state const& state, dcon::creature_id d, creature::tracked& r) {
             auto const& w = state.world;
-            float const dist = mathf::max(0.01f, float_dist(here(state, d), room_view::get_tile_position(w.creature_get_last_seen_pos(d))));
-            // PreyTracker(sureToGetPreyDistance 5, sureToLosePreyDistance 40)
-            float const num = mathf::lerp(1.f - mathf::inverse_lerp(5.f, 40.f, dist), mathf::lerp(5.f, 40.f, 0.25f) / dist, 0.5f);
-            float const chance = custom::lerp_map(float(w.creature_get_ticks_since_seen(d)), 0.f, 1500.f, 1.f, 0.f);
-            return mathf::min(num, chance) * mathf::pow(prey_intensity(state, d, p), 0.75f);
+            auto const tt = creature::template_of(state, r.who);
+            if (creature::small_creature(tt))
+                return relationship{};
+            if (r.visual && creature::live(state, r.who))
+                r.state = creature::dead(state, r.who) ? 1 : 0;
+            bool const alive = r.state == 0;
+            relationship rel = creature::static_relationship(state, d, r.who);
+            float const mine = total_mass(state, d);
+            if (rel.type != creature::rel::eats && creature::live(state, r.who) && creature::dead(state, r.who) && creature::mass_of(state, r.who) < mine * 1.15f)
+                rel = relationship{creature::rel::eats, mathf::inverse_lerp(mine * 0.3f, mine * 1.15f, creature::mass_of(state, r.who)) * 0.5f};
+            auto const room = world::get_room_view(state, room_of(state, d));
+            if (rel.type == creature::rel::eats) {
+                ivec2 const g = tracker::best_guess(r);
+                ivec2 const at = here(state, d);
+                if (is_sitting_in_ceiling(state, d, room) && alive
+                && creature::static_relationship(tt, creature::tmpl::drop_bug).type == creature::rel::eats && std::abs(g.y - (at.y - 1)) < 4 && float_dist(g, at) < 6.f) {
+                    rel = relationship{creature::rel::afraid, 1.f};
+                } else {
+                    rel.intensity *= mathf::inverse_lerp(0.1f, 1.5f, creature::body_size(tt));
+                    if (auto const t = w.dropbug_data_get_target(creature::dropbug_data(w, d)))
+                        rel.intensity = mathf::pow(rel.intensity, t == r.who ? 0.1f : 3.f);
+                }
+            }
+            if (rel.type == creature::rel::afraid) {
+                if (!alive) {
+                    rel.intensity = 0.f;
+                } else if (is_sitting_in_ceiling(state, d, room)) {
+                    auto const& ts = tracker::of(state, d);
+                    ivec2 const g = tracker::best_guess(r);
+                    for (uint32_t i = 0; i < ts.count; ++i) {
+                        auto const& o = ts.reps[i];
+                        if (o.who != r.who && creature::static_relationship(tt, creature::template_of(state, o.who)).type == creature::rel::eats
+                        && float_dist(tracker::best_guess(o), g) < float_dist(here(state, d), g)) {
+                            rel.intensity *= 0.1f;
+                            break;
+                        }
+                    }
+                }
+            }
+            return rel;
+        }
+
+        // the trackers' questions, answered by the dropwig
+        struct hook_ctx {
+            sys::game_state& state;
+            dcon::creature_id d;
+            room_view const& room;
+        };
+        bool hook_sees(void* u, dcon::body_chunk_id k) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return visual_contact(x.state, x.d, x.room, x.state.world.body_chunk_get_pos(k));
+        }
+        bool hook_sees_point(void* u, vec2 p) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return visual_contact(x.state, x.d, x.room, p);
+        }
+        relationship hook_relate(void* u, creature::tracked const& r) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            return relationship_to(x.state, x.d, const_cast<creature::tracked&>(r));
+        }
+        bool hook_reach(void* u, ivec2 t) {
+            auto& x = *static_cast<hook_ctx*>(u);
+            if (!x.room.inside(t.x, t.y) || !accessible(x.room, room_view::middle_of_tile(t)))
+                return false;
+            auto const f = pathing::field_to(x.state, x.room.id, x.state.world.creature_get_destination(x.d), pathing::drop_bug);
+            return pathing::distance(x.state, f, t) != pathing::unreachable;
+        }
+        tracker::hooks make_hooks(hook_ctx& x) {
+            tracker::hooks h;
+            h.user = &x;
+            h.sees = hook_sees;
+            h.sees_point = hook_sees_point;
+            h.relate = hook_relate;
+            h.module = tracker::module_without_aggression;
+            h.reach = hook_reach;
+            return h;
         }
 
         // StuckTracker.Update (trackPastPositions): stuck while most of the
@@ -357,11 +385,19 @@ namespace dropbug {
             num -= custom::lerp_map(float_dist(test, here(state, d)), 20.f, 60.f, 100.f, 0.f);
             num += custom::lerp_map(float_dist(test, c.stay_away_from_pos), 0.f, 15.f, 400.f, 0.f);
             num -= custom::lerp_map(float_dist(test, c.random_attractor), float(c.room_size / 4), float(c.room_size / 2), 150.f, 0.f);
-            // the creatures it tracks: the slugcat, while alive
-            if (auto const p = tracked(state, d); p && !w.player_get_dead(p)) {
-                float const intensity = prey_intensity(state, d, p);
-                if (intensity > 0.f)
-                    num += custom::lerp_map(float_dist(test, room_view::get_tile_position(w.creature_get_last_seen_pos(d))), 3.f + 8.f * intensity, 2.f, 0.f, intensity * 70.f, 2.f);
+            // the creatures it tracks, alive and not too small
+            auto const& ts = tracker::of(state, d);
+            for (uint32_t i = 0; i < ts.count; ++i) {
+                auto const& r = ts.reps[i];
+                if (r.state != 0 || creature::small_creature(creature::template_of(state, r.who)))
+                    continue;
+                float num2 = 0.f;
+                if (r.rel.type != creature::rel::ignores)
+                    num2 = r.rel.intensity;
+                if (r.rel.type == creature::rel::afraid)
+                    num2 = -num2;
+                if (num2 > 0.f)
+                    num += custom::lerp_map(float_dist(test, tracker::best_guess(r)), 3.f + 8.f * num2, 2.f, 0.f, num2 * 70.f, 2.f);
             }
             // otherWigsInRoom: keep away from the other dropbugs' spots
             rooms::for_each_creature(state, room.id, ::creature::type::dropbug, [&](dcon::creature_id o) {
@@ -395,13 +431,7 @@ namespace dropbug {
         }
 
         void lose_all_grasps(sys::game_state& state, dcon::creature_id d) {
-            auto& w = state.world;
-            if (auto const p = grasped(state, d)) {
-                uint8_t& n = w.physical_object_get_grabbed_by_count(player::body(state, p));
-                if (n > 0)
-                    --n;
-            }
-            w.creature_get_grasp_player(d)[0] = 0;
+            creature::release_grasp(state, d, 0);
         }
 
         void play_voice(sys::game_state& state, dcon::creature_id d) {
@@ -426,12 +456,12 @@ namespace dropbug {
         }
 
         // DropBug.JumpFromCeiling: `p`'s chunk `k` as the target, or none
-        void jump_from_ceiling(sys::game_state& state, dcon::creature_id d, dcon::player_id p, uint32_t k, vec2 dir) {
+        void jump_from_ceiling(sys::game_state& state, dcon::creature_id d, target p, uint32_t k, vec2 dir) {
             auto& w = state.world;
             w.creature_get_payload(d).dropbug.in_ceiling_mode = 0.f;
             w.creature_get_payload(d).dropbug.from_ceiling_jump = 1;
             jump(state, d, dir);
-            w.creature_get_payload(d).dropbug.jump_at_player = p ? uint8_t(p.index() + 1) : 0;
+            w.creature_get_payload(d).dropbug.jump_at = p;
             w.creature_get_payload(d).dropbug.jump_at_chunk = uint8_t(k);
             // (sic) without a target the direction becomes the position to jump at
             if (!p)
@@ -443,13 +473,13 @@ namespace dropbug {
             play_voice(state, d);
         }
 
-        // DropBug.InitiateJump at a player's chunk
-        void initiate_jump(sys::game_state& state, dcon::creature_id d, dcon::player_id p, uint32_t k) {
+        // DropBug.InitiateJump at a creature's chunk
+        void initiate_jump(sys::game_state& state, dcon::creature_id d, target p, uint32_t k) {
             auto& w = state.world;
             if (w.creature_get_payload(d).dropbug.charging > 0.f || w.creature_get_payload(d).dropbug.jumping || grasped(state, d) || w.creature_get_payload(d).dropbug.after_drop_attack_delay > 0)
                 return;
             w.creature_get_payload(d).dropbug.charging = 0.01f;
-            w.creature_get_payload(d).dropbug.jump_at_player = uint8_t(p.index() + 1);
+            w.creature_get_payload(d).dropbug.jump_at = p;
             w.creature_get_payload(d).dropbug.jump_at_chunk = uint8_t(k);
             w.dropbug_data_set_jump_at_pos(creature::dropbug_data(w, d), vec2{0.f, 0.f});
             state.play_sound(sound::sound_id::drop_bug_prepare_jump, room_of(state, d), pos(state, d, 0));
@@ -457,10 +487,10 @@ namespace dropbug {
 
         // the chunk it is jumping at (jumpAtChunk), if any
         std::optional<dcon::body_chunk_id> jump_at_chunk(sys::game_state const& state, dcon::creature_id d) {
-            auto const p = player_of(state, state.world.creature_get_payload(d).dropbug.jump_at_player);
-            if (!p)
+            auto const p = state.world.creature_get_payload(d).dropbug.jump_at;
+            if (!p || !creature::live(state, p) || state.world.creature_get_payload(d).dropbug.jump_at_chunk >= creature::chunk_count_of(state, p))
                 return std::nullopt;
-            return player::body_chunk(state, p, state.world.creature_get_payload(d).dropbug.jump_at_chunk);
+            return creature::chunk_of(state, p, state.world.creature_get_payload(d).dropbug.jump_at_chunk);
         }
 
         // DropBug.AnticipateDrop
@@ -493,11 +523,11 @@ namespace dropbug {
             c.random_attractor = random_tile(rng, room);
             c.win_streak = 0;
             w.dropbug_data_get_utilities(creature::dropbug_data(w, d)).ceiling = 0.f;
-            jump_from_ceiling(state, d, dcon::player_id{}, 0, vec2{0.f, -1.f});
+            jump_from_ceiling(state, d, target{}, 0, vec2{0.f, -1.f});
         }
 
         // CeilingSitModule.JumpFromCeiling
-        void module_jump_from_ceiling(sys::game_state& state, dcon::creature_id d, room_view const& room, dcon::player_id p, uint32_t k, vec2 dir) {
+        void module_jump_from_ceiling(sys::game_state& state, dcon::creature_id d, room_view const& room, target p, uint32_t k, vec2 dir) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
             jump_from_ceiling(state, d, p, k, dir);
@@ -511,7 +541,7 @@ namespace dropbug {
             w.dropbug_data_get_utilities(creature::dropbug_data(w, d)).ceiling = 0.f;
             c.drop_delay = 0.f;
             if (p)
-                w.dropbug_data_set_target_player(creature::dropbug_data(w, d), uint8_t(p.index() + 1));
+                w.dropbug_data_set_target(creature::dropbug_data(w, d), p);
         }
 
         bool holds_spear(sys::game_state const& state, dcon::player_id p) {
@@ -536,15 +566,18 @@ namespace dropbug {
             c.anticipate_drop = 0;
             bool spear = false;
             vec2 const head = pos(state, d, 0);
-            auto const p = tracked(state, d);
-            if (p && w.creature_get_sees_player(d)) {
-                vec2 const main = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
-                if (std::fabs(head.x - main.x) < 200.f && std::fabs(head.y - main.y) < 30.f && holds_spear(state, p))
+            auto const& ts = tracker::of(state, d);
+            for (uint32_t ri = 0; ri < ts.count; ++ri) {
+                auto const& r = ts.reps[ri];
+                auto const p = r.who;
+                if (!r.visual || !creature::here(state, p, room.id))
+                    continue;
+                vec2 const main = creature::main_pos(state, p);
+                if (auto const pp = creature::as_player(state, p); pp && std::fabs(head.x - main.x) < 200.f && std::fabs(head.y - main.y) < 30.f && holds_spear(state, pp))
                     spear = true;
-                // a slugcat is always prey (Eats)
-                if (std::fabs(head.x - main.x) < 100.f && head.y > main.y) {
-                    uint32_t const k = uint32_t(rng.range(0, 2));
-                    auto const kc = player::body_chunk(state, p, k);
+                if (r.rel.type == creature::rel::eats && std::fabs(head.x - main.x) < 100.f && head.y > main.y) {
+                    uint32_t const k = uint32_t(rng.range(0, int32_t(creature::chunk_count_of(state, p))));
+                    auto const kc = creature::chunk_of(state, p, k);
                     vec2 const kp = w.body_chunk_get_pos(kc);
                     if (room.visual_contact(head, kp)) {
                         vec2 v = kp + rw::clamp_magnitude(kp - w.body_chunk_get_last_pos(kc), 6.f) * custom::lerp_map(rw::distance(head, kp), 40.f, 500.f, 0.f, 30.f, 0.8f);
@@ -569,7 +602,7 @@ namespace dropbug {
             if (c.drop_delay > 0.f) {
                 c.drop_delay += 0.05f;
                 if (c.drop_delay >= 1.f) {
-                    module_jump_from_ceiling(state, d, room, dcon::player_id{}, 0, vec2{0.f, -1.f});
+                    module_jump_from_ceiling(state, d, room, target{}, 0, vec2{0.f, -1.f});
                     return;
                 }
             }
@@ -583,7 +616,9 @@ namespace dropbug {
             } else {
                 c.spear_danger = 0;
             }
-            // (nothing it tracks is a threat: the ThreatTracker dislodge never happens)
+            // a threat close by: out of the ceiling
+            if (tracker::threat_utility(ts) > 0.95f)
+                dislodge(state, d, room);
         }
 
         // CeilingSitModule.Update
@@ -645,14 +680,19 @@ namespace dropbug {
         void ai_update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
-            tracker_update(state, d, room);
+            ivec2 const at = here(state, d);
+            hook_ctx hx{state, d, room};
+            tracker::hooks const h = make_hooks(hx);
+            tracker::update(state, d, room, at, tracker_params(), h);
+            auto const& ts = tracker::of(state, d);
             stuck_update(state, d);
-            // UtilityComparer: threat (1, nothing threatens it here), prey (1,
-            // tick 0.01), rain (1), stuck (1), injury (1, tick 1/150),
-            // ceiling (lerp 0.2 up, tick 0.005 down)
+            // UtilityComparer: threat (1), prey (1, tick 0.01), rain (1),
+            // stuck (1), injury (1, tick 1/150), ceiling (lerp 0.2 up, tick
+            // 0.005 down)
             auto& u = w.dropbug_data_get_utilities(creature::dropbug_data(w, d));
             auto const tween_tick = [](float a, float b, float speed) { return a < b ? mathf::min(a + speed, b) : mathf::max(a - speed, b); };
-            u.prey = tween_tick(u.prey, prey_utility(state, d) * u.prey_weight, 0.01f);
+            float const prey_utility = tracker::prey_utility(state, d, room, at, tracker_params());
+            u.prey = tween_tick(u.prey, prey_utility * u.prey_weight, 0.01f);
             u.injury = tween_tick(u.injury, injury_utility(state, d), 0.006666667f);
             float const ceiling = ceiling_utility(state, d, room) * u.ceiling_weight;
             u.ceiling = u.ceiling < ceiling ? mathf::lerp(u.ceiling, ceiling, 0.2f) : tween_tick(u.ceiling, ceiling, 0.005f);
@@ -665,6 +705,7 @@ namespace dropbug {
                     b = k;
                 }
             };
+            consider(tracker::threat_utility(ts), behavior::flee);
             consider(u.prey, behavior::hunt);
             consider(dens::rain_utility(state, d, room.id), behavior::escape_rain);
             consider(stuck, behavior::get_unstuck);
@@ -674,29 +715,28 @@ namespace dropbug {
 
             // weights
             int32_t& attack = w.dropbug_data_get_attack_counter(creature::dropbug_data(w, d));
-            u.prey_weight = 0.07f + (w.dropbug_data_get_target_player(creature::dropbug_data(w, d)) ? 0.83f : 0.57f) * mathf::inverse_lerp(0.f, 100.f, float(attack));
+            u.prey_weight = 0.07f + (w.dropbug_data_get_target(creature::dropbug_data(w, d)) ? 0.83f : 0.57f) * mathf::inverse_lerp(0.f, 100.f, float(attack));
             u.ceiling_weight = mathf::inverse_lerp(200.f, 0.f, float(attack)) * 0.7f;
             if (attack > 0)
                 --attack;
             else
-                w.dropbug_data_set_target_player(creature::dropbug_data(w, d), 0);
+                w.dropbug_data_set_target(creature::dropbug_data(w, d), target{});
             if (utility < 0.05f)
                 b = behavior::idle;
             if (utility < 0.6f && !anywhere_to_sit_in_room(state, d, room)) {
                 utility = 0.6f;
                 b = behavior::leave_room;
             }
-            // holding prey (a slugcat is always food)
-            if (b != behavior::flee && grasped(state, d)) {
+            // holding prey
+            if (auto const g = grasped(state, d); b != behavior::flee && g && tracker::dynamic_relationship(state, d, g).type == creature::rel::eats) {
                 b = behavior::return_prey;
                 utility = 1.f;
             }
-            ivec2 const at = here(state, d);
             if (b != behavior::idle)
                 w.dropbug_data_set_temp_idle_pos(creature::dropbug_data(w, d), at);
-            auto const prey = tracked(state, d);
-            if (b == behavior::injured && prey_utility(state, d) > 0.4f && prey
-            && float_dist(at, room_view::get_tile_position(w.creature_get_last_seen_pos(d))) < 6.f) {
+            auto const* prey_rep = tracker::prey(ts);
+            auto const prey = prey_rep ? prey_rep->who : target{};
+            if (b == behavior::injured && prey_utility > 0.4f && prey_rep && float_dist(at, tracker::best_guess(*prey_rep)) < 6.f) {
                 b = behavior::hunt;
                 u.prey_weight = 1.f;
             }
@@ -710,8 +750,11 @@ namespace dropbug {
                     dest = room_view::get_tile_position(pos(state, d, 0) + custom::rnv(rng) * 100.f);
                 break;
             case behavior::leave_room:
-                // another room: a room exit (no migration between rooms)
-                if (auto const e = exit_tile(state, room))
+                // AbstractBehavior(1) every tick: a trip to another room
+                migrate::abstract_behavior(state, d, room);
+                if (!migrate::want_to(state, d))
+                    migrate::move_to_more_attractive_neighbor(state, d, room);
+                if (auto const e = migrate::travel_tile(state, d, room))
                     dest = *e;
                 break;
             case behavior::escape_rain:
@@ -722,6 +765,12 @@ namespace dropbug {
                     dest = *e;
                 break;
             case behavior::idle: {
+                if (rng.value() < 0.01f)
+                    migrate::abstract_behavior(state, d, room);
+                if (auto const e = migrate::travel_tile(state, d, room)) {
+                    dest = *e;
+                    break;
+                }
                 if (idle_score(state, d, room, dest) == float_max)
                     dest = at;
                 if (auto const with = w.dropbug_data_get_walk_with_bug(creature::dropbug_data(w, d))) {
@@ -746,12 +795,12 @@ namespace dropbug {
             case behavior::hunt: {
                 if (!prey)
                     break;
-                dest = room_view::get_tile_position(w.creature_get_last_seen_pos(d));
+                dest = tracker::best_guess(*prey_rep);
                 if (grasped(state, d) || w.creature_get_payload(d).dropbug.jumping || w.creature_get_payload(d).dropbug.attempt_bite != 0.f || w.creature_get_payload(d).dropbug.charging != 0.f
-                || !footing(state, d) || w.player_get_in_shortcut(prey) || w.physical_object_get_room_from_object_location(player::body(state, prey)) != room.id)
+                || !footing(state, d) || !creature::here(state, prey, room.id))
                     break;
-                uint32_t const k = uint32_t(rng.range(0, 2));
-                vec2 const kp = w.body_chunk_get_pos(player::body_chunk(state, prey, k));
+                uint32_t const k = uint32_t(rng.range(0, int32_t(creature::chunk_count_of(state, prey))));
+                vec2 const kp = w.body_chunk_get_pos(creature::chunk_of(state, prey, k));
                 vec2 const main = pos(state, d, 0), mid = pos(state, d, 1);
                 vec2 const behind = mid - custom::dir_vec(mid, kp) * 30.f;
                 if (custom::dist_less(main, kp, 120.f) && (accessible(room, behind) || room.get_tile(behind).solid()) && room.visual_contact(main, kp)) {
@@ -765,7 +814,7 @@ namespace dropbug {
                 break;
             }
             case behavior::flee:
-                // ThreatTracker.FleeTo: nothing it tracks is a threat
+                dest = tracker::flee_to(state, d, room, at, 5, 20, tracker_params(), h);
                 break;
             case behavior::sit_in_ceiling: {
                 ivec2 const cp = w.dropbug_data_get_ceiling(creature::dropbug_data(w, d)).ceiling_pos;
@@ -808,19 +857,16 @@ namespace dropbug {
             lose_all_grasps(state, d);
         }
 
-        // Creature.Violence on a slugcat (its PlayerState isn't a HealthState):
-        // the push, the stun (Player.Stun drops what it holds) and death from
-        // a full point of damage (instantDeathDamageLimit 1)
-        void hurt_player(sys::game_state& state, dcon::creature_id d, dcon::player_id p, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
+        // Creature.Violence on what it bites (a slugcat: the push, the stun,
+        // death from a full point of damage), the push clamped like
+        // vanilla's for the slugcat
+        void hurt(sys::game_state& state, dcon::creature_id d, target p, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
             auto& w = state.world;
-            auto const c = player::body_chunk(state, p, k);
-            w.body_chunk_get_vel(c) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(c), 10.f);
-            int32_t const st = int32_t(damage * 30.f + stun_bonus);
-            player::stun(state, p, st);
-            if (st > w.creature_get_random(d).range(5, 12))
-                items::release_all(state, p);
-            if (damage >= 1.f)
-                player::die(state, p);
+            if (p.is_player()) {
+                auto const c = creature::chunk_of(state, p, k);
+                momentum = rw::clamp_magnitude(momentum / w.body_chunk_get_mass(c), 10.f) * w.body_chunk_get_mass(c);
+            }
+            creature::violence_on(state, p, k, momentum, damage, stun_bonus, creature::damage_type::bite, creature::tmpl::drop_bug);
         }
 
         // the WaterDrips flying off a bite (dark drops)
@@ -832,32 +878,32 @@ namespace dropbug {
         }
 
         // DropBug.Slash: `k` the chunk it hit, -1 the closest one
-        void slash(sys::game_state& state, dcon::creature_id d, dcon::player_id p, int32_t k) {
+        void slash(sys::game_state& state, dcon::creature_id d, target p, int32_t k) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
             vec2 const main = pos(state, d, 0);
-            if (k < 0) {
+            uint32_t const n = creature::chunk_count_of(state, p);
+            if (k < 0 || uint32_t(k) >= n) {
                 k = 0;
                 float dst = float_max;
-                for (uint32_t i = 0; i < 2; ++i) {
-                    vec2 const cp = w.body_chunk_get_pos(player::body_chunk(state, p, i));
+                for (uint32_t i = 0; i < n; ++i) {
+                    vec2 const cp = w.body_chunk_get_pos(creature::chunk_of(state, p, i));
                     if (custom::dist_less(main, cp, dst)) {
                         dst = rw::distance(main, cp);
                         k = int32_t(i);
                     }
                 }
             }
-            vec2 const cp = w.body_chunk_get_pos(player::body_chunk(state, p, uint32_t(k)));
+            vec2 const cp = w.body_chunk_get_pos(creature::chunk_of(state, p, uint32_t(k)));
             bool const hard = rng.value() < 0.33333334f;
             bool const deep = rng.value() < 0.2f;
-            hurt_player(state, d, p, uint32_t(k), custom::dir_vec(main, cp) * 8.f, deep ? 1.1f : 0.4f, hard ? 50.f : 15.f);
+            hurt(state, d, p, uint32_t(k), custom::dir_vec(main, cp) * 8.f, deep ? 1.1f : 0.4f, hard ? 50.f : 15.f);
             vel(state, d, 0) = custom::dir_vec(cp, main) * 8.f;
             w.creature_get_payload(d).dropbug.grab_on_next_attack = 180;
             drips(state, d, main, cp, 5, deep ? 24.f : 14.f);
-            // a slugcat is prey
-            if (hard || deep || w.player_get_dead(p))
+            if ((hard || deep || creature::dead(state, p)) && tracker::dynamic_relationship(state, d, p).type == creature::rel::eats)
                 w.dropbug_data_set_attack_counter(creature::dropbug_data(w, d), std::max(70, w.dropbug_data_get_attack_counter(creature::dropbug_data(w, d))));
-            w.dropbug_data_set_target_player(creature::dropbug_data(w, d), uint8_t(p.index() + 1));
+            w.dropbug_data_set_target(creature::dropbug_data(w, d), p);
             state.play_sound(sound::sound_id::drop_bug_grab_creature, room_of(state, d), main);
         }
 
@@ -866,11 +912,11 @@ namespace dropbug {
             auto& w = state.world;
             auto const target = jump_at_chunk(state, d);
             vec2 const main = pos(state, d, 0);
-            bool const lost = target && (w.physical_object_get_room_from_object_location(player::body(state, player_of(state, w.creature_get_payload(d).dropbug.jump_at_player))) != room.id
+            bool const lost = target && (!creature::here(state, w.creature_get_payload(d).dropbug.jump_at, room.id)
                 || !room.visual_contact(main, w.body_chunk_get_pos(*target)));
             if (grasped(state, d) || (!target && w.dropbug_data_get_jump_at_pos(creature::dropbug_data(w, d)) == vec2{0.f, 0.f}) || lost) {
                 w.creature_get_payload(d).dropbug.charging = 0.f;
-                w.creature_get_payload(d).dropbug.jump_at_player = 0;
+                w.creature_get_payload(d).dropbug.jump_at = creature::target{};
                 return;
             }
             vec2 v = target ? w.body_chunk_get_pos(*target) : w.dropbug_data_get_jump_at_pos(creature::dropbug_data(w, d));
@@ -880,7 +926,7 @@ namespace dropbug {
             vec2 dir = custom::dir_vec(main, v);
             if (!custom::dist_less(main, p, custom::lerp_map(rw::dot(dir, custom::dir_vec(pos(state, d, 1), main)), -0.1f, 0.8f, 0.f, 300.f, 0.4f))) {
                 w.creature_get_payload(d).dropbug.charging = 0.f;
-                w.creature_get_payload(d).dropbug.jump_at_player = 0;
+                w.creature_get_payload(d).dropbug.jump_at = creature::target{};
                 return;
             }
             if (!room.get_tile(main + vec2{0.f, 20.f}).solid() && !room.get_tile(pos(state, d, 1) + vec2{0.f, 20.f}).solid())
@@ -1081,7 +1127,7 @@ namespace dropbug {
                 }
                 if (footing(state, d)) {
                     w.creature_get_payload(d).dropbug.jumping = 0;
-                    w.creature_get_payload(d).dropbug.jump_at_player = 0;
+                    w.creature_get_payload(d).dropbug.jump_at = creature::target{};
                 }
                 return;
             }
@@ -1152,17 +1198,17 @@ namespace dropbug {
                 state.play_sound(sound::sound_id::drop_bug_step, room.id, w.body_chunk_get_pos(head));
         }
 
-        // DropBug.CarryObject: holding a slugcat in its mandibles
+        // DropBug.CarryObject: holding a creature or slugcat in its mandibles
         void carry_object(sys::game_state& state, dcon::creature_id d) {
             auto& w = state.world;
             auto const p = grasped(state, d);
-            if (w.player_get_in_shortcut(p) || w.physical_object_get_room_from_object_location(player::body(state, p)) != room_of(state, d)) {
+            uint32_t const k = creature::grasp_chunk(w, d, 0);
+            if (!creature::here(state, p, room_of(state, d)) || k >= creature::chunk_count_of(state, p)) {
                 lose_all_grasps(state, d);
                 return;
             }
-            uint32_t const k = w.creature_get_grasp_chunk(d)[0];
-            auto const gc = player::body_chunk(state, p, k);
-            float const theirs = object_mass(state, player::body(state, p));
+            auto const gc = creature::chunk_of(state, p, k);
+            float const theirs = creature::mass_of(state, p);
             float carry = theirs;
             if (carry <= total_mass(state, d) * 1.1f)
                 carry /= 2.f;
@@ -1188,35 +1234,37 @@ namespace dropbug {
                 return;
             }
             gp = hold;
-            // PhysicalObject.PushOutOf: the slugcat's other chunk out of the bug
+            // PhysicalObject.PushOutOf: its other chunks out of the bug
+            uint32_t const n = creature::chunk_count_of(state, p);
             for (uint32_t i = 0; i < 2; ++i) {
                 vec2 const bp = pos(state, d, i);
                 float const rad = w.body_chunk_get_rad(chunk(state, d, i));
-                auto const other = player::body_chunk(state, p, 1 - k);
-                vec2& op = w.body_chunk_get_pos(other);
-                float const r = rad + w.body_chunk_get_rad(other);
-                if (custom::dist_less(op, bp, r)) {
-                    float const dist = rw::distance(op, bp);
-                    vec2 const dir = custom::dir_vec(bp, op);
-                    op += dir * (r - dist);
-                    w.body_chunk_get_vel(other) += dir * (r - dist);
+                for (uint32_t j = 0; j < n; ++j) {
+                    if (j == k)
+                        continue;
+                    auto const other = creature::chunk_of(state, p, j);
+                    vec2& op = w.body_chunk_get_pos(other);
+                    float const r = rad + w.body_chunk_get_rad(other);
+                    if (custom::dist_less(op, bp, r)) {
+                        float const dist = rw::distance(op, bp);
+                        vec2 const dir = custom::dir_vec(bp, op);
+                        op += dir * (r - dist);
+                        w.body_chunk_get_vel(other) += dir * (r - dist);
+                    }
                 }
             }
         }
 
-
-        // DropBug.Collide with a slugcat: myChunk `i`, their chunk `j`
-        void collide_with_player(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::player_id p, uint32_t j) {
+        // DropBug.Collide with a creature or slugcat: myChunk `i`, their chunk `j`
+        void collide_with(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, target p, uint32_t j) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
-            // tracker.SeeCreature
-            w.creature_set_seen_player(d, uint8_t(p.index() + 1));
-            w.creature_set_ticks_since_seen(d, 0);
-            w.creature_set_last_seen_pos(d, w.body_chunk_get_pos(player::body_chunk(state, p, 0)));
+            hook_ctx hx{state, d, room};
+            tracker::see(state, d, room, p, make_hooks(hx));
             float const bite = w.creature_get_payload(d).dropbug.attempt_bite;
             bool const from_ceiling = w.creature_get_payload(d).dropbug.from_ceiling_jump;
             bool const jumping = w.creature_get_payload(d).dropbug.jumping;
-            auto const kc = player::body_chunk(state, p, j);
+            auto const kc = creature::chunk_of(state, p, j);
             vec2 const kp = w.body_chunk_get_pos(kc);
             vec2 const main = pos(state, d, 0);
             if (i != 0 || grasped(state, d) || bite <= 0.f || !(jumping || from_ceiling || bite > 0.75f))
@@ -1226,12 +1274,10 @@ namespace dropbug {
             if (jumping)
                 vel(state, d, 0) *= 0.5f;
             drips(state, d, main, kp, 4, 14.f);
-            if (w.creature_get_payload(d).dropbug.grab_on_next_attack > 0 || w.player_get_dead(p) || rng.value() > (from_ceiling ? 0.8f : 0.2f)) {
+            if (w.creature_get_payload(d).dropbug.grab_on_next_attack > 0 || creature::dead(state, p) || rng.value() > (from_ceiling ? 0.8f : 0.2f)) {
                 // Creature.Grab, then the bite
-                w.creature_get_grasp_player(d)[0] = uint8_t(p.index() + 1);
-                w.creature_get_grasp_chunk(d)[0] = uint8_t(j);
-                ++w.physical_object_get_grabbed_by_count(player::body(state, p));
-                hurt_player(state, d, p, j, custom::dir_vec(main, kp) * 4.f, from_ceiling && rng.value() < 0.2f ? 1.1f : 0.4f, 0.f);
+                creature::grab(state, d, 0, p, j);
+                hurt(state, d, p, j, custom::dir_vec(main, kp) * 4.f, from_ceiling && rng.value() < 0.2f ? 1.1f : 0.4f, 0.f);
                 state.play_sound(sound::sound_id::drop_bug_grab_creature, room_of(state, d), main);
                 if (w.creature_get_payload(d).dropbug.grab_on_next_attack < 1)
                     w.creature_get_payload(d).dropbug.release_grabbed_counter = 35;
@@ -1325,9 +1371,9 @@ namespace dropbug {
             if (release > 0) {
                 --release;
                 auto const p = grasped(state, d);
-                if (p && !w.player_get_dead(p) && object_mass(state, player::body(state, p)) > total_mass(state, d) * 0.3f) {
+                if (p && creature::live(state, p) && !creature::dead(state, p) && creature::mass_of(state, p) > total_mass(state, d) * 0.3f) {
                     // worrying the prey, then a last slash and let go
-                    auto const gc = player::body_chunk(state, p, w.creature_get_grasp_chunk(d)[0]);
+                    auto const gc = creature::chunk_of(state, p, creature::grasp_chunk(w, d, 0));
                     vec2 const a = custom::rnv(rng);
                     pos(state, d, 0) += a * 4.f;
                     vel(state, d, 0) += a * 4.f;
@@ -1354,7 +1400,7 @@ namespace dropbug {
                     w.creature_get_payload(d).dropbug.from_ceiling_jump = 0;
                     w.creature_get_payload(d).dropbug.attempt_bite = 0.f;
                     w.creature_get_payload(d).dropbug.jumping = 0;
-                    w.creature_get_payload(d).dropbug.jump_at_player = 0;
+                    w.creature_get_payload(d).dropbug.jump_at = creature::target{};
                     w.creature_get_payload(d).dropbug.charging = 0.f;
                     break;
                 }
@@ -1427,8 +1473,8 @@ namespace dropbug {
         return is_sitting_in_ceiling(state, d, world::get_room_view(state, room_of(state, d)));
     }
 
-    dcon::player_id grasped(sys::game_state const& state, dcon::creature_id d) noexcept {
-        return player_of(state, state.world.creature_get_grasp_player(d)[0]);
+    creature::target grasped(sys::game_state const& state, dcon::creature_id d) noexcept {
+        return creature::grasped(state.world, d, 0);
     }
 
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, bool relocate) {
@@ -1476,7 +1522,7 @@ namespace dropbug {
         w.creature_get_payload(d).dropbug.swimming = 0;
         w.creature_get_payload(d).dropbug.travel_dir = vec2{0.f, 0.f};
         w.creature_get_payload(d).dropbug.charging = 0.f;
-        w.creature_get_payload(d).dropbug.jump_at_player = 0;
+        w.creature_get_payload(d).dropbug.jump_at = creature::target{};
         w.creature_get_payload(d).dropbug.jump_at_chunk = 0;
         w.dropbug_data_set_jump_at_pos(creature::dropbug_data(w, d), vec2{0.f, 0.f});
         w.creature_get_payload(d).dropbug.attempt_bite = 0.f;
@@ -1492,19 +1538,15 @@ namespace dropbug {
         w.dropbug_data_set_stuck_shake(creature::dropbug_data(w, d), 0.f);
         w.creature_get_payload(d).dropbug.in_ceiling_mode = 0.f;
         w.creature_get_payload(d).dropbug.voice = 0;
-        w.creature_get_grasp_player(d)[0] = 0;
-        w.creature_get_grasp_chunk(d)[0] = 0;
+        w.creature_set_grasps(d, creature::grasp_pair{});
         w.creature_set_behavior(d, uint8_t(behavior::idle));
         w.creature_set_current_utility(d, 0.f);
         w.dropbug_data_set_noise_reaction_delay(creature::dropbug_data(w, d), 0);
-        w.dropbug_data_set_target_player(creature::dropbug_data(w, d), 0);
+        w.dropbug_data_set_target(creature::dropbug_data(w, d), target{});
         w.dropbug_data_set_attack_counter(creature::dropbug_data(w, d), 0);
         w.dropbug_data_set_idle_pos_counter(creature::dropbug_data(w, d), 0);
         w.dropbug_data_set_walk_with_bug(creature::dropbug_data(w, d), std::nullopt);
-        w.creature_set_seen_player(d, 0);
-        w.creature_set_sees_player(d, 0);
-        w.creature_set_ticks_since_seen(d, 0);
-        w.creature_set_last_seen_pos(d, at);
+        tracker::clear(state, d);
         w.dropbug_data_set_utilities(creature::dropbug_data(w, d), utilities{});
         w.dropbug_data_set_stuck(creature::dropbug_data(w, d), stuck_tracker{});
         // CeilingSitModule.NewRoom
@@ -1554,14 +1596,14 @@ namespace dropbug {
         creature::erase(state, d);
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::player_id p) {
+    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t) {
         // what it holds is kept out of it by CarryObject
-        return !state.world.player_get_in_shortcut(p) && grasped(state, d) != p;
+        return grasped(state, d) != t;
     }
 
-    void collide_player(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::player_id p, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, creature::target t, uint32_t j) {
         if (consious(state, d))
-            collide_with_player(state, d, i, p, j);
+            collide_with(state, d, room, i, t, j);
     }
 
     void collide_kin(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id other, uint32_t j) {
@@ -1622,8 +1664,10 @@ namespace dropbug {
         }
     }
 
-    void release_player(sys::game_state& state, dcon::creature_id d, dcon::player_id p) {
+    void release(sys::game_state& state, dcon::creature_id d, creature::target p) {
         if (grasped(state, d) == p)
             lose_all_grasps(state, d);
+        if (state.world.creature_get_payload(d).dropbug.jump_at == p)
+            state.world.creature_get_payload(d).dropbug.jump_at = target{};
     }
 }

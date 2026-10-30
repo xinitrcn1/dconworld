@@ -46,11 +46,11 @@ namespace centipede {
     void destroy(sys::game_state& state, dcon::creature_id c);
     // Centipede.Update
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
-    // whether it collides with the slugcat (not the one holding it)
-    bool collides(sys::game_state const& state, dcon::creature_id c, dcon::player_id p);
-    // Centipede.Collide: its chunk `i` touched the slugcat's chunk `j`
-    // (pushed apart already), or another centipede's
-    void collide_player(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::player_id p, uint32_t j);
+    // whether it collides with a creature or slugcat (not the one holding it)
+    bool collides(sys::game_state const& state, dcon::creature_id c, creature::target t);
+    // Centipede.Collide: its chunk `i` touched `t`'s chunk `j` (pushed apart
+    // already): seen, annoyed, grabbed with an end; or another centipede's
+    void collide(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, creature::target t, uint32_t j);
     void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id other, uint32_t j);
     // Centipede.Violence (the shells, the red centipede's armour) + Creature.Violence
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus,
@@ -62,8 +62,8 @@ namespace centipede {
     pathing::movement const& movement(sys::game_state const& state, dcon::creature_id c) noexcept;
     // CentipedeState.shells: the chunk's shell is on
     bool has_shell(sys::game_state const& state, dcon::creature_id c, uint32_t chunk) noexcept;
-    // lets go of `p` if it holds it, and is let go of by `p`
-    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p);
+    // lets go of `t` if it holds it, and is let go of by `t`
+    void release(sys::game_state& state, dcon::creature_id c, creature::target t);
 
     // The player side: a baby centipede in a slugcat's hand (IPlayerEdible,
     // Grabability OneHand)

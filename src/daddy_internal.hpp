@@ -40,11 +40,10 @@ namespace daddy::detail {
         rw::rng& rng;
         body_state& z;
         ai_state& a;
-        // what every creature's AI keeps (the creature's properties): the
-        // Tracker's one representation (the slugcat, felt this tick, ticks
-        // since and where) and the destination
-        uint8_t& seen_player;
-        uint8_t& sees_player;
+        // the Tracker's one representation (what it hunts, felt this tick,
+        // ticks since and where) and the destination
+        creature::target& seen;
+        uint8_t& sees;
         int32_t& ticks_since_seen;
         rw::vec2& last_seen_pos;
         rw::ivec2& destination;
@@ -76,7 +75,7 @@ namespace daddy::detail {
         rw::vec2 middle_of_body();
         float total_mass() const;
         // the tracked slugcat (Tracker's one representation), if any
-        dcon::player_id tracked() const;
+        creature::target tracked() const;
         // getTerrainProximity, -1 outside the room
         int32_t proximity(rw::ivec2 t) const {
             if (!room.inside(t.x, t.y))
@@ -89,10 +88,8 @@ namespace daddy::detail {
     void load(ctx& x);
     void store(ctx& x);
 
-    dcon::player_id player_of(sys::game_state const& state, uint8_t v) noexcept;
-    uint8_t player_ref(dcon::player_id p) noexcept;
-    // a slugcat in the room, out of the pipes and not eaten
-    bool player_here(sys::game_state const& state, dcon::player_id p, dcon::room_id room) noexcept;
+    // a creature or slugcat in the room, out of the pipes and not eaten
+    bool target_here(sys::game_state const& state, creature::target t, dcon::room_id room) noexcept;
 
     // Room.RayTraceTilesList (fills `path` from the front like vanilla, leaving
     // what is past the returned count), Room.RayTraceTilesForTerrain
@@ -108,8 +105,10 @@ namespace daddy::detail {
     //
     // daddy.cpp: what the tentacles call on their daddy and its AI
     //
-    // Tracker.SeeCreature
-    void see_player(ctx& x, dcon::player_id p);
+    // DaddyAI.UpdateDynamicRelationship
+    creature::relationship relationship_to(ctx const& x, creature::target t);
+    // Tracker.SeeCreature (what it doesn't eat is ignored)
+    void see(ctx& x, creature::target t);
     // Tracker.CreatureRepresentation.BestGuessForPosition
     rw::ivec2 best_guess(ctx& x);
     rw::vec2 hunted_pos(ctx& x);

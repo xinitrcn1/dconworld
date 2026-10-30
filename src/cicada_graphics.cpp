@@ -7,6 +7,7 @@
 #include "body_parts.hpp"
 #include "cicada.hpp"
 #include "player.hpp"
+#include "tracker.hpp"
 #include "player_graphics.hpp"
 
 namespace cicada_graphics {
@@ -158,11 +159,13 @@ namespace cicada_graphics {
             state.play_loop(sound::loop_key(sound::loop_owner::creature, uint32_t(c.index())), id, room.id, p0, spread, pitch);
         }
 
-        // CreatureLooker: the slugcat it is busy with, else the one it sees
-        uint8_t look = w.cicada_data_get_focus_player(creature::cicada_data(w, c));
-        if (look == 0 && w.creature_get_sees_player(c))
-            look = w.creature_get_seen_player(c);
-        g.look_player = look;
+        // CreatureLooker: what it is busy with, else what it hunts and sees
+        auto look = w.cicada_data_get_focus(creature::cicada_data(w, c));
+        auto const& ts = tracker::of(state, c);
+        if (!look)
+            if (auto const* r = tracker::prey(ts); r && r->visual)
+                look = r->who;
+        g.look_creature = look;
 
         g.charging_visuals = charge_counter > 0 ? mathf::min(g.charging_visuals + 0.1f, 1.f) : mathf::max(g.charging_visuals - 0.05f, 0.f);
         g.last_z_rotation = g.z_rotation;
@@ -210,12 +213,12 @@ namespace cicada_graphics {
         g.z_rotation = rw::normalized(g.z_rotation);
         vec2 const dir = custom::dir_vec(p1, p0);
         vec2 const perp = custom::perpendicular_vector(dir);
-        auto const looked = player_of(state, g.look_player);
+        auto const* looked = g.look_creature ? tracker::find(ts, g.look_creature) : nullptr;
         if (awake && looked && g.blink_counter > 0) {
-            if (w.creature_get_sees_player(c) && w.creature_get_seen_player(c) == g.look_player)
-                g.look_dir = custom::dir_vec(p0, w.body_chunk_get_pos(player::body_chunk(state, looked, 0)));
+            if (looked->visual && creature::here(state, looked->who, room.id))
+                g.look_dir = custom::dir_vec(p0, creature::main_pos(state, looked->who));
             else
-                g.look_dir = custom::dir_vec(p0, room_view::middle_of_tile(w.creature_get_last_seen_pos(c)));
+                g.look_dir = custom::dir_vec(p0, room_view::middle_of_tile(looked->last_seen));
             vec2 const v2 = body_parts::rotate_around_origo(g.look_dir, custom::aim(vec2{0.f, 0.f}, vec2{-dir.x, dir.y}));
             g.look_rotation = custom::aim(-v2, v2);
         } else {
@@ -278,10 +281,10 @@ namespace cicada_graphics {
 
         // the tentacles
         auto const holder = player_of(state, w.creature_get_payload(c).cicada.held_by);
-        auto const sticky = player_of(state, w.creature_get_payload(c).cicada.sticky_player);
+        auto const sticky = w.creature_get_payload(c).cicada.sticky;
         std::optional<dcon::body_chunk_id> cling;
-        if (sticky)
-            cling = player::body_chunk(state, sticky, w.creature_get_payload(c).cicada.sticky_chunk);
+        if (sticky && creature::live(state, sticky) && w.creature_get_payload(c).cicada.sticky_chunk < creature::chunk_count_of(state, sticky))
+            cling = creature::chunk_of(state, sticky, w.creature_get_payload(c).cicada.sticky_chunk);
         for (int m = 0; m < 2; ++m)
             for (int n = 0; n < 2; ++n) {
                 auto& t = g.tentacles[m][n];

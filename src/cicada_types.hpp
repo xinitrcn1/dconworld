@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "math.hpp"
+#include "target_types.hpp"
 #include "player_types.hpp"
 
 namespace cicada {
@@ -79,7 +80,7 @@ namespace cicada {
         // prepare loop, 3 its charge loop
         uint8_t current_loop = 0;
         // CreatureLooker.lookCreature: a player index + 1, 0 none
-        uint8_t look_player = 0;
+        creature::target look_creature;
         // (its UnityEngine.Random is the creature's graphics_random)
     };
 }

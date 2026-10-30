@@ -183,6 +183,9 @@ object{
 	// the water level (pixels) while the rain's flood rises over the
 	// room's own, lowest() otherwise
 	property{ name{flood_level} type{float} }
+	// AbstractRoom.roomAttractions per template (the region properties'
+	// Room_Attr lines with their Default, migrate.hpp's attraction)
+	property{ name{attraction} type{::creature::attractions} }
 }
 
 relationship{
@@ -1013,6 +1016,21 @@ object{
 	property{ name{rain_death} type{float} }
 	// the spawn data's flags (dens.hpp's spawn_flag)
 	property{ name{spawn_flags} type{uint8_t} }
+	// Tracker, RelationshipTracker, PreyTracker, ThreatTracker and
+	// AgressionTracker of every AI (tracker.hpp): the creatures and slugcats
+	// it knows of in its room
+	property{ name{tracker} type{::creature::tracker_state} }
+	// grasps[0] and [1]: a creature or a slugcat, and the chunk
+	property{ name{grasps} type{::creature::grasp_pair} }
+	// migrating (migrate.hpp): the rooms ahead (AbstractCreatureAI.path),
+	// AbstractWorldEntity.timeSpentHere
+	property{ name{trip} type{::creature::trip} }
+	property{ name{time_in_room} type{int32_t} }
+	// for the fuzz: the template that killed it + 1 (0 none, 0xFF something
+	// else: rain, rot, a slugcat's weapon...), the rooms and regions it went to
+	property{ name{killed_by} type{uint8_t} }
+	property{ name{rooms_changed} type{uint16_t} }
+	property{ name{regions_changed} type{uint16_t} }
 }
 relationship{
 	name{creature_body}
@@ -1056,6 +1074,9 @@ object{
 	property{ name{held_hand} type{uint8_t} }
 	// the aquapede's Glower (its LightSource's alpha, 0..0.5)
 	property{ name{glow} type{float} }
+	// the aquapede's UnderwaterShock: its frame (-1 none) and where
+	property{ name{underwater_shock} type{int32_t} }
+	property{ name{underwater_shock_pos} type{rw::vec2} }
 	// CentipedeGraphics: legs, feelers, wings, body rotations
 	property{ name{graphics} type{::centipede::graphics_state} }
 }
@@ -1079,8 +1100,8 @@ object{
 	property{ name{stuck_shake} type{float} }
 	// DropBugAI
 	property{ name{noise_reaction_delay} type{int32_t} }
-	// targetCreature: player index + 1, 0 none
-	property{ name{target_player} type{uint8_t} }
+	// targetCreature
+	property{ name{target} type{::creature::target} }
 	property{ name{attack_counter} type{int32_t} }
 	property{ name{idle_pos_counter} type{int32_t} }
 	property{ name{temp_idle_pos} type{rw::ivec2} }
@@ -1118,11 +1139,9 @@ object{
 	property{ name{swoosh_to_pos} type{std::optional<rw::vec2>} }
 	property{ name{antagonize_method} type{uint8_t} }
 	property{ name{antagonize_method_counter} type{int32_t} }
-	// panicFleeCrit, focusCreature: player index + 1, 0 none
+	// panicFleeCrit: player index + 1, 0 none; focusCreature
 	property{ name{panic_flee_player} type{uint8_t} }
-	property{ name{focus_player} type{uint8_t} }
-	// the tracker's representation's age
-	property{ name{seen_age} type{int32_t} }
+	property{ name{focus} type{::creature::target} }
 	property{ name{stuck} type{::cicada::stuck_tracker} }
 	// CicadaGraphics: wings, tentacles, the body's turn and the eyes
 	property{ name{graphics} type{::cicada::graphics_state} }

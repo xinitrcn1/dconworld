@@ -297,6 +297,9 @@ namespace spawns {
                 r.flags |= dens::flag_void_sea | dens::flag_lava_safe;
             } else if (key == "Seed") {
                 r.seed = std::atoi(std::string{value}.c_str());
+            } else if (key == "Mean") {
+                // Lizard's constructor reads it from the unrecognised flags
+                r.mean = std::strtof(std::string{value}.c_str(), nullptr);
             } else {
                 // an unrecognised flag: a centipede's size when it is a number
                 std::string const s{flag};
@@ -356,6 +359,8 @@ namespace spawns {
             if (!c)
                 continue;
             w.creature_set_spawn_flags(c, flags);
+            if (d.kind == creature::type::lizard)
+                w.creature_get_payload(c).lizard.spawn_data_evil = data.mean;
             dens::set_home(state, c, room, uint8_t(s.den));
             // AbstractCreature's constructor: out of the den in 100 to 1000 ticks
             dens::put_in_den(state, c, w.creature_get_random(c).range(100, 1000));

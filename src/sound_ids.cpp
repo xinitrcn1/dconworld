@@ -155,6 +155,9 @@ namespace sound {
             "Death_Rain_Approaching_LOOP",
             "Death_Rain_Approaching_Heard_From_Underground_LOOP",
             "Screen_Shake_LOOP",
+            "Lizard_Jaws_Grab_NPC",
+            "Lizard_Tongue_Attatch_NPC",
+            "Red_Lizard_Spit_Hit_NPC",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

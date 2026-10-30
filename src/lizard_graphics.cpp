@@ -8,6 +8,7 @@
 #include "lizard_ai.hpp"
 #include "lizard_cosmetics.hpp"
 #include "player.hpp"
+#include "tracker.hpp"
 
 // LizardGraphics. The cosmetics (LizardCosmetics, lizard_cosmetics.cpp) hook
 // in at three places, marked "cosmetics:" below:
@@ -509,13 +510,13 @@ namespace lizard_graphics {
         g.every_second_draw = false;
     }
 
-    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, dcon::player_id) {
+    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, creature::target t) {
         auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         if (head_lights_up_from_noise(lizard::breed_of(state, l)))
             g.black_lizard_light_up_head = mathf::min(g.black_lizard_light_up_head + 0.5f, 1.f);
-        // CreatureLooker.ReevaluateLookObject: the slugcat is all it tracks
+        // CreatureLooker.ReevaluateLookObject: the one just spotted
         (void)first_spot;
-        g.look_creature = true;
+        g.look_creature = t;
     }
 
     void reset_positions(sys::game_state& state, dcon::creature_id l) {
@@ -732,18 +733,23 @@ namespace lizard_graphics {
         if (g.white_flicker > 0)
             --g.white_flicker;
 
-        // CreatureLooker (chance to look at nothing 0.3): the slugcat it
-        // focuses on, else now and then the slugcat or nothing
+        // CreatureLooker (chance to look at nothing 0.3): what it focuses on,
+        // else now and then something it tracks (its interest scores aren't
+        // ported: one at random) or nothing
+        auto const& ts = tracker::of(state, l);
         if (g.look_counter > 0)
             --g.look_counter;
-        if (lizard::ai::focus(state, l)) {
-            g.look_creature = true;
+        if (auto const f = lizard::ai::focus(state, l)) {
+            g.look_creature = f;
         } else if (g.look_counter < 1 && rng.value() < 1.f / float(p.frames_between_look_focus_change)) {
             g.look_counter = p.frames_between_look_focus_change;
             if (rng.value() > 0.3f) {
-                g.look_creature = w.creature_get_seen_player(l) != 0 && lizard::grasped(state, l) != lizard::player_of(state, w.creature_get_seen_player(l));
+                g.look_creature = creature::target{};
+                if (ts.count > 0)
+                    if (auto const t = ts.reps[rng.range(0, ts.count)].who; t != lizard::grasped(state, l))
+                        g.look_creature = t;
             } else {
-                g.look_creature = false;
+                g.look_creature = creature::target{};
                 // LookAtNothing
                 float const look_angle = rng.value() * 360.f;
                 g.look_pos = g.draw_positions[0][0] + custom::dir_vec(g.draw_positions[1][0], g.draw_positions[0][0]) * 100.f
@@ -751,12 +757,13 @@ namespace lizard_graphics {
             }
         }
         if (z.anim == lizard::animation::prey_spotted || z.anim == lizard::animation::prey_re_spotted)
-            g.look_creature = w.creature_get_seen_player(l) != 0;
-        auto const look_player = g.look_creature ? lizard::player_of(state, w.creature_get_seen_player(l)) : dcon::player_id{};
-        if (look_player) {
-            vec2 const target = w.creature_get_sees_player(l) && lizard::player_here(state, look_player, room.id)
-                ? w.body_chunk_get_pos(player::body_chunk(state, look_player, 0))
-                : room_view::middle_of_tile(w.creature_get_last_seen_pos(l));
+            if (auto const t = lizard::ai::tracked(state, l))
+                g.look_creature = t;
+        auto const* look = g.look_creature ? tracker::find(ts, g.look_creature) : nullptr;
+        if (!look)
+            g.look_creature = creature::target{};
+        if (look) {
+            vec2 const target = look->visual && creature::here(state, look->who, room.id) ? creature::main_pos(state, look->who) : look->last_seen;
             g.look_pos = custom::move_towards(g.look_pos, target, mathf::lerp(100.f, 20.f, p.neck_stiffness));
         }
         // (the eyes only aim lizardLaserEyes, a debug setup value: not ported)
@@ -888,8 +895,8 @@ namespace lizard_graphics {
         // the head
         vec2 const head_move = g.head.pos - g.head.last_pos;
         body_parts::generic_update(g.head, room, 0.99f, 0.5f);
-        if (auto const held = lizard::grasped(state, l)) {
-            g.head.pos = w.body_chunk_get_pos(player::body_chunk(state, held, w.creature_get_grasp_chunk(l)[0]));
+        if (auto const held = lizard::grasped(state, l); held && creature::live(state, held)) {
+            g.head.pos = w.body_chunk_get_pos(creature::chunk_of(state, held, creature::grasp_chunk(w, l, 0)));
         } else if (awake) {
             vec2 v = custom::dir_vec(g.draw_positions[0][0], g.look_pos);
             if (z.upcoming_count > 0)

@@ -8,6 +8,7 @@
 #include "simulation.hpp"
 #include "creature.hpp"
 #include "dens.hpp"
+#include "migrate.hpp"
 #include "rain.hpp"
 #include "spawns.hpp"
 #include "reports.hpp"
@@ -120,6 +121,7 @@ namespace simulation {
         bool const game_world = !state.fs.roots.empty();
         if (!state.rain_ready) {
             rain::setup(state);
+            migrate::load_attractions(state);
             state.rain_ready = true;
             if (game_world)
                 reports::add_log(rain::describe_groups(state));
