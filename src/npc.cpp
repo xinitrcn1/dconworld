@@ -697,11 +697,17 @@ namespace npc {
                     ivec2 const ht = room_view::get_tile_position(pos(state, p, 0));
                     bool const top = !room.get_tile(ht + ivec2{0, 1}).vertical_beam() || room.get_tile(ht).horizontal_beam()
                         || room.get_tile(room_view::get_tile_position(pos(state, p, 1))).horizontal_beam();
+                    // (under a ceiling not that up first: it climbs the pole into
+                    // jumping from higher and bonks its head, short of the other
+                    // pole: UW_E02's pole x=39 under its block, UW_D03)
+                    bool ceiling = false;
+                    for (int32_t k = 1; k <= 3 && !ceiling; ++k)
+                        ceiling = room.get_tile(ht + ivec2{0, k}).solid() || room.get_tile(ht + ivec2{dir, k}).solid();
                     if (nav.cool < 2 && (w().player_get_flip_direction(p) != dir || (nav.wall_side < 4 && !top)) && t < 12) {
                         nav.cool = 1;
                         // (as a player did it in CC_B08: up and towards it, then
                         // towards it, then jump)
-                        return input(dir, nav.wall_side++ < 2 && !top ? 1 : 0);
+                        return input(dir, nav.wall_side++ < 2 && !top && !ceiling ? 1 : 0);
                     }
                     // off it: (onto the ground: the rest is a flight)
                     if (!room.get_tile(nav.aim).vertical_beam()) {

@@ -96,6 +96,13 @@ the tools for tracing them, and what is known not to work yet.
 - **Out of a crawlway** (a tile one high, its open end over air): straight
   across onto a pole 2 to 4 tiles out, level or a little lower (UW_E03's
   tunnels up its left wall onto pole x=9, twice).
+- **Bonking.** A jump off a pole rises first, however far down it lands:
+  it needs two tiles of room over its head beside the pole where it leaves
+  (the planner's arc for a long falling jump started downwards, under a
+  ceiling the jump hit and dropped short: UW_E02's pole x=39 under its
+  block). And under a ceiling within three tiles it doesn't start with the
+  player's up-and-towards ticks (holding up climbs the pole, the jump leaves
+  higher and bonks).
 - **Pole to pole** up to nine across (falling eight or more); coming down
   onto a pole it aims where there is pole under it too.
 - **No wall jumps on a pole**: holding a pole that goes on up, or with a

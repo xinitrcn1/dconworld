@@ -508,6 +508,10 @@ namespace pathing {
                         }
                     }
                 }
+            // (a jump off a pole rises first, however far down it lands: room
+            // over its head beside the pole, or it bonks its head on the ceiling
+            // and drops short; UW_E02's pole x=39 under its block)
+            auto const headroom = [&](ivec2 u, int32_t s) { return open(room, u + ivec2{s, 1}) && open(room, u + ivec2{s, 2}); };
             // from a vertical pole to another one across: a jump off it,
             // grabbing the other one on the way (up a little close by,
             // further on falling)
@@ -527,14 +531,14 @@ namespace pathing {
                                 // catch on the way down; at its foot it drops past)
                                 bool const below = dy >= -2
                                     || (room.inside(v.x, v.y - 2) && room.get_tile(v - ivec2{0, 1}).vertical_beam() && room.get_tile(v - ivec2{0, 2}).vertical_beam());
-                                if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && below && arc_open(room, u, v, s, 1))
+                                if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && below && headroom(u, s) && arc_open(room, u, v, s, 1))
                                     add(u, v, 30u + 10u * uint32_t(d) + (dy == swing_rise(d) ? 30u : 0u) + (d >= 6 ? 60u : 0u), step_kind::swing, s);
                             }
                     // or onto the ground
                     for (int32_t const s : {-1, 1})
                         for (int32_t dy = 2; dy >= -8; --dy)
                             for (int32_t d = 2; d <= pole_jump_reach(dy); ++d)
-                                if (ivec2 const v = u + ivec2{s * d, dy}; arc_clear(room, u, v, s, 1) && stops(room, v, s, pole_jump_reach(dy) - d))
+                                if (ivec2 const v = u + ivec2{s * d, dy}; arc_clear(room, u, v, s, 1) && headroom(u, s) && stops(room, v, s, pole_jump_reach(dy) - d))
                                     add(u, v, 35u + 10u * uint32_t(d) + edge_of_reach(d, pole_jump_reach(dy)), step_kind::swing, s);
                 }
             // from the tip of a pole (standing on it): a jump onto the
