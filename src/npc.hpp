@@ -22,7 +22,10 @@
 // can), and a pack (like the Yellow lizards') shares what each of them
 // sees, goes where its leader goes and waits for the others at the pipes.
 // In the target shelter it stays until the rain is over, then picks
-// another one; with the rain close it makes for the nearest shelter.
+// another one (lying down where slugcats sleep there, Spearmaster pulling
+// two needles out of its tail when a cycle starts); with the rain close it makes for the nearest shelter, and a
+// pack too slow on its way (less than half way there by 50 to 75% of the
+// cycle, rolled per pack) goes back to the shelter it started in.
 
 #include <atomic>
 #include <cstdint>
@@ -63,6 +66,10 @@ namespace npc {
     // the shelters a slugcat could get to from where `p` stands (tests, the
     // HUD); the first is the closest
     std::vector<dcon::room_id> reachable_shelters(sys::game_state& state, dcon::player_id p);
+
+    // where slugcats wake up and sleep in a shelter (ShelterDoor's
+    // playerSpawnPos): NPCs spawn there and lie down there when they arrive
+    std::optional<rw::ivec2> shelter_spot(sys::game_state const& state, dcon::room_id shelter);
 
     // The pipe (or warp) `p` would leave its room by on its way to its
     // target from where it stands now (planned afresh; `next`: the room it
@@ -140,6 +147,7 @@ namespace npc {
         std::atomic<uint32_t> pounces{0};
         std::atomic<uint32_t> flights{0};
         std::atomic<uint32_t> hurried{0};
+        std::atomic<uint32_t> turned_back{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

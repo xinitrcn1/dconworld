@@ -19,6 +19,11 @@ namespace gates {
         // ticks something has to stay over the gate's middle before it
         // cycles (vanilla's startCounter, without its stand-still wait)
         constexpr int32_t trigger_ticks = 60;
+        // not vanilla: a failsafe for creatures that stay in the airlock
+        // (a lizard sitting in it, an NPC that can't find its way out): 5 s
+        // with its sides shut and it goes back to open, the middle door
+        // shutting on whatever is still in the way
+        constexpr int32_t held_ticks = 5 * 40;
 
         // RegionGate.ChangeDoorStatus: rewrites the door's tiles
         void change_door_status(sys::game_state& state, dcon::room_id room, int32_t door, bool open) {
@@ -172,12 +177,15 @@ namespace gates {
             if (all_doors_in_position(closed, goal))
                 w.gate_set_mode(g, gate_mode::middle_open);
             break;
-        case gate_mode::middle_open:
-            if (all_players_through(state, room, w.gate_get_let_through_dir(g))) {
+        case gate_mode::middle_open: {
+            int32_t& held = w.gate_get_held_counter(g);
+            if (all_players_through(state, room, w.gate_get_let_through_dir(g)) || ++held > held_ticks) {
+                held = 0;
                 goal[1] = 1.f;
                 w.gate_set_mode(g, gate_mode::closing_middle);
             }
             break;
+        }
         case gate_mode::closing_middle:
             if (all_doors_in_position(closed, goal)) {
                 w.gate_set_mode(g, gate_mode::opening_side);

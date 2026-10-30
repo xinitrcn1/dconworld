@@ -220,8 +220,12 @@ namespace pathing {
             auto const tile = room.get_tile(t);
             if (tile.solid())
                 return false;
+            // (a pipe's entrance only as a goal: stepping into it with the
+            // direction held is going into the pipe)
+            if (tile.t == terrain::shortcut_entrance)
+                return false;
             // a platform it climbs up through and drops through
-            if (standable(room, t) || tile.any_beam() || tile.t == terrain::shortcut_entrance || tile.t == terrain::floor)
+            if (standable(room, t) || tile.any_beam() || tile.t == terrain::floor)
                 return true;
             if (swim && tile.water != 0)
                 return true;
@@ -322,6 +326,9 @@ namespace pathing {
                     // corridor's top, up on a beam: no run up, no pounce from there)
                     bool const on_beam_top = standable(room, g) && room.get_tile(g - ivec2{0, 1}).horizontal_beam();
                     bool const ground = standable(room, g) && !on_beam_top;
+                    bool beam_safe = false;
+                    for (int32_t k = 2; k <= 4 && on_beam_top && !beam_safe; ++k)
+                        beam_safe = walkable(g - ivec2{0, k}) || !open(room, g - ivec2{0, k});
                     for (int32_t const s : {-1, 1}) {
                         ivec2 const side = g + ivec2{s, 0};
                         // off the edge: the tile beside is open air over
@@ -344,9 +351,9 @@ namespace pathing {
                             if (!open(room, c) || (k > 1 && walkable(c - ivec2{0, 1})) || !open(room, c + ivec2{0, 1}))
                                 break;
                             ivec2 const top = c + ivec2{s, 0};
-                            // (not from up on a beam: off it the jump either catches the
-                            // beam again or drops through it)
-                            if (!on_beam_top && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
+                            // (from up on a beam only over something to land on: off it the
+                            // jump may drop through the beam, over a pit for good)
+                            if ((!on_beam_top || beam_safe) && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
                                 add(g, top, 20u + 10u * uint32_t(k), step_kind::rise, s);
                         }
                         // over a gap: a running jump from the edge (with room
@@ -386,7 +393,7 @@ namespace pathing {
                     // shelter's shaft up to its pipe)
                     for (int32_t k = 2; k <= max_rise && ground; ++k) {
                         ivec2 const c = g + ivec2{0, k};
-                        if (!open(room, c) || walkable(c - ivec2{0, 1}))
+                        if (!open(room, c) || !open(room, c - ivec2{0, 1}) || walkable(c - ivec2{0, 1}))
                             break;
                         if (walkable(c)) {
                             add(g, c, 20u + 10u * uint32_t(k), step_kind::rise, 0);
@@ -580,6 +587,10 @@ namespace pathing {
             ivec2 const d = v - u;
             // up on a horizontal beam only from beside it standing, or up from
             // hanging on it (not sideways off a pole)
+            // (a platform tile is gone through up or down, not along)
+            auto const in_platform = [&](ivec2 t) { return room.get_tile(t).t == terrain::floor && !standable(room, t) && !room.get_tile(t).any_beam(); };
+            if (d.x != 0 && (in_platform(u) || in_platform(v)))
+                return false;
             auto const on_beam = [&](ivec2 t) { return standable(room, t) && room.get_tile(t - ivec2{0, 1}).horizontal_beam(); };
             if (on_beam(v) && d.y >= 0 && !standable(room, u) && !(d.x == 0 && room.get_tile(u).horizontal_beam()))
                 return false;
@@ -649,6 +660,12 @@ namespace pathing {
             };
             if (room.inside(goal.x, goal.y) && walk[index(goal)]) {
                 relax(goal, 0);
+            } else if (room.inside(goal.x, goal.y) && room.get_tile(goal).t == terrain::shortcut_entrance) {
+                // a pipe: from its mouth (and the entrance itself, where a
+                // slugcat coming out of it stands)
+                ivec2 const mouth = goal + room.shortcut_entrance_hole_direction(goal);
+                if (room.inside(mouth.x, mouth.y) && walk[index(mouth)])
+                    relax(mouth, 0);
             } else {
                 for (int32_t dy = -3; dy <= 3; ++dy)
                     for (int32_t dx = -3; dx <= 3; ++dx) {

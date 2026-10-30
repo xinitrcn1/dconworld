@@ -767,8 +767,10 @@ object{
 	size{4096}
 	tag{save}
 	property{ name{player} type{player_id} }
-	// the shelter it heads for
+	// the shelter it heads for, the one it started in (where it goes back
+	// to when it is too slow on its way)
 	property{ name{target} type{room_id} }
+	property{ name{home} type{room_id} }
 	// its pack's leader (itself for the leader, none alone)
 	property{ name{leader} type{slugcat_npc_id} }
 	property{ name{nav} type{::npc::nav_state} }
@@ -1459,6 +1461,9 @@ object{
 	property{ name{door_goal} type{rw::vec3} }
 	property{ name{start_counter} type{int32_t} }
 	property{ name{washing_counter} type{int32_t} }
+	// ticks the airlock has stood open in the middle waiting for everything
+	// to get through (the failsafe: it resets after a while, see gates.cpp)
+	property{ name{held_counter} type{int32_t} }
 	property{ name{let_through_dir} type{uint8_t} }
 	property{ name{dont_open} type{uint8_t} }
 	// Door.lastClosed of the three doors, bit per door

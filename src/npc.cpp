@@ -8,6 +8,7 @@
 #include "npc.hpp"
 #include "creature.hpp"
 #include "dens.hpp"
+#include "items.hpp"
 #include "migrate.hpp"
 #include "pathing.hpp"
 #include "player.hpp"
@@ -108,6 +109,39 @@ namespace npc {
             ivec2 tile;
             uint32_t bit;
         };
+        // ShelterDoor's playerSpawnPos: from the shelter's exit pipe out
+        // until the next tile is solid (going up: to the wall on the left
+        // too), down to the floor; a ShelterSpawnPoint overrides it (not
+        // parsed yet). Where the slugcats wake up and lie down to sleep
+        std::optional<ivec2> spawn_spot(sys::game_state const& state, room_view const& room) {
+            // (Custom.fourDirections' order; the last entrance in vanilla's
+            // x then y scan wins)
+            constexpr ivec2 four[4] = {{-1, 0}, {0, 1}, {1, 0}, {0, -1}};
+            auto const solid = [&](ivec2 t) { return !room.inside(t.x, t.y) || room.get_tile(t).t == world::terrain::solid; };
+            std::optional<ivec2> entrance;
+            state.world.room_for_each_exit_location(room.id, [&](dcon::exit_location_id el) {
+                auto const node = state.world.room_exit_get_index(state.world.exit_location_get_exit(el));
+                if (auto const t = dens::exit_entrance(state, room.id, uint8_t(node)))
+                    if (!entrance || t->x > entrance->x || (t->x == entrance->x && t->y > entrance->y))
+                        entrance = *t;
+            });
+            if (!entrance)
+                return std::nullopt;
+            ivec2 at = *entrance;
+            for (auto const d : four)
+                if (!solid(*entrance + d)) {
+                    for (int32_t k = 0; k < room.width + room.height && !solid(at + d); ++k)
+                        at = at + d;
+                    if (d.y == 1)
+                        for (int32_t k = 0; k < room.width && !solid(at + ivec2{-1, 0}); ++k)
+                            at.x -= 1;
+                    for (int32_t k = 0; k < room.height && !solid(at + ivec2{0, -1}); ++k)
+                        at.y -= 1;
+                    break;
+                }
+            return at;
+        }
+
         std::vector<goal_tile> goals_of(sys::game_state const& state, room_view const& room) {
             auto const& w = state.world;
             auto const& rr = state.slugcat_routes[size_t(room.id.index())];
@@ -258,6 +292,18 @@ namespace npc {
             state.world.creature_set_trip(c, t);
             ++stats().trips;
             return true;
+        }
+
+        // how many rooms the search's way to `target` goes through (0 none)
+        uint32_t hops_to(search const& s, dcon::room_id target) {
+            for (auto const st : s.order)
+                if (room_at(st / slots) == target) {
+                    uint32_t n = 1;
+                    for (uint32_t at = st; s.prev[at] != search::from_start; at = s.prev[at] - 1u)
+                        ++n;
+                    return n;
+                }
+            return 0;
         }
 
         //
@@ -429,7 +475,17 @@ namespace npc {
                     if (t < 8 && mode != player::body_mode_index::climbing_on_beam && mode != player::body_mode_index::corridor_climb) {
                         int32_t const feet_x = room_view::get_tile_position(pos(state, p, 1)).x;
                         int32_t const column = dir == 0 ? nav.aim.x : nav.from.x;
-                        if (feet_x != column && t < 6) {
+                        // (two or more up beside it: the far side of the column,
+                        // clear of the ledge's corner on the way up)
+                        float const off = dir != 0 && nav.aim.y - nav.from.y >= 2
+                            ? pos(state, p, 1).x - (room_view::middle_of_tile(nav.from).x - 4.f * float(dir)) : 0.f;
+                        if ((feet_x != column || std::abs(off) > 3.f) && t < 6) {
+                            if (feet_x == column) {
+                                nav.move_timer = 1;
+                                if (++nav.cool > 40)
+                                    nav.move_timer = 6;
+                                return input(off > 0.f ? -1 : 1, 0);
+                            }
                             nav.move_timer = 1;
                             if (++nav.cool > 40) {
                                 failed(30);
@@ -448,19 +504,46 @@ namespace npc {
                         bool const at_wall = mode == player::body_mode_index::wall_climb || contact(state, p, 0).x == dir || contact(state, p, 1).x == dir;
                         if (dir != 0 && at_wall)
                             return input(-dir, 0);
-                        return input(0, nav.hold_jump ? 0 : 1);
+                        // (only up when not standing yet: by a pole it would grab it)
+                        return input(0, nav.hold_jump || mode == player::body_mode_index::stand ? 0 : 1);
+                    }
+                    // back on the ground and walking off along it: the jump fell short
+                    if (t > 16 && at.y <= nav.from.y && std::abs(at.x - nav.from.x) >= 3 && mode == player::body_mode_index::stand) {
+                        failed(60);
+                        break;
                     }
                     // (like a player's CC_B08 ledge: a tick towards it, then jump
                     // without up, up later to climb on)
-                    if (t == 8 && dir != 0)
+                    // (turned that way first: a jump in the middle of the turn
+                    // hardly leaves the ground)
+                    if (t == 8 && dir != 0) {
+                        if (w().player_get_flip_direction(p) != dir && ++nav.cool < 20)
+                            nav.move_timer = 8;
                         return input(dir, 0);
-                    return input(dir, t < 22 ? 0 : 1, t < 24 && t > 8);
+                    }
+                    // (two or more up: straight up its column first, then into
+                    // the ledge's corner for the grab; leaning over at once it
+                    // bumps the ceiling beside the column)
+                    bool const high = nav.aim.y - nav.from.y >= 2;
+                    return input(high && t < 15 ? 0 : dir, t < 22 ? 0 : 1, t < 24 && t > 8);
                 }
                 case move::crouch: {
                     if (t > 60) {
                         failed(60);
                         break;
                     }
+                    // (still coming up out of a pipe or a corridor below: up
+                    // onto the tile first, down there it would go back in)
+                    ivec2 const feet = room_view::get_tile_position(pos(state, p, 1));
+                    bool const on_pole = mode == player::body_mode_index::climbing_on_beam;
+                    if ((mode == player::body_mode_index::corridor_climb || on_pole) && feet.y < nav.from.y)
+                        return input(0, 1);
+                    // (on a pole, or standing where one goes through: down there
+                    // climbs it; off it towards the gap, crouching from beside it)
+                    if (on_pole)
+                        return input(dir, 0);
+                    if (mode != player::body_mode_index::crawl && room.get_tile(feet).vertical_beam() && feet.x == nav.from.x)
+                        return input(dir, 0);
                     if (mode != player::body_mode_index::crawl)
                         return input(0, -1);
                     // facing the gap, both ends on the ground
@@ -715,8 +798,11 @@ namespace npc {
                 // a pipe whose mouth is a beam under the rock (no room to
                 // stand there): off the beam it stands on, catch it hanging,
                 // and in along it
+                // (any pipe whose mouth is a horizontal beam, it goes in along the
+                // beam hanging from it: standing on it, it would push at the rock
+                // in the corner)
                 ivec2 const mouth = push ? goal + room.shortcut_entrance_hole_direction(goal) : ivec2{-1, -1};
-                bool const low_mouth = push && room.get_tile(mouth).horizontal_beam() && room.get_tile(mouth + ivec2{0, 1}).solid()
+                bool const low_mouth = push && room.get_tile(mouth).horizontal_beam() && room.shortcut_entrance_hole_direction(goal).y == 0
                     && custom::dist_less(pos(state, p, 0), room_view::middle_of_tile(mouth), 80.f);
                 if (low_mouth) {
                     ivec2 const in_dir = ivec2{0, 0} - room.shortcut_entrance_hole_direction(goal);
@@ -837,8 +923,9 @@ namespace npc {
                     begin(move::rise, st->tile, dd.x);
                     return *keep_moving();
                 }
+                // down: on a pole only down (sideways too it would wall climb)
                 if (dd.y < 0)
-                    return input(dd.x, -1);
+                    return input(on_pole ? 0 : dd.x, -1);
                 // off a pole onto a horizontal beam beside it: its feet level
                 // with the beam first (with its head there it would hang)
                 if (on_pole && dd.x != 0 && room.get_tile(st->tile - ivec2{0, 1}).horizontal_beam()) {
@@ -875,7 +962,39 @@ namespace npc {
                     return false;
                 auto const t = closest ? options.front() : options[size_t(rng.range(0, int32_t(options.size())))];
                 w().slugcat_npc_set_target(n, t);
+                nav.route_hops = uint8_t(std::min(255u, hops_to(s, t)));
                 return set_trip(state, c, s, t);
+            }
+
+            // The failsafe against the rain: by its pack's share of the cycle,
+            // less than half way to the target, back to the shelter it
+            // started in (else the closest one). Once a cycle, the leader's
+            void turn_back() {
+                auto const target = w().slugcat_npc_get_target(n);
+                auto const home = w().slugcat_npc_get_home(n);
+                auto const* rc = rain::of_room(state, room.id);
+                // (where its region rains, a shelter included)
+                auto const region = w().room_get_rain_region(room.id);
+                if (!target || !home || target == home || nav.route_hops == 0 || !rc || !region || w().region_get_never_rains(region) || rc->cycle_length <= 0)
+                    return;
+                if (nav.turn_cycle == rc->cycles + 1 || rc->timer * 100 < int32_t(nav.turn_back) * rc->cycle_length)
+                    return;
+                nav.turn_cycle = rc->cycles + 1;
+                auto const& s = explore(state, room.id, goals_from(state, room, at));
+                uint32_t const left = hops_to(s, target);
+                // (no way on from here counts as none of the way done)
+                if (left != 0 && 2 * (nav.route_hops - std::min<uint32_t>(left, nav.route_hops)) >= nav.route_hops)
+                    return;
+                ++stats().turned_back;
+                if (room.id == home || hops_to(s, home) != 0) {
+                    w().slugcat_npc_set_target(n, home);
+                    nav.route_hops = uint8_t(std::min(255u, hops_to(s, home)));
+                    migrate::cancel(state, c);
+                    if (room.id != home)
+                        set_trip(state, c, s, home);
+                } else {
+                    pick_target(true);
+                }
             }
 
             bool leads() {
@@ -968,6 +1087,12 @@ namespace npc {
                     ++stats().arrived;
                     return input(0, 0);
                 }
+                if (leads() && target) {
+                    turn_back();
+                    // (back already: in the shelter it started in)
+                    if (w().slugcat_npc_get_target(n) == room.id)
+                        return travel();
+                }
                 // the rain is close: the nearest shelter will do
                 if (leads() && !nav.hurried && !w().room_get_is_shelter(room.id))
                     if (auto const* rc = rain::of_room(state, room.id); rc && rain::rains_in(state, room.id) && rain::time_until_rain(*rc) < hurry_ticks
@@ -1024,9 +1149,22 @@ namespace npc {
                 // the rain came and went (where it never rains, a while
                 // went by): off to another shelter
                 auto const* rc = rain::of_room(state, room.id);
-                bool const over = rain::rains_in(state, room.id) ? rc && rc->cycles != nav.cycles : nav.goal_timer > dry_rest_ticks;
-                if (w().slugcat_npc_get_target(n) == room.id && !over)
+                // (a shelter has no rain of its own: its region's)
+                auto const region = w().room_get_rain_region(room.id);
+                bool const rains = rc && region && !w().region_get_never_rains(region);
+                bool const over = rains ? rc->cycles != nav.cycles : nav.goal_timer > dry_rest_ticks;
+                if (w().slugcat_npc_get_target(n) == room.id && !over) {
+                    // to where slugcats sleep, not just in by the pipe
+                    // (giving up after a while: a crowd, a spot it can't reach)
+                    if (auto const spot = spawn_spot(state, room); spot && *spot != at && nav.goal_timer < 600) {
+                        auto const f = pathing::field_to(state, room.id, *spot, pathing::slugcat);
+                        if (pathing::distance(state, f, at) != pathing::unreachable)
+                            return go(*spot, false);
+                    }
+                    if (auto const in = keep_moving())
+                        return *in;
                     return input(0, 0);
+                }
                 if (over && leads())
                     w().slugcat_npc_set_target(n, dcon::room_id{});
                 nav.hurried = 0;
@@ -1079,7 +1217,10 @@ namespace npc {
         nav_state nav;
         // a while in the shelter before setting off
         nav.goal_timer = -rng.range(40, 400);
+        nav.turn_back = uint8_t(rng.range(50, 76));
         w.slugcat_npc_set_nav(n, nav);
+        if (w.room_get_is_shelter(room))
+            w.slugcat_npc_set_home(n, room);
         w.player_set_npc(p, n);
         ++stats().spawned;
         return p;
@@ -1129,9 +1270,15 @@ namespace npc {
             if (!(rng.value() < chance))
                 return;
             auto const view = world::get_room_view(state, r);
-            spawn_group(state, r, vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f}, uint32_t(rng.range(1, 9)), rng);
+            auto const spot = spawn_spot(state, view);
+            spawn_group(state, r, spot ? room_view::middle_of_tile(*spot) : vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f},
+                uint32_t(rng.range(1, 9)), rng);
         });
         return stats().spawned - before;
+    }
+
+    std::optional<ivec2> shelter_spot(sys::game_state const& state, dcon::room_id shelter) {
+        return spawn_spot(state, world::get_room_view(state, shelter));
     }
 
     void destroy(sys::game_state& state, dcon::player_id p) {
@@ -1536,6 +1683,24 @@ namespace npc {
         // stunned, held, sucked into a pipe: its legs aren't its own
         if (w.creature_get_stun(c) > 0 || w.creature_get_entering_shortcut(c).x >= 0)
             return player::input_package{};
+        // Spearmaster in a shelter at the start of a cycle (waking up there,
+        // or still resting when a new one starts): pick up held with a free
+        // hand until a needle is pulled out of its tail for each hand
+        // (items.cpp's spearmaster_update), once a cycle
+        if (w.player_get_stats(p).name == player::slugcat_name::spear && w.room_get_is_shelter(room.id)) {
+            auto const* rc = rain::of_room(state, room.id);
+            uint32_t const cycle = (rc ? rc->cycles : 0u) + 1u;
+            bool const new_cycle = nav.what == goal::start || (nav.what == goal::rest && rc && rc->cycles != nav.cycles);
+            if (nav.spear_cycle != cycle && new_cycle) {
+                bool const free_hand = !items::held(state, p, 0) || !items::held(state, p, 1);
+                if (free_hand && ++nav.spear_timer < 400)
+                    return player::make_input(0.f, 0.f, false, false, true);
+                if (!free_hand || nav.spear_timer >= 400) {
+                    nav.spear_cycle = cycle;
+                    nav.spear_timer = 0;
+                }
+            }
+        }
         brain b{state, p, n, c, room, nav, w.creature_get_random(c), tile_of(state, p, room)};
         if (creature::held(state, c)) {
             // wriggling
@@ -1578,12 +1743,12 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[320];
+        char buf[360];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

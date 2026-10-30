@@ -94,5 +94,17 @@ namespace npc {
         // its target shelter's region's finished cycles when it got there
         // (a new cycle sends it off again)
         uint32_t cycles = 0;
+        // the failsafe against the rain: the share of the cycle (percent,
+        // rolled per pack, its leader's counts) by which it must be half way
+        // to its target, else it goes back to the shelter it started in; the
+        // rooms the way to the target took when it was picked, the cycle
+        // (+ 1) it last checked in
+        // Spearmaster: the cycle (+ 1) it last had its two spears in a
+        // shelter
+        uint32_t spear_cycle = 0;
+        uint16_t spear_timer = 0;
+        uint8_t turn_back = 50;
+        uint8_t route_hops = 0;
+        uint32_t turn_cycle = 0;
     };
 }

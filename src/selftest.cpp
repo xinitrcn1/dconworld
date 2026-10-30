@@ -1470,6 +1470,39 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " opened=%d passable=%d through=%d rearmed=%d", int(opened), int(passable), int(through), int(reset));
             r.check("region gate cycle", opened && passable && through && reset && view.get_tile(14, 9).t == terrain::air, s.describe() + d);
         }
+        {
+            // the failsafe: a slugcat that stays in the open airlock (never
+            // past the far door) doesn't keep it shut; 5 s on, the middle
+            // closes on it and the sides open again
+            auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
+                if (y < 8) return '#';
+                if ((x == 23 || x == 24) && y <= 16) return '#';
+                return ' ';
+            }));
+            auto& w = gs.world;
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_last_closed(g, 0b010);
+            w.try_create_gate_location(g, gate_room);
+            sim s(gs, gate_room, feet_at(19, 8));
+            bool const opened = s.until(1200, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_open; });
+            // it stays where it is: held open for 5 s, no longer
+            bool const held = s.until(5 * 40 - 10, [&] { return w.gate_get_mode(g) != world::gate_mode::middle_open; }) == false;
+            bool const gave_up = s.until(20, [&] { return w.gate_get_mode(g) == world::gate_mode::closing_middle; });
+            bool const reset = s.until(1000, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_closed; });
+            auto const view = world::get_room_view(gs, gate_room);
+            bool const sides_open = view.get_tile(14, 9).t == terrain::air && view.get_tile(32, 9).t == terrain::air;
+            // and it doesn't cycle again with the slugcat still in the middle
+            s.run(400);
+            bool const stays = w.gate_get_mode(g) == world::gate_mode::middle_closed;
+            char d[128];
+            std::snprintf(d, sizeof(d), " opened=%d held=%d gave_up=%d reset=%d sides_open=%d stays=%d", int(opened), int(held), int(gave_up), int(reset),
+                int(sides_open), int(stays));
+            r.check("region gate resets when held", opened && held && gave_up && reset && sides_open && stays, s.describe() + d);
+        }
 
         // a placed object from the room's settings, spawned on the first visit
         auto const add_thing = [&](dcon::room_id room, world::thing_kind kind, vec2 pos, vec2 handle = {}, vec2 handle2 = {}, float extra = 0.f,
@@ -2495,6 +2528,78 @@ namespace selftest {
             char d[160];
             std::snprintf(d, sizeof(d), " same_target=%d waited=%d all_there=%d after %u ticks, dead=%u;", int(same_target), int(waited), int(all_there), t, dead);
             r.check("NPC pack travels together", same_target && waited && all_there && dead == 0, d + (all_there ? std::string{} : where));
+        }
+        {
+            // in the shelter it lies down where slugcats sleep (not by the
+            // pipe it came in by); Spearmaster wakes up with a needle pulled
+            // out of its tail in each hand
+            auto [st_ptr, from, course, to] = course_world("npc_spot");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0x5907u};
+            auto const p = npc::create(st, from, feet_at(5, 2), rng, {}, player::slugcat_name::spear);
+            bool needles = false;
+            for (uint32_t t = 0; t < 400 && !needles; ++t) {
+                tick_world(st, 1);
+                auto const a = items::held(st, p, 0), b = items::held(st, p, 1);
+                needles = a && b && w.item_get_type(a) == world::item_type::spear && w.item_get_type(b) == world::item_type::spear
+                    && w.item_get_needle(a) == 1 && w.item_get_needle(b) == 1;
+            }
+            auto const spot = npc::shelter_spot(st, to);
+            bool arrived = false, on_spot = false;
+            uint32_t t = 0;
+            for (; t < 5000 && !on_spot; ++t) {
+                tick_world(st, 1);
+                arrived = arrived || (rooms::room_of(st, p) == to && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest);
+                rw::ivec2 const feet = world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(st, p, 1)));
+                on_spot = arrived && spot && std::abs(feet.x - spot->x) <= 1 && std::abs(feet.y - spot->y) <= 1;
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " needles=%d spot=(%d,%d) arrived=%d on_spot=%d after %u ticks; %s", int(needles), spot ? spot->x : -1, spot ? spot->y : -1,
+                int(arrived), int(on_spot), t, npc::describe(st, p).c_str());
+            r.check("NPC sleeps on the spot, Spearmaster's needles", needles && on_spot && !player::dead(st, p), d);
+        }
+        {
+            // the failsafe against the rain: late in the cycle and less than
+            // half way to its target, it goes back to the shelter it started
+            // in (rests there); on time it keeps going
+            auto [st_ptr, from, course, to] = course_world("npc_late");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn = w.room_get_rain_region(from);
+            w.region_set_never_rains(rgn, false);
+            rain::add_rooms(st, std::array{from, course, to});
+            st.rain_frozen = true;
+            auto const* rc = rain::of_room(st, from);
+            bool const cycle = rc && rc->cycle_length > 4000;
+            if (cycle)
+                rain::rain_in(st, rgn, rc->cycle_length / 5);
+            rw::rng rng{0x7A7Eu};
+            auto const p = npc::create(st, from, feet_at(5, 2), rng);
+            auto const n = npc::of(st, p);
+            bool const home = w.slugcat_npc_get_home(n) == from;
+            uint32_t const turned = npc::stats().turned_back;
+            bool rested_home = false, left = false;
+            uint32_t t = 0;
+            for (; t < 3000 && !rested_home; ++t) {
+                tick_world(st, 1);
+                trace_npc(st, p, t);
+                left = left || rooms::room_of(st, p) != from;
+                rested_home = rooms::room_of(st, p) == from && w.slugcat_npc_get_target(n) == from && w.slugcat_npc_get_nav(n).what == npc::goal::rest;
+            }
+            // early in the cycle another one sets off and gets there
+            if (cycle)
+                rain::rain_in(st, rgn, rc->cycle_length * 4 / 5);
+            auto const q = npc::create(st, from, feet_at(8, 2), rng);
+            bool on_time = false;
+            for (uint32_t k = 0; k < 4000 && !on_time; ++k) {
+                tick_world(st, 1);
+                on_time = rooms::room_of(st, q) == to && w.slugcat_npc_get_nav(npc::of(st, q)).what == npc::goal::rest;
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " cycle=%d home=%d turned=%u rested_home=%d (left=%d) after %u ticks, on_time=%d; %s", int(cycle), int(home),
+                npc::stats().turned_back - turned, int(rested_home), int(left), t, int(on_time), npc::describe(st, p).c_str());
+            r.check("NPC turns back late in the cycle", cycle && home && npc::stats().turned_back > turned && rested_home && !left && on_time, d);
         }
         {
             // a region gate between the shelters: it waits at the middle

@@ -9,7 +9,8 @@ the tools for tracing them, and what is known not to work yet.
 
 - **Spawning.** At world load a share of the shelters (`--npcs <share>`,
   default 0.25; `--no-npcs` for none) each get a group of 1 to 8 slugcats,
-  rolled with the shelter's own generator (`npc::spawn_world`). Each one is
+  rolled with the shelter's own generator (`npc::spawn_world`), around
+  the shelter's sleeping spot (below). Each one is
   any slugcat (Survivor to the Watcher, Downpour's included; a Watcher is a
   Void Weaver half the time) in a random colour (random hue, saturation 0.25
   to 1, lightness 0.3 to 0.85; light eyes on a dark body). In game, `U`
@@ -25,10 +26,30 @@ the tools for tracing them, and what is known not to work yet.
 - **Target shelter.** Each slugcat (each pack's leader) picks a random
   shelter it can reach: in its region or in any region it can get to
   through gates and Watcher warps, as far as its movement allows (see
-  [Routes](#routes)). In the target it rests until its region's rain cycle
-  is over (`rain::cycle::cycles` changes), or for 4800 ticks in a region
-  where it never rains, then picks another one. When the rain is less than
-  1600 ticks away it makes for the nearest shelter once a cycle ("hurried").
+  [Routes](#routes)). In the target it walks to the sleeping spot (gives
+  up after 600 ticks: a crowd, a spot it can't reach) and rests until its
+  region's rain cycle is over (`rain::cycle::cycles` changes; the shelter's
+  *region*, a shelter has no room rain of its own), or for 4800 ticks in a
+  region where it never rains, then picks another one. When the rain is
+  less than 1600 ticks away it makes for the nearest shelter once a cycle
+  ("hurried").
+- **Sleeping spot** (`npc::shelter_spot`): ShelterDoor's `playerSpawnPos`.
+  From the shelter's exit pipe entrance out (the first of left, up, right,
+  down that isn't solid) until the next tile is solid, going up also left to
+  the wall, then down to the floor. A `ShelterSpawnPoint` placed object
+  would override it; the port doesn't parse that object yet.
+- **Turning back** (a failsafe, not vanilla). Each pack rolls a share of
+  the cycle, 50 to 75% (`nav_state::turn_back`, the leader's counts). Once a
+  cycle, when the cycle passes it, the leader counts how many rooms are
+  left to the target against how many there were when it picked it. Less
+  than half way there (or no way on from here), it goes back to the shelter
+  it started in (`slugcat_npc::home`); if that can't be reached, to the
+  nearest one. Already in the home shelter, it rests there at once.
+- **Spearmaster** starts each cycle in a shelter (waking up there, or still
+  resting when a new cycle starts) by holding pick up with a free hand until
+  its tail gives it a needle for each hand: the ability itself
+  (`items.cpp`'s `spearmaster_update`), no item made by the brain. Once a
+  cycle, giving up after 400 ticks.
 - **Fleeing.** It doesn't fight. A creature that would kill or eat a
   slugcat (that creature's own dynamic relationship to it: `go_for_kill`,
   intensity at least 0.05), in sight and within 360 px, sends it running.
@@ -195,14 +216,23 @@ feet level with the beam, or it would hang). A jump starts a **move**,
 input over several ticks:
 
 - `rise`: off the wall first (jumping from a wall climb would push it
-  away), stand up, then jump towards the ledge holding it, and hold up.
+  away), stand up (up only when not standing yet: by a pole it grabs it),
+  facing the ledge (a jump mid-turn hardly leaves the ground), then jump
+  towards the ledge holding it, and hold up. Two or more up beside the
+  ledge it takes off from the far side of its column (4 px off the middle),
+  clear of the ledge's corner. Back on the ground 3 or more tiles off where
+  it started, the jump fell short: blocked, not walked on under a ceiling.
   From a beam's top it doesn't hold up for the first 22 ticks (it would
   catch the beam again). Holding a pole and rising straight up, it does a
   tip jump instead.
 - `back_up`, `run`: two tiles back for a run-up (unless it is already
   running that way), then jump at the edge and hold it.
 - `crouch`, `charge`: down on fours facing the gap with both ends on the
-  ground, hold jump until `superLaunchJump` is 20, let go.
+  ground, hold jump until `superLaunchJump` is 20, let go. Still coming up
+  out of a pipe or a corridor below the start, it climbs up first (down
+  there it would go back in); where a pole goes through the start tile it
+  steps off towards the gap and crouches beside it (down on a pole climbs
+  it).
 - `swing`: onto the pole first (down out of a pipe's mouth), face the way
   (it jumps off the side it faces; it only turns when it has to), jump,
   hold up for the other pole; onto ground it is a flight.
@@ -300,7 +330,9 @@ Survivor, no creatures, the rain frozen:
 The route (from the user): HI_S05 → HI_A10 → HI_C11 → GATE_HI_CC → CC_A16 →
 CC_A02 → CC_C08 → CC_B06 → CC_B05 → CC_B08 → CC_A15 → CC_C07 → CC_A06 →
 CC_H01 → GATE_CC_UW → UW. Every room of it is connected in the graph
-(`--npc-route`), and the NPC walks it on its own as far as CC_B08:
+(`--npc-route`), and the NPC walks all of it on its own: **PASS** in UW_S04
+after 16052 ticks (≈ 6.7 minutes), 33 rises, 15 running jumps, 4 pounces, 0
+stuck, never dying:
 
 | room | what it takes |
 | --- | --- |
@@ -312,23 +344,36 @@ CC_H01 → GATE_CC_UW → UW. Every room of it is connected in the graph
 | CC_C08 | a straight jump up to a beam, and in along the beam into the low pipe |
 | CC_B06 | a pole jump across, then from the lower pole's tip into the wall and back onto the pole above (the bounce), a jump onto the platform by the exit |
 | CC_B05 | beams over a pit: their tops are dear, it keeps to the ground |
-| CC_B08 | the pipe at the bottom to the right hand pocket, up pole x=43, off it onto the beam at y 11, from the beam's left end into the outer wall and wall jumps up the **left** gap beside the block (a player's recording: the right gap's walls start too high, and the room is open past its right edge), the block's pipe to pole x=20, then pole x=20 → the ground at (25,17) → pole x=27 → ... ; **fails** in the top left: the jump from the y 64 corridor up to the ledge at (20,67) |
+| CC_B08 | the pipe at the bottom to the right hand pocket, up pole x=43, off it onto the beam at y 11, from the beam's left end into the outer wall and wall jumps up the **left** gap beside the block (a player's recording: the right gap's walls start too high, and the room is open past its right edge), the block's pipe to pole x=20, then pole x=20 → the ground at (25,17) → pole x=27 → ...; in the top left the jump from the y 64 corridor up to the ledge at (20,67) (facing it, from the column's far side) |
+| CC_A15 | along to the pipe |
+| CC_C07 | pipes and poles up the tall room: no stepping sideways off pole x=22 through the platform; the ledge at (20,61) from (21,58) (from the column's far side, without grabbing the pole beside it); up pole x=39 and from (40,105) up the gap beside the slab onto (41,108) |
+| CC_A06 | out of the pipe up through the platform at (27,6), off the pole and a pounce over the gap to (36,7) |
+| CC_H01, GATE_CC_UW, UW_D07 | on its own |
 
-It gets to CC_B08 after about 8500 ticks (≈ 3.5 minutes; vanilla players
-are a lot faster) and never dies before it. A player's recording of CC_B08
+A player's recording of CC_B08
 (`npc_human_HI_S05_UW_S04.txt`, a Watcher) replays to PASS with
 `--npc-human-complete HI_S05 UW_S04 --script "<its last line>"`.
 
 ## The whole world
 
-`--npc-soak 3000` with the default share (Survivor's world): 103 NPC
-slugcats in 13 packs. 40 of them have no shelter they can reach (their
-shelter's surroundings need moves the graph doesn't have). In 3000 ticks:
-6 shelters reached, 56 region crossings counted, 76 trips, 322 rises, 335
-running jumps, 43 pounces, 20 flights, 7 stuck; 4 dead (a White lizard,
-three long legs). The world ticks at 1.28–1.55 ms a tick on 6 threads with
-them, about what it took without (the "no way" counter counts NPC ticks
-without a plan, not events).
+`--npc-soak 6000` with the default share (Survivor's world): 103 NPC
+slugcats in 15 packs. Some of them have no shelter they can reach (their
+shelter's surroundings need moves the graph doesn't have). In 6000 ticks:
+19 shelters reached, 73 region crossings counted, 126 trips, 659 rises, 435
+running jumps, 102 pounces, 23 flights, 52 stuck; 5 dead (four long legs,
+one fall). The world ticks at about 1.7 ms a tick on 6 threads with them
+(the "no way" counter counts NPC ticks without a plan, mostly those with no
+shelter in reach, not events).
+
+## Gates
+
+A failsafe, not vanilla: an airlock that stands open in the middle
+(`middle_open`, both sides shut) for 5 s without everything getting through
+(a creature staying in it) closes the middle door and opens the sides
+again through the doors' animation, the middle shutting on whatever is
+still in the way (`gate::held_counter`). The other airlock states are
+already timed (the doors' speeds, `waiting`'s 400 ticks). `dont_open` then
+keeps it from cycling again until the middle zones are empty.
 
 ## Observations
 
@@ -369,24 +414,33 @@ Things learnt on the way, mostly about the port's Player.cs:
   beyond it (a wall jump shaft there has no wall).
 - A wall jump climb has to find its first wall level with its head; a shaft
   that starts two tiles up with no wall below sends it flying sideways.
+- Pressing up anywhere near a pole grabs it, momentum included: a slugcat
+  walking into position beside a pole and pressing up ends up on it.
+- A jump turned in the same tick as it starts hardly leaves the ground;
+  face the way a tick or more before.
+- Rising beside a ledge, the head catches the ledge's corner unless it
+  takes off from the far side of its column.
+- Crouching on a pole's tile climbs down the pole; a pounce has to start
+  beside it.
 - A jump to a pole should end on any beam caught right by the pole; a
   flight should let go of jump once it grabs or crawls onto a ledge (still
   holding it jumps off the far side).
 
 ## Not done
 
-- **CC_B08**'s top left (above): the jump from the y 64 corridor to the
-  ledge at (20,67) a player makes with `L1,LJ7`.
 - 40 of 103 NPCs in Survivor's world can't reach any shelter; 423 exits
   lead nowhere. Missing: wall jumps up single walls (Rivulet), wider
   shafts, jumps from beams other than straight up, rocket jumps, belly
   slides, flips, swimming routes through deep water (water is walkable, but
   nothing about breath), slopes beyond plain steps, the Watcher's abilities,
-  Saint's tongue, Spearmaster's spears as steps.
+  Saint's tongue, Spearmaster's spears as steps (its needles are only held).
 - Every slugcat moves with Survivor's reaches. Rivulet, Gourmand, Saint
   and the others jump differently: the reach tables should be per slugcat.
-- No karma gate checks (karma isn't tracked), no food, no sleeping (it just
-  rests in the shelter; the shelter doors aren't modelled).
+- No karma gate checks (karma isn't tracked), no food, no sleeping (it
+  rests on the sleeping spot; the shelter doors aren't modelled), no
+  `ShelterSpawnPoint` objects.
+- The turning back counts rooms, not distance: a long room counts as much
+  as a short one.
 - Dynamic warps are planned with where they led at world load.
 - Packs: members re-plan on their own after fleeing; the leader only waits
   for members in its room.
