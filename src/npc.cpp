@@ -413,13 +413,30 @@ namespace npc {
                     return std::nullopt;
                 case move::rise: {
                     // up there (or hanging on the pole it jumped for): done
-                    if (t > 4 && (at == nav.aim || (at.y >= nav.aim.y && pathing::standable(room, at))))
+                    // (for a pole or a beam: once it holds on)
+                    bool const to_beam = room.get_tile(nav.aim).any_beam();
+                    if (t > 4 && !to_beam && (at == nav.aim || (at.y >= nav.aim.y && pathing::standable(room, at))))
                         break;
                     if (t > 8 && room.get_tile(nav.aim).any_beam() && mode == player::body_mode_index::climbing_on_beam && at.y >= nav.aim.y - 1)
                         break;
                     if (t > 80) {
                         failed(60);
                         break;
+                    }
+                    // where the jump leaves from first: under the target going
+                    // straight up, else the column it rises in (the next one may be
+                    // under a ceiling)
+                    if (t < 8 && mode != player::body_mode_index::climbing_on_beam && mode != player::body_mode_index::corridor_climb) {
+                        int32_t const feet_x = room_view::get_tile_position(pos(state, p, 1)).x;
+                        int32_t const column = dir == 0 ? nav.aim.x : nav.from.x;
+                        if (feet_x != column && t < 6) {
+                            nav.move_timer = 1;
+                            if (++nav.cool > 40) {
+                                failed(30);
+                                break;
+                            }
+                            return input(rw::math_sign(column - feet_x), 0);
+                        }
                     }
                     // (from up on a beam: not holding up on the way, it would
                     // catch the beam again)
@@ -433,7 +450,11 @@ namespace npc {
                             return input(-dir, 0);
                         return input(0, nav.hold_jump ? 0 : 1);
                     }
-                    return input(dir, nav.hold_jump && t < 22 ? 0 : 1, t < 24);
+                    // (like a player's CC_B08 ledge: a tick towards it, then jump
+                    // without up, up later to climb on)
+                    if (t == 8 && dir != 0)
+                        return input(dir, 0);
+                    return input(dir, t < 22 ? 0 : 1, t < 24 && t > 8);
                 }
                 case move::crouch: {
                     if (t > 60) {
@@ -485,8 +506,13 @@ namespace npc {
                 }
                 case move::swing: {
                     bool const on_pole = w().player_get_animation(p) == player::animation_index::climb_on_beam;
-                    // got hold of the other pole (or landed somewhere)
-                    if (t > 8 && on_pole && room_view::get_tile_position(pos(state, p, 0)).x == nav.aim.x)
+                    // got hold of the other pole, or of a beam right by it (or
+                    // landed somewhere)
+                    ivec2 const head = room_view::get_tile_position(pos(state, p, 0));
+                    if (t > 8 && on_pole && head.x == nav.aim.x)
+                        break;
+                    if (t > 8 && nav.cool >= 2 && mode == player::body_mode_index::climbing_on_beam && std::abs(head.x - nav.aim.x) <= 1
+                        && std::abs(head.y - nav.aim.y) <= 2)
                         break;
                     if (t > 90 || (t > 4 && contact(state, p, 1).y < 0)) {
                         failed(30);
@@ -505,9 +531,19 @@ namespace npc {
                         return input(0, mode == player::body_mode_index::corridor_climb ? -1 : 1);
                     }
                     // facing the way first (it jumps off the side it faces)
-                    if (nav.cool < 2 && w().player_get_flip_direction(p) != dir && t < 12) {
+                    // (and holding the direction a few ticks before jumping, like a
+                    // player: pressed together, the pole may take it for a step
+                    // onto a beam)
+                    // (at the pole's top that hold lets go of it, where a beam
+                    // crosses it hangs from the beam: no hold there)
+                    ivec2 const ht = room_view::get_tile_position(pos(state, p, 0));
+                    bool const top = !room.get_tile(ht + ivec2{0, 1}).vertical_beam() || room.get_tile(ht).horizontal_beam()
+                        || room.get_tile(room_view::get_tile_position(pos(state, p, 1))).horizontal_beam();
+                    if (nav.cool < 2 && (w().player_get_flip_direction(p) != dir || (nav.wall_side < 4 && !top)) && t < 12) {
                         nav.cool = 1;
-                        return input(dir, 0);
+                        // (as a player did it in CC_B08: up and towards it, then
+                        // towards it, then jump)
+                        return input(dir, nav.wall_side++ < 2 && !top ? 1 : 0);
                     }
                     // off it: (onto the ground: the rest is a flight)
                     if (!room.get_tile(nav.aim).vertical_beam()) {
@@ -520,7 +556,12 @@ namespace npc {
                         nav.move_timer = 1;
                         return input(dir, 0, true);
                     }
-                    return input(dir, t < 2 ? 0 : 1, t < 10);
+                    // (up only well off the pole: a jump still buffered with up
+                    // held shimmies up the pole instead; a player's CC_B08 catch
+                    // holds jump 12 ticks and reaches up about 25 ticks in)
+                    bool const off = mode != player::body_mode_index::climbing_on_beam;
+                    bool const near = std::abs(room_view::get_tile_position(pos(state, p, 0)).x - nav.aim.x) <= 1;
+                    return input(dir, off && (near || t > 18) ? 1 : 0, t < 13);
                 }
                 case move::tip: {
                     // standing on the tip: jump
@@ -574,9 +615,13 @@ namespace npc {
                     }
                 }
                 case move::flight: {
-                    // a ledge caught: up onto it
-                    if (w().player_get_animation(p) == player::animation_index::ledge_grab)
+                    // a ledge caught: up onto it (and no more jumping)
+                    if (w().player_get_animation(p) == player::animation_index::ledge_crawl)
+                        nav.hold_jump = 0;
+                    if (w().player_get_animation(p) == player::animation_index::ledge_grab) {
+                        nav.hold_jump = 0;
                         return input(dir, 1);
+                    }
                     // landed (or caught a pole, in the water, in a corridor);
                     // against a wall it keeps reaching for the ledge
                     bool const landed = t > 4
@@ -739,6 +784,7 @@ namespace npc {
                 case pathing::step_kind::rise:
                     // (holding a pole: from its tip)
                     begin(on_pole && st->dir == 0 ? move::tip : move::rise, st->tile, st->dir);
+                    nav.cool = 0;
                     return *keep_moving();
                 case pathing::step_kind::pounce:
                     begin(move::crouch, st->tile, st->dir);

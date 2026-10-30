@@ -328,41 +328,36 @@ namespace selftest {
         auto const flat = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
         float const floor_y = 20.f; // top of the y=0 solid row
         if (npc::debug().measure) {
-            // pole at x 15 (head at y 12), a wall `gap` tiles right of it; off the pole into the wall, off the wall
-            // left into a pole `d` tiles left of the wall: the highest tile of that pole it catches (over the start head tile)
-            for (int gap = 1; gap <= 3; ++gap) {
-                std::printf("wall %d right of the pole:", gap);
-                for (int d = 2; d <= 10; ++d) {
-                    int32_t const wx = 15 + gap, tx = wx - d;
-                    auto const room = make_room(gs, region, box(40, 40, [=](int32_t x, int32_t y) {
-                        if (x >= wx)
-                            return '#';
-                        if (x == 15 && y <= 12)
-                            return '|';
-                        return x == tx && y >= 4 && y <= 35 ? '|' : ' ';
-                    }));
-                    sim s(gs, room, feet_at(15, 1));
-                    s.run(20);
-                    s.until(30, [&] { return s.animation() == player::animation_index::climb_on_beam; }, 0, 1);
-                    s.until(300, [&] { return world::room_view::get_tile_position(s.pos(0)).y >= 12; }, 0, 1);
-                    int caught = -99, phase = 0, cool = 0;
-                    for (int t = 0; t < 120 && caught == -99; ++t) {
-                        if (phase == 0) {
-                            s.step(1, 0, t >= 6 && t < 16);
-                            if (t > 8 && (s.body_mode() == player::body_mode_index::wall_climb || s.contact(0).x == 1)) {
-                                phase = 1;
-                                cool = 0;
-                            }
-                        } else {
-                            s.step(-1, cool > 2 ? 1 : 0, cool < 10);
-                            ++cool;
-                            if (s.animation() == player::animation_index::climb_on_beam && world::room_view::get_tile_position(s.pos(0)).x == tx)
-                                caught = world::room_view::get_tile_position(s.pos(0)).y - 12;
+            // off a pole (x 5, 1..25, head at y 15) onto a ledge `d` right whose top is `dy` over the head's tile,
+            // two ways of starting the jump: (a) towards it 4 ticks, (b) a player's up+towards 2, towards 2
+            for (int how = 0; how < 2; ++how) {
+                std::printf("pole jump onto a ledge, start %c: rows dy +2..-4, columns d 3..9\n", how == 0 ? 'a' : 'b');
+                for (int dy = 2; dy >= -4; --dy) {
+                    std::printf("dy %+d:", dy);
+                    for (int d = 3; d <= 9; ++d) {
+                        auto const room = make_room(gs, region, box(30, 35, [=](int32_t x, int32_t y) {
+                            if (x >= 5 + d && y < 15 + dy)
+                                return '#';
+                            return x == 5 && y <= 25 ? '|' : ' ';
+                        }));
+                        sim s(gs, room, feet_at(5, 1));
+                        s.run(20);
+                        s.until(30, [&] { return s.animation() == player::animation_index::climb_on_beam; }, 0, 1);
+                        s.until(300, [&] { return world::room_view::get_tile_position(s.pos(0)).y >= 15; }, 0, 1);
+                        if (how == 0)
+                            s.run(4, 1, 0);
+                        else {
+                            s.run(2, 1, 1);
+                            s.run(2, 1, 0);
                         }
+                        for (int t = 0; t < 100; ++t)
+                            s.step(1, t > 15 ? 1 : 0, t < 13);
+                        s.run(60, 1, 1);
+                        bool const ok = s.pos(1).x > float(5 + d) * 20.f && s.pos(1).y > float(15 + dy) * 20.f - 2.f;
+                        std::printf(" %c", ok ? 'Y' : '.');
                     }
-                    std::printf(" d%d:%s", d, caught == -99 ? "--" : std::to_string(caught).c_str());
+                    std::printf("\n");
                 }
-                std::printf("\n");
             }
             return 0;
         }

@@ -341,6 +341,13 @@ namespace {
             ++ticks;
             dcon::player_id const ps[1] = {p};
             simulation::tick(gs, ps, std::span{&in, 1});
+            // --npc-trace: what the human does
+            if (auto const& d = npc::debug(); !d.trace_room.empty() && ticks % uint32_t(std::max(1, d.trace_every)) == 0) {
+                vec2 const h = w.body_chunk_get_pos(player::body_chunk(gs, p, 0)), f = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
+                auto const ht = world::room_view::get_tile_position(h), ft = world::room_view::get_tile_position(f);
+                std::printf("    human t=%u %-4s head (%d,%d) feet (%d,%d) %.0f,%.0f mode %s anim %s\n", ticks, l.c_str(), ht.x, ht.y, ft.x, ft.y, f.x, f.y,
+                    player::to_string(w.player_get_body_mode(p)), player::to_string(w.player_get_animation(p)));
+            }
             if (failed(gs)) {
                 ++attempts;
                 script.clear();

@@ -236,14 +236,22 @@ namespace pathing {
             return acc[size_t(t.y) * size_t(room.width) + size_t(t.x)] == uint8_t(access::corridor);
         }
 
+        // (outside the room as the physics sees it: its edge tile, so a room
+        // open at its edge is open beyond it: no wall to push off there)
         bool open(room_view const& room, ivec2 t) noexcept {
-            return room.inside(t.x, t.y) && !room.get_tile(t).solid();
+            return !room.get_tile(t).solid();
         }
 
         bool arc_open(room_view const& room, ivec2 g, ivec2 v, int32_t s, int32_t height) {
             int32_t const dx = std::abs(v.x - g.x);
-            // room over its head where it leaves to go up
-            if (v.y >= g.y && !open(room, g + ivec2{0, 1}))
+            // room over its head where it leaves to go up (the higher it goes,
+            // the more: a hop onto a pole three up and one over goes up first)
+            if (v.y >= g.y)
+                for (int32_t k = 1; k <= std::min(v.y - g.y + 1, 3); ++k)
+                    if (!open(room, g + ivec2{0, k}))
+                        return false;
+            // (and it sets off sideways: room beside it first)
+            if (v.y > g.y && (!open(room, g + ivec2{s, 0}) || !open(room, g + ivec2{s, 1})))
                 return false;
             float const dy = float(v.y - g.y);
             float const b = 4.f * float(height);
@@ -276,7 +284,9 @@ namespace pathing {
         constexpr int32_t swing_rise(int32_t d) noexcept { return d <= 4 ? 1 : d == 5 ? 0 : d == 6 ? -2 : d == 7 ? -4 : -7; }
         // off a pole's side onto the ground `dy` over the tile it holds
         // (in CC_A02 eight tiles over and five down, into a corridor)
-        constexpr int32_t pole_jump_reach(int32_t dy) noexcept { return dy >= 2 ? 3 : dy >= 0 ? 5 : dy >= -2 ? 6 : dy >= -4 ? 7 : dy >= -7 ? 8 : 9; }
+        // (measured with the start a player used in CC_B08: up and towards
+        // it 2 ticks, towards it 2, then jump)
+        constexpr int32_t pole_jump_reach(int32_t dy) noexcept { return dy >= 2 ? 4 : dy == 1 ? 5 : dy >= -1 ? 6 : dy >= -4 ? 7 : dy >= -7 ? 8 : 9; }
         // standing on a pole's tip and jumping (measured, and in HI_A10 onto
         // the ledge five tiles over and two up)
         constexpr int32_t tip_reach(int32_t dy) noexcept { return dy >= 4 ? 1 : dy == 3 ? 4 : dy >= 0 ? 5 : 6; }
@@ -334,8 +344,10 @@ namespace pathing {
                             if (!open(room, c) || (k > 1 && walkable(c - ivec2{0, 1})) || !open(room, c + ivec2{0, 1}))
                                 break;
                             ivec2 const top = c + ivec2{s, 0};
-                            if (standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
-                                add(g, top, 20u + 10u * uint32_t(k) + (on_beam_top ? 60u : 0u), step_kind::rise, s);
+                            // (not from up on a beam: off it the jump either catches the
+                            // beam again or drops through it)
+                            if (!on_beam_top && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
+                                add(g, top, 20u + 10u * uint32_t(k), step_kind::rise, s);
                         }
                         // over a gap: a running jump from the edge (with room
                         // to run up to it), a charge pounce from a tile back
@@ -390,12 +402,15 @@ namespace pathing {
                     ivec2 const u{x, y};
                     if (!room.get_tile(u).vertical_beam() || room.get_tile(u).water != 0)
                         continue;
+                    // (to another pole not from the pole's top tile: off its side
+                    // there it doesn't carry far enough, the tip jump is the move)
+                    bool const top = !room.get_tile(u + ivec2{0, 1}).vertical_beam();
                     for (int32_t const s : {-1, 1})
-                        for (int32_t d = 2; d <= max_swing; ++d)
+                        for (int32_t d = 2; d <= max_swing && !top; ++d)
                             for (int32_t dy = swing_rise(d); dy >= -max_fall_jump - 2; --dy) {
                                 ivec2 const v = u + ivec2{s * d, dy};
                                 if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && arc_open(room, u, v, s, 1))
-                                    add(u, v, 30u + 10u * uint32_t(d) + (dy == swing_rise(d) ? 30u : 0u), step_kind::swing, s);
+                                    add(u, v, 30u + 10u * uint32_t(d) + (dy == swing_rise(d) ? 30u : 0u) + (d >= 6 ? 60u : 0u), step_kind::swing, s);
                             }
                     // or onto the ground
                     for (int32_t const s : {-1, 1})
@@ -489,7 +504,7 @@ namespace pathing {
                         }
                         if (start < 0)
                             continue;
-                        int32_t lo0, hi0;
+                        int32_t lo0 = 0, hi0 = 0;
                         span(cx, start, lo0, hi0);
                         if (cx != lo0)
                             continue; // once per shaft
@@ -501,7 +516,20 @@ namespace pathing {
                                 continue;
                             // (its first jump: towards the shaft from beside it, which
                             // has to start right over it there; straight up from under it)
-                            int32_t const first = x < lo0 ? 1 : x > hi0 ? -1 : start > y + 1 ? 0 : x - lo0 <= hi0 - x ? -1 : 1;
+                            // (under the shaft starting higher up: towards a side whose wall
+                            // comes down level with its head, to push off from; without one
+                            // it flies out sideways under the shaft. CC_B08's left gap, as
+                            // recorded by a player: its outer wall comes down, the right
+                            // gap's walls don't)
+                            auto const wall_low = [&](int32_t wx) { return !open(room, ivec2{wx, y + 1}); };
+                            int32_t first = x < lo0 ? 1 : x > hi0 ? -1 : x - lo0 <= hi0 - x ? -1 : 1;
+                            if (x >= lo0 && x <= hi0 && start > y + 1) {
+                                bool const left = wall_low(lo0 - 1), right = wall_low(hi0 + 1);
+                                if (!left && !right)
+                                    break;
+                                if (left != right)
+                                    first = left ? -1 : 1;
+                            }
                             if ((x < lo0 || x > hi0) && start != y + 1)
                                 break;
                             for (int32_t xx = lo; xx <= hi; ++xx)

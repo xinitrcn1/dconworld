@@ -161,10 +161,13 @@ from experiments in the real rooms where a test room disagreed
   lower → 11.
 - **Off a pole's side** (facing the way, jump with the direction held,
   then up): catching another pole: 1–4 tiles across at up to +1, 5 at 0,
-  6 dropping 2, 7 dropping 4, 8 dropping 7 (`swing_rise`). Onto a ledge,
-  from the tile held: +2 → 3, 0/+1 → 5, −1/−2 → 6, −3/−4 → 7, −5 to −7 → 8,
-  lower → 9 (`pole_jump_reach`). CC_A02's jump into its middle corridor is
-  8 across and 5 down, with the ledge grab.
+  6 dropping 2, 7 dropping 4, 8 dropping 7 (`swing_rise`; not from the
+  pole's top tile, 6 and more across cost extra). Onto a ledge, from the
+  tile held, started like a player (up and towards 2 ticks, towards 2):
+  +2 → 4, +1 → 5, 0/−1 → 6, −2 to −4 → 7, −5 to −7 → 8, lower → 9
+  (`pole_jump_reach`; holding only the direction 4 ticks it is a tile
+  shorter level and 2 down). CC_A02's jump into its middle corridor is 8
+  across and 5 down, with the ledge grab.
 - **From a pole's tip** (up onto `BeamTip`, then jump): onto ground: +4 →
   1, +3 → 4, 0 to +2 → 5, lower → 6 (`tip_reach`). HI_A10's jump onto the
   outcrop is 5 over and 2 up: further than in the test room, it crawls onto
@@ -235,7 +238,7 @@ again; after three of those the target is dropped.
 | `--npc-trip <from> <to> [ticks]` | | one NPC (`--slugcat`, else random; `--npc-seed`) from shelter to shelter, no creatures, the rain timers frozen (`game_state::rain_frozen`). Prints each room it enters; fails when it dies, falls out of a room (the port doesn't kill for that, the game does), finds no way, gets stuck, or runs out of time |
 | `--npc-soak [ticks]` | `--npcs` | the world with its NPCs: ms per tick, shelters reached, regions crossed, moves used, deaths and who killed them |
 | `--npc-human-complete <from> <to>` | `--npc-human-log`, `--script` | watch the NPC; when it fails, drive it yourself from the pipe it came in by, logged, to the pipe it was heading for (below) |
-| `--npc-trace <room\|*>[,every]` | trip, selftest | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
+| `--npc-trace <room\|*>[,every]` | trip, human-complete, selftest | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
 | `--npc-route <r1,r2,...>` | trip | `ok`/`NO` for each room of a route: can the way out be walked from the way in |
 | `--npc-maps` | route | for each `NO` room: its poles and a map, `f` reachable from the way in, `o` can reach the way out, `B` both. The gap between `f` and `o` is the missing move |
 | `--npc-room <room>` | soak | the room's poles, pipes (type, ends), map (`.` walkable) |
@@ -309,10 +312,12 @@ CC_H01 → GATE_CC_UW → UW. Every room of it is connected in the graph
 | CC_C08 | a straight jump up to a beam, and in along the beam into the low pipe |
 | CC_B06 | a pole jump across, then from the lower pole's tip into the wall and back onto the pole above (the bounce), a jump onto the platform by the exit |
 | CC_B05 | beams over a pit: their tops are dear, it keeps to the ground |
-| CC_B08 | **fails**: from the right hand pocket (pole x=43, the beam at y 11) the way up is a 2 wide gap beside the block at y 14–16; the jumps from the beam don't get it in, and it falls out of the room |
+| CC_B08 | the pipe at the bottom to the right hand pocket, up pole x=43, off it onto the beam at y 11, from the beam's left end into the outer wall and wall jumps up the **left** gap beside the block (a player's recording: the right gap's walls start too high, and the room is open past its right edge), the block's pipe to pole x=20, then pole x=20 → the ground at (25,17) → pole x=27 → ... ; **fails** in the top left: the jump from the y 64 corridor up to the ledge at (20,67) |
 
-It gets to CC_B08 after about 8300 ticks (≈ 3.5 minutes; vanilla players
-are a lot faster) and never died before it.
+It gets to CC_B08 after about 8500 ticks (≈ 3.5 minutes; vanilla players
+are a lot faster) and never dies before it. A player's recording of CC_B08
+(`npc_human_HI_S05_UW_S04.txt`, a Watcher) replays to PASS with
+`--npc-human-complete HI_S05 UW_S04 --script "<its last line>"`.
 
 ## The whole world
 
@@ -350,10 +355,28 @@ Things learnt on the way, mostly about the port's Player.cs:
 - Falling out of a room's bottom doesn't kill (the game does).
 - Holding a slugcat's input still for the 6 ticks of a turn makes most
   moves reliable; most failures were a tick or a tile off.
+- From a player's recording (CC_B08): jumping off a pole's side goes
+  further started as up-and-towards 2 ticks, towards 2 ticks, then jump
+  held 12, reaching up only some 20 ticks in (`pole_jump_reach` is measured
+  that way). Holding up while still on the pole turns the buffered jump into
+  shimmying up the pole. At the pole's top, or where a horizontal beam
+  crosses it, holding the direction first lets go of the pole or hangs from
+  the beam: there it jumps at once.
+- A jump up to a ledge from the ground: a tick towards it, then jump
+  without up (up together with jump spoils it), up later to climb on; from
+  the column it rises in, not one under a ceiling next to it.
+- Outside a room is what its edge tile is: a room open at its side is open
+  beyond it (a wall jump shaft there has no wall).
+- A wall jump climb has to find its first wall level with its head; a shaft
+  that starts two tiles up with no wall below sends it flying sideways.
+- A jump to a pole should end on any beam caught right by the pole; a
+  flight should let go of jump once it grabs or crawls onto a ledge (still
+  holding it jumps off the far side).
 
 ## Not done
 
-- **CC_B08**'s right hand gap (above).
+- **CC_B08**'s top left (above): the jump from the y 64 corridor to the
+  ledge at (20,67) a player makes with `L1,LJ7`.
 - 40 of 103 NPCs in Survivor's world can't reach any shelter; 423 exits
   lead nowhere. Missing: wall jumps up single walls (Rivulet), wider
   shafts, jumps from beams other than straight up, rocket jumps, belly
