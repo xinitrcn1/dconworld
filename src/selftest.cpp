@@ -3052,9 +3052,10 @@ namespace selftest {
                 return fail(t, "died");
             if (!player::in_shortcut(gs, p) && w.body_chunk_get_pos(player::body_chunk(gs, p, 1)).y < -40.f)
                 return fail(t, "fell out of the room (a death in the game)");
-            if (npc::stats().no_way != no_way)
+            // (a guessed trip finds out where it can't go by getting stuck)
+            if (npc::stats().no_way != no_way && !npc::debug().guess)
                 return fail(t, "found no way on");
-            if (npc::stats().stuck != stuck)
+            if (npc::stats().stuck != stuck && !npc::debug().guess)
                 return fail(t, "got stuck");
             if (r == to && w.slugcat_npc_get_nav(n).what == npc::goal::rest) {
                 std::printf("PASS: in %s after %u ticks (%.1f s), %s\n", to_name.c_str(), t, float(t) / 40.f, npc::stats_line(gs).c_str());

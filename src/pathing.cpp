@@ -504,12 +504,16 @@ namespace pathing {
                         int32_t const width = hi - lo + 1;
                         return width >= 2 && width <= 3 && !open(room, ivec2{lo - 1, yy}) && !open(room, ivec2{hi + 1, yy});
                     };
+                    // (each shaft once, whichever of the columns by it leads in:
+                    // under a three wide shaft's right side its left column is two
+                    // over, as in WRFA_C11)
+                    int32_t done[3] = {-1, -1, -1};
                     for (int32_t cx = x - 1; cx <= x + 1; ++cx) {
                         // into the shaft within the first two rows over it
                         int32_t start = -1;
                         for (int32_t yy = y + 1; yy <= y + 2 && start < 0; ++yy) {
                             int32_t lo, hi;
-                            if (span(cx, yy, lo, hi) && (cx == x || std::abs(cx - x) <= 1))
+                            if (span(cx, yy, lo, hi))
                                 start = yy;
                             else if (!open(room, ivec2{cx, yy}))
                                 break;
@@ -518,8 +522,9 @@ namespace pathing {
                             continue;
                         int32_t lo0 = 0, hi0 = 0;
                         span(cx, start, lo0, hi0);
-                        if (cx != lo0)
+                        if (std::find(std::begin(done), std::end(done), lo0) != std::end(done))
                             continue; // once per shaft
+                        done[cx - (x - 1)] = lo0;
                         for (int32_t yy = start; yy < h - 1 && yy - y <= 40; ++yy) {
                             int32_t lo, hi;
                             if (!span(cx, yy, lo, hi))

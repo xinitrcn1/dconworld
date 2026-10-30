@@ -155,6 +155,7 @@ namespace npc {
         std::atomic<uint32_t> thrown{0};
         std::atomic<uint32_t> braved{0};
         std::atomic<uint32_t> retargeted{0};
+        std::atomic<uint32_t> diverted{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

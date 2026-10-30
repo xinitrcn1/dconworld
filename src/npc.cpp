@@ -55,6 +55,9 @@ namespace npc {
         // it ignores them this long and goes on its way
         constexpr int32_t flee_patience = 400;
         constexpr int32_t brave_ticks = 600;
+        // a guessed way on steps off an edge only this far above something
+        // to stand on
+        constexpr int32_t safe_drop = 6;
         // Spearmaster fighting a threat it can't kill this long: on its way
         constexpr int32_t fight_patience = 1200;
         // a weapon lying this close to its body it picks up on the way; a
@@ -229,7 +232,11 @@ namespace npc {
         // walked to from every other. A gap no jump closes (WRFA_E04) isn't
         // guessed across when the room's walkable way leads somewhere else,
         // a warp close by)
-        search& explore(sys::game_state const& state, dcon::room_id room, uint64_t start, bool any = false) {
+        // (`wide`: when even that finds none, every room taken as open but
+        // the ones a guess already failed in: from WRFA_S08 the walkable way
+        // out of WRFA_C11 leads only to WRFA_E04's gap, the one to WRFA_A21
+        // and its warp is a move the path graph lacks)
+        search& explore(sys::game_state const& state, dcon::room_id room, uint64_t start, bool any = false, nav_state const* known = nullptr, bool wide = false) {
             static thread_local search s;
             auto const& w = state.world;
             size_t const n = size_t(w.room_size()) * slots;
@@ -277,7 +284,12 @@ namespace npc {
                 uint32_t const slot = st % slots;
                 auto const& rr = all[size_t(r.index())];
                 uint64_t const walkable = slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
-                uint64_t const mask = any && walkable == 0 ? all_exits(state, r) : walkable;
+                // (nor the rooms a guess already failed in: `known`'s)
+                bool tried = false;
+                if (known)
+                    for (auto const k : known->no_guess)
+                        tried = tried || k == uint16_t(r.index() + 1);
+                uint64_t const mask = any && (walkable == 0 || wide) && !tried ? all_exits(state, r) : walkable;
                 for (uint32_t b = 0; b < 64; ++b)
                     if (mask & (uint64_t(1) << b))
                         hop(r, b, st + 1u);
@@ -922,17 +934,20 @@ namespace npc {
                         return input(0, 0);
                     ivec2 const to = goal - at;
                     int32_t const y = to.y > 1 ? 1 : to.y < -1 && std::abs(to.x) < 3 ? -1 : 0;
-                    int32_t x = rw::math_sign(to.x);
-                    // (never towards a column with nothing under it down to the
-                    // room's bottom: off that edge it falls out of the room)
-                    bool floor_ahead = x == 0;
-                    for (int32_t k = 0; k <= at.y && !floor_ahead; ++k) {
-                        auto const t = room.get_tile(at + ivec2{x, -k});
-                        floor_ahead = t.solid() || t.t == world::terrain::floor || t.any_beam() || t.water != 0;
+                    int32_t const x = rw::math_sign(to.x);
+                    // (never towards a column without something to stand on a
+                    // short drop down: off that edge it falls into the pit;
+                    // jumping only at a wall or a ledge in front)
+                    ivec2 const ahead = at + ivec2{x, 0};
+                    bool const wall = x != 0 && room.get_tile(ahead).solid();
+                    bool floor_ahead = x == 0 || wall;
+                    for (int32_t k = 0; k <= safe_drop && !floor_ahead; ++k) {
+                        auto const t = room.get_tile(ahead - ivec2{0, k});
+                        floor_ahead = pathing::standable(room, ahead - ivec2{0, k}) || t.any_beam() || t.water != 0;
                     }
                     if (!floor_ahead)
                         return input(0, y);
-                    return input(x, y, y >= 0 && nav.stuck % 40 < 8);
+                    return input(x, wall ? y : std::min(y, 0), wall && nav.stuck % 40 < 8);
                 }
                 nav.last_step = st->tile;
                 nav.last_kind = uint8_t(st->kind);
@@ -1029,6 +1044,15 @@ namespace npc {
                 return input(dd.x, 0);
             }
 
+            // the wide guess starts from every exit of the room, but in a room
+            // a guess already failed in only from those it can walk to
+            uint64_t wide_start() {
+                uint16_t const here = uint16_t(room.id.index() + 1);
+                if (std::find(std::begin(nav.no_guess), std::end(nav.no_guess), here) != std::end(nav.no_guess))
+                    return goals_from(state, room, at);
+                return all_exits(state, room.id);
+            }
+
             // a guessed search starts from the exits it can walk to, from all
             // of the room's when it can walk to none
             uint64_t guess_start() {
@@ -1046,20 +1070,51 @@ namespace npc {
                     return true;
                 // (no walkable way: the rooms' connections, to try)
                 nav.guessed = 1;
-                return set_trip(state, c, explore(state, room.id, guess_start(), true), target);
+                if (set_trip(state, c, explore(state, room.id, guess_start(), true, &nav), target))
+                    return true;
+                return set_trip(state, c, explore(state, room.id, wide_start(), true, &nav, true), target);
             }
 
             // a target shelter it can get to, the closest or any
             // (none it knows a walkable way to: one the rooms' connections
             // lead to, to try anyway rather than stay; the one it gave up on
             // last only when there is no other)
+            // (any: not back to the shelter it set off from; with no other it
+            // knows a walkable way to, through the closest warp it can walk
+            // to, picking again on the other side; then a guessed one; home
+            // last)
             bool pick_target(bool closest) {
+                auto const home = w().slugcat_npc_get_home(n);
                 auto const* sp = &explore(state, room.id, goals_from(state, room, at));
                 auto options = shelters_of(state, *sp, room.id);
+                auto const home_only = options;
+                if (!closest)
+                    std::erase_if(options, [&](dcon::room_id r) { return r == home; });
                 nav.guessed = options.empty() ? 1 : 0;
+                if (options.empty() && !closest)
+                    for (auto const st : sp->order)
+                        if (sp->via[st] >= migrate::warp_hop) {
+                            auto const beyond = room_at(st / slots);
+                            w().slugcat_npc_set_target(n, beyond);
+                            nav.route_hops = 0;
+                            nav.guessed = 0;
+                            ++stats().diverted;
+                            return set_trip(state, c, *sp, beyond);
+                        }
                 if (options.empty()) {
-                    sp = &explore(state, room.id, guess_start(), true);
+                    sp = &explore(state, room.id, guess_start(), true, &nav);
                     options = shelters_of(state, *sp, room.id);
+                    if (std::erase_if(options, [&](dcon::room_id r) { return !closest && r == home; }), options.empty()) {
+                        sp = &explore(state, room.id, wide_start(), true, &nav, true);
+                        options = shelters_of(state, *sp, room.id);
+                    }
+                    if (!closest && options.size() > 1)
+                        std::erase_if(options, [&](dcon::room_id r) { return r == home; });
+                }
+                if (options.empty() && !home_only.empty()) {
+                    sp = &explore(state, room.id, goals_from(state, room, at));
+                    options = home_only;
+                    nav.guessed = 0;
                 }
                 auto const& s = *sp;
                 if (options.size() > 1 && nav.given_up != 0)
@@ -1223,6 +1278,14 @@ namespace npc {
                     return input(0, 0);
                 }
                 auto const target = w().slugcat_npc_get_target(n);
+                // (through a warp it made for: a shelter from here)
+                if (target == room.id && !w().room_get_is_shelter(room.id) && leads()) {
+                    w().slugcat_npc_set_target(n, dcon::room_id{});
+                    migrate::cancel(state, c);
+                    if (!pick_target(false))
+                        return input(0, 0);
+                    return travel();
+                }
                 if (target == room.id) {
                     nav.what = goal::rest;
                     nav.goal_timer = 0;
@@ -1295,6 +1358,18 @@ namespace npc {
                     return input(0, 0);
                 }
                 // no way on along this trip: plan again, then try another shelter
+                // (a guessed way through here that doesn't go: not guessed
+                // through this room again, the next plan goes round it, to a
+                // warp say: WRFA_E04's gap from WRFA_C11's side)
+                if (nav.guessed && nav.stuck > 300) {
+                    uint16_t const here = uint16_t(room.id.index() + 1);
+                    if (std::find(std::begin(nav.no_guess), std::end(nav.no_guess), here) == std::end(nav.no_guess)) {
+                        nav.no_guess[nav.no_guess_next] = here;
+                        nav.no_guess_next = uint8_t((nav.no_guess_next + 1) % max_no_guess);
+                        ++stats().diverted;
+                    }
+                    nav.stuck = 601;
+                }
                 if (nav.stuck > 600) {
                     ++stats().stuck;
                     nav.stuck = 0;
@@ -2006,9 +2081,9 @@ namespace npc {
         char buf[420];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

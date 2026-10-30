@@ -48,6 +48,7 @@ namespace npc {
     };
 
     inline constexpr uint32_t max_blocked = 4;
+    inline constexpr uint32_t max_no_guess = 4;
 
     struct nav_state {
         goal what = goal::start;
@@ -88,6 +89,10 @@ namespace npc {
         uint8_t guessed = 0;
         // into a new room on a guessed trip: look for a walkable way again
         uint8_t rethink = 0;
+        // the rooms a guessed way through failed in lately (index + 1, 0
+        // none): guessed through no more, the walkable way there only
+        uint16_t no_guess[4] = {0, 0, 0, 0};
+        uint8_t no_guess_next = 0;
         // the creature it runs from, where it last saw it, and the ticks
         // since (it gives up after a while out of sight)
         dcon::creature_id threat;

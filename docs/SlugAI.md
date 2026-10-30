@@ -44,6 +44,18 @@ the tools for tracing them, and what is known not to work yet.
   new room on a guessed trip (through a warp, say) it looks again: a
   shelter it knows the walkable way to now (not the one it set off from)
   becomes its target ("retargeted").
+  - **Learning where a guess fails.** Stuck 300 ticks in a room on a
+    guessed trip, it remembers the room (the last four) and guesses
+    through it no more: only the walkable way there. If the careful guess
+    then finds nothing, a wide one takes every other room as open (from
+    WRFA_S08 the walkable way out of WRFA_C11 led only to WRFA_E04's gap).
+  - **Diverting to a warp.** Picking a new target, not the shelter it set
+    off from: with no other shelter it knows the walkable way to, it makes
+    for the closest warp it can walk to and picks again on the other side
+    ("diverted"); then a guessed shelter; home last.
+  - The push towards a pipe it has no walkable way to never steps towards
+    a column without something to stand on within 6 tiles down, and jumps
+    only at a wall in front (it walked off WRFA_E04's slope into the pit).
   Where the path field doesn't reach it, it makes for the next pipe
   straight (up to it, jumping now and then for ledges, walls and poles,
   never towards a column with nothing under it to the room's bottom). No
@@ -58,6 +70,11 @@ the tools for tracing them, and what is known not to work yet.
   −500 px, −250 in a wall climb, in a room without water). The port doesn't
   kill a slugcat for it otherwise; an NPC down there waited under the room
   for good.
+- **Shafts three wide** (wall jumps between their walls): each climb is
+  found from the start tile under any of the shaft's columns (under the
+  right side of WRFA_C11's upper shaft its left column is two over, and the
+  shaft was missed). With it WRFA_S08's slugcats go up C11's two shafts to
+  WRFA_A21 and its warp instead of to E04's gap.
 - **Beams.** Hanging from a horizontal beam it gets up on it with a fresh
   press of up (Player.cs wants `input[1].y == 0`; held from the jump that
   caught the beam it hangs there for good). Up on a beam it jumps straight
@@ -329,7 +346,7 @@ again; after three of those the target is dropped.
 | `--npc-dead-ends` | soak | the exits from which no other exit can be walked to |
 | `--npc-unreachable` | soak | for every NPC with no shelter in reach: its room and the rooms its search reaches (the first three: their route data) |
 | `--npc-list` | soak | every NPC at the end |
-| `--npc-guess` | trip | set off even with no walkable way known (a guessed trip, retargeting on the way) |
+| `--npc-guess` | trip | set off even with no walkable way known (a guessed trip, retargeting on the way; getting stuck or finding no way doesn't fail it, it learns from it) |
 | `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
 
