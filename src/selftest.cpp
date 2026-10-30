@@ -2,6 +2,7 @@
 #include <cmath>
 #include <span>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <functional>
 #include <string>
@@ -2962,6 +2963,74 @@ namespace selftest {
         if (!npc::debug().experiment.empty()) {
             // --npc-exp room,pole_x,climb_to_y,mode,dir[,turn] (npc.hpp's debug_options)
             char const* exp = npc::debug().experiment.c_str();
+            // --npc-exp room,x,y,S,<script>: standing on tile x,y, the script
+            // (--script's letters) played, every tick printed (a movement tech
+            // tried in a real room: the crawl-turn vault in UW_E03)
+            char const* sc = std::strstr(exp, ",S,");
+            if (!sc)
+                sc = std::strstr(exp, ",S+,");
+            if (sc) {
+                char rn[64];
+                int fx = 0, fy = 0;
+                std::sscanf(exp, "%63[^,],%d,%d", rn, &fx, &fy);
+                gs.spawn_dens = false;
+                gs.rain_frozen = true;
+                simulation::populate(gs);
+                auto const room = gs.find_room(rn);
+                auto p = player::create(gs, room, world::room_view::middle_of_tile(fx, fy) + vec2{0.f, -2.f}, name == player::slugcat_name::count ? player::slugcat_name::white : name);
+                bool const spear = sc[2] == '+';
+                // ("...,S+,<script>": a spear at its feet to start with, `P` picks it up)
+                if (spear)
+                    items::create_on_tile(gs, room, w.body_chunk_get_pos(player::body_chunk(gs, p, 1)), world::item_type::spear);
+                for (int t = 0; t < 20; ++t) {
+                    auto const in = player::make_input(0.f, 0.f, false, false, false);
+                    simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                }
+                std::string const script = sc + (spear ? 4 : 3);
+                size_t pos = 0;
+                int t = 0;
+                float top = -1e9f;
+                auto const show = [&](char const* l) {
+                    vec2 const h = w.body_chunk_get_pos(player::body_chunk(gs, p, 0)), f = w.body_chunk_get_pos(player::body_chunk(gs, p, 1));
+                    top = std::max(top, f.y);
+                    std::printf("  t=%3d %-4s head %.1f,%.1f feet %.1f,%.1f anim %s mode %s\n", t, l, h.x, h.y, f.x, f.y, player::to_string(w.player_get_animation(p)),
+                        player::to_string(w.player_get_body_mode(p)));
+                };
+                show("-");
+                while (pos < script.size()) {
+                    size_t const end = std::min(script.find(',', pos), script.size());
+                    std::string const tok = script.substr(pos, end - pos);
+                    pos = end + 1;
+                    size_t i = 0;
+                    float ax = 0.f, ay = 0.f;
+                    bool jmp = false, thrw = false, pckp = false;
+                    for (; i < tok.size() && std::isalpha(static_cast<unsigned char>(tok[i])); ++i)
+                        switch (tok[i]) {
+                        case 'U': ay += 1.f; break;
+                        case 'D': ay -= 1.f; break;
+                        case 'L': ax -= 1.f; break;
+                        case 'R': ax += 1.f; break;
+                        case 'J': jmp = true; break;
+                        case 'X': thrw = true; break;
+                        case 'P': pckp = true; break;
+                        default: break;
+                        }
+                    int const n = i < tok.size() ? std::atoi(tok.c_str() + i) : 1;
+                    std::string const letters = tok.substr(0, i);
+                    for (int k = 0; k < n; ++k, ++t) {
+                        auto const in = player::make_input(ax, ay, jmp, thrw, pckp);
+                        simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
+                        show(letters.c_str());
+                    }
+                }
+                std::printf("highest feet %.1f (start %.1f): %.1f px, %.1f tiles\n", top, float(fy) * 20.f, top - float(fy) * 20.f, (top - float(fy) * 20.f) / 20.f);
+                rooms::for_each_item(gs, room, [&](dcon::item_id it) {
+                    if (w.item_get_mode(it) == world::weapon_mode::stuck_in_wall)
+                        std::printf("stuck spear at %.1f,%.1f (tile %d,%d)\n", w.item_get_stuck_pos(it).x, w.item_get_stuck_pos(it).y,
+                            world::room_view::get_tile_position(w.item_get_stuck_pos(it)).x, world::room_view::get_tile_position(w.item_get_stuck_pos(it)).y);
+                });
+                return 0;
+            }
             char rn[64];
             int px, cy, mode, dir, turn = 8;
             std::sscanf(exp, "%63[^,],%d,%d,%d,%d,%d", rn, &px, &cy, &mode, &dir, &turn);

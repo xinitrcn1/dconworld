@@ -317,11 +317,17 @@ namespace pathing {
         // `left` tiles, a wall it stops against, else ground all the way to
         // land on (short of that, onto a ledge with nothing past it, it carries
         // on over the edge: out of WARG_B35's and UW_E02's open sides)
-        bool stops(room_view const& room, ivec2 v, int32_t sd, int32_t left) {
+        bool stops(room_view const& room, ivec2 v, int32_t sd, int32_t left, bool down = false) {
             for (int32_t k = 1; k <= left - 1; ++k) {
                 ivec2 const t = v + ivec2{sd * k, 0};
-                if (!room.inside(t.x, t.y) || !open(room, t) || !open(room, t + ivec2{0, 1}))
-                    return room.inside(t.x, t.y);
+                // (coming down into a pit, a wall the body's height: one tile, the
+                // pit's edge, it flies over; UW_E03's pit over its pipe at (29,89))
+                if (!room.inside(t.x, t.y))
+                    return false;
+                if (down ? (!open(room, t) && !open(room, t + ivec2{0, 1})) : (!open(room, t) || !open(room, t + ivec2{0, 1})))
+                    return true;
+                if (!open(room, t) || !open(room, t + ivec2{0, 1}))
+                    return false;
                 if (!standable(room, t))
                     return false;
             }
@@ -331,16 +337,19 @@ namespace pathing {
         // the tile in front of a pipe's entrance, the hole facing it: in the
         // air there, pushing on, it goes in (UW_D02's exit high in its wall,
         // jumped into from a pole's tip)
-        bool pipe_mouth(room_view const& room, ivec2 v) {
-            for (auto const d : rw::custom::four_directions)
-                if (room.inside(v.x + d.x, v.y + d.y) && room.get_tile(v + d).t == terrain::shortcut_entrance
-                    && room.shortcut_entrance_hole_direction(v + d) == ivec2{-d.x, -d.y})
-                    return true;
-            return false;
+        // (`s`: the way it comes flying, the pipe facing it: one opening up,
+        // under a platform at UW_E03's (29,89), is gone into from above)
+        bool pipe_mouth(room_view const& room, ivec2 v, int32_t s) {
+            ivec2 const d{s, 0};
+            return room.inside(v.x + d.x, v.y) && room.get_tile(v + d).t == terrain::shortcut_entrance
+                && room.shortcut_entrance_hole_direction(v + d) == ivec2{-d.x, 0};
         }
 
         bool arc_clear(room_view const& room, ivec2 g, ivec2 v, int32_t s, int32_t height) {
-            if (room.get_tile(v).water != 0)
+            // (not into a platform, a pipe's entrance: there it lands over them,
+            // UW_E03's platform over its pipe at (29,89))
+            auto const t = room.get_tile(v).t;
+            if (room.get_tile(v).water != 0 || t == terrain::floor || t == terrain::shortcut_entrance)
                 return false;
             // (into a pipe's mouth or a passage's end, the way up to just
             // before it; the mouth only has to be open: a notch one tile high,
@@ -350,7 +359,7 @@ namespace pathing {
                 auto const solid_at = [&](ivec2 t) { return room.inside(t.x, t.y) && room.get_tile(t).solid(); };
                 bool const crawlway = solid_at(v + ivec2{0, 1}) && solid_at(v - ivec2{0, 1}) && open(room, v - ivec2{s, 0});
                 bool const shaft = solid_at(v + ivec2{1, 0}) && solid_at(v - ivec2{1, 0}) && open(room, v - ivec2{0, 1}) && !solid_at(v - ivec2{0, 1});
-                if (pipe_mouth(room, v) || crawlway) {
+                if (pipe_mouth(room, v, s) || crawlway) {
                     ivec2 const before = v - ivec2{s, 0};
                     if (before.x != g.x && arc_open(room, g, before, s, height))
                         return true;
@@ -431,7 +440,7 @@ namespace pathing {
                                     if (!(arc_clear(room, g, v, s, 2) || (pole(v) && arc_open(room, g, v, s, 2))))
                                         continue;
                                     // (a running jump carries on too)
-                                    if (!pole(v) && !stops(room, v, s, leap_reach(dy) - dx))
+                                    if (!pole(v) && !stops(room, v, s, leap_reach(dy) - dx, dy < 0))
                                         continue;
                                     add(g, v, 30u + 10u * uint32_t(dx) + edge_of_reach(dx, leap_reach(dy)), step_kind::leap, s);
                                 }
@@ -445,7 +454,7 @@ namespace pathing {
                                     // (a pounce goes its full length: short of that, onto a
                                     // ledge with nothing past it to stop it, it carries on
                                     // over the edge, out of WARG_B35's open side)
-                                    if (!pole(v) && !stops(room, v, s, pounce_reach(dy) - dx))
+                                    if (!pole(v) && !stops(room, v, s, pounce_reach(dy) - dx, dy < 0))
                                         continue;
                                     add(back, v, 40u + 10u * uint32_t(dx) + edge_of_reach(dx, pounce_reach(dy)), step_kind::pounce, s);
                                 }
@@ -460,6 +469,28 @@ namespace pathing {
                                 if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && !room.get_tile(g).vertical_beam() && arc_open(room, g, v, s, 1))
                                     add(g, v, 25u + 10u * uint32_t(d + std::abs(dy)), step_kind::rise, s);
                             }
+                    // a crawl-turn vault from flat ground, up onto a pole a little
+                    // ahead and well over a jump's reach (measured in UW_E03, its
+                    // way in: from the floor at (7,8) the head passes 6.5 tiles up
+                    // 2.5 ahead and catches pole x=9 at its foot, row 14)
+                    if (ground && standable(room, g + ivec2{1, 0}) && standable(room, g - ivec2{1, 0}))
+                        for (int32_t const s : {-1, 1}) {
+                            bool column = true;
+                            // (open over it, ahead and behind: the crawl-turn swings back)
+                            for (int32_t k = 1; k <= 7 && column; ++k)
+                                column = open(room, g + ivec2{0, k}) && open(room, g + ivec2{s, k}) && (k > 2 || open(room, g - ivec2{s, -k}));
+                            if (!column)
+                                continue;
+                            for (int32_t d = 1; d <= 3; ++d)
+                                for (int32_t dy = 6; dy >= 3; --dy) {
+                                    ivec2 const v = g + ivec2{s * d, dy};
+                                    if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && !room.get_tile(v - ivec2{0, 1}).vertical_beam()
+                                        && open(room, v - ivec2{s, 0})) {
+                                        add(g, v, 120u + 10u * uint32_t(dy + d), step_kind::vault, s);
+                                        break;
+                                    }
+                                }
+                        }
                     // out of a crawlway's open end (a low ceiling over it: on all
                     // fours, no room to jump up) straight across onto a pole a
                     // few tiles out (UW_E03's tunnels up its left wall to pole x=9)

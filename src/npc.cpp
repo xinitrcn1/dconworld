@@ -721,6 +721,46 @@ namespace npc {
                     bool const near = std::abs(room_view::get_tile_position(pos(state, p, 0)).x - nav.aim.x) <= 1;
                     return input(dir, off && (near || t > 18) ? 1 : 0, t < 13);
                 }
+                case move::vault: {
+                    // facing the way, down on fours (still), then the vault: as
+                    // measured in UW_E03 (R2,N4,D12, L1,UL1,L3, DRJ1, RJ6, URJ10,
+                    // U till it holds); up on the pole, or fallen back: over
+                    if (t > 120 || (t > 30 && mode == player::body_mode_index::climbing_on_beam)) {
+                        if (mode != player::body_mode_index::climbing_on_beam)
+                            failed(60);
+                        break;
+                    }
+                    if (t > 30 && !airborne(state, p) && mode != player::body_mode_index::climbing_on_beam) {
+                        failed(60);
+                        break;
+                    }
+                    // (only from the ground: in a corridor down climbs it)
+                    if (t < 18 && mode != player::body_mode_index::stand && mode != player::body_mode_index::crawl) {
+                        failed(60);
+                        break;
+                    }
+                    if (t < 2)
+                        return input(dir, 0);
+                    if (t < 6)
+                        return input(0, 0);
+                    if (t < 18) {
+                        // (not yet down on fours: hold the clock, a while)
+                        if (t == 17 && mode != player::body_mode_index::crawl && ++nav.cool < 40)
+                            nav.move_timer = 17;
+                        return input(0, -1);
+                    }
+                    if (t == 18)
+                        return input(-dir, 0);
+                    if (t == 19)
+                        return input(-dir, 1);
+                    if (t < 23)
+                        return input(-dir, 0);
+                    if (t == 23)
+                        return input(dir, -1, true);
+                    if (t < 30)
+                        return input(dir, 0, true);
+                    return input(dir, 1, t < 40);
+                }
                 case move::tip: {
                     // standing on the tip: jump
                     if (w().player_get_animation(p) == player::animation_index::beam_tip && t > 2) {
@@ -994,6 +1034,9 @@ namespace npc {
                     begin(move::bounce, st->tile, st->dir);
                     nav.wall_side = 0;
                     nav.cool = 0;
+                    return started();
+                case pathing::step_kind::vault:
+                    begin(move::vault, st->tile, st->dir);
                     return started();
                 case pathing::step_kind::wall:
                     begin(move::wall, st->tile, st->dir);
@@ -1306,7 +1349,8 @@ namespace npc {
                 // on a guessed trip, somewhere new (through a warp, say): a
                 // shelter it knows the walkable way to from here, if there is
                 // one now, the closest
-                if (leads() && nav.rethink) {
+                // (not on a trip under test with --npc-guess: it keeps its target)
+                if (leads() && nav.rethink && !debug().guess) {
                     nav.rethink = 0;
                     auto const& s = explore(state, room.id, goals_from(state, room, at));
                     auto options = shelters_of(state, s, room.id);
@@ -2104,7 +2148,7 @@ namespace npc {
             return "player";
         auto const& nav = w.slugcat_npc_get_nav(n);
         static char const* const goals[] = {"start", "travel", "flee", "rest"};
-        static char const* const moves[] = {"walk", "rise", "back up", "run", "crouch", "charge", "flight", "swing", "tip", "wall", "bounce"};
+        static char const* const moves[] = {"walk", "rise", "back up", "run", "crouch", "charge", "flight", "swing", "tip", "wall", "bounce", "vault"};
         auto const target = w.slugcat_npc_get_target(n);
         auto const l = w.slugcat_npc_get_leader(n);
         std::string s = std::string{"NPC "} + player::to_string(w.player_get_stats(p).name) + " " + goals[size_t(nav.what)] + "/" + moves[size_t(nav.how)];

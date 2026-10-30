@@ -109,6 +109,21 @@ the tools for tracing them, and what is known not to work yet.
   x=31's foot, twice). A sideways jump from a pole's tip onto another pole
   (the player did that too) was tried and dropped: CC_B06 then took it
   over its working jump-and-bounce and got stuck.
+- **Crawl-turn vault** (`vault`; the community's "perfect CTV", see the
+  Rain World wiki's Crawl-turn vault page): on flat ground with open air
+  over it, ahead and behind, onto a pole 1 to 3 ahead and 3 to 6 up. Face
+  the way, down on fours, then: back 5 ticks with up at the second (the
+  crawl-turn, cancelled), down + the way + jump at once, the way + jump 6,
+  up + the way + jump 10, up till it holds. Measured in UW_E03 with
+  `--npc-exp uw_e03,7,8,S,R2,N4,D12,L1,UL1,L3,DRJ1,RJ6,URJ10,U30`: the feet
+  rise 6.4 tiles, the head passes row 15 at x≈9.8 and catches pole x=9 at
+  its foot (UW_E03's way in; a straight jump, a single wall jump: row 12).
+- **Platforms over pipes.** A jump never lands in a platform or a pipe's
+  entrance tile; a jump into a pipe's mouth only into one facing it from the
+  side (UW_E03's pipe at (29,89) opens up under a platform: drop through
+  it). Coming down into a pit, a running jump or a pounce counts a wall as
+  stopping it only if it is the body's height (the pit's one-tile edge with
+  slopes over it: it flew over).
 - **Back and forth.** Going back into the room it just came from three
   times in a row (each room's way on leading through the other): on a
   guessed trip neither room is guessed through again; on a walkable one the
@@ -397,6 +412,7 @@ again; after three of those the target is dropped.
 | `--npc-list` | soak | every NPC at the end |
 | `--npc-guess` | trip, human-complete | set off even with no walkable way known (a guessed trip, retargeting on the way; getting stuck or finding no way doesn't fail it, it learns from it) |
 | `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
+| `--npc-exp <room,x,y,S,script>` | trip | standing on tile x,y, the script (`--script`'s letters, `X` throw and `P` pick up included) played, every tick printed, the highest the feet got, where spears stuck; `S+` puts a spear at its feet first |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
 
 ### Showing it the way: `--npc-human-complete`
@@ -471,6 +487,24 @@ stuck, never dying:
 A player's recording of CC_B08
 (`npc_human_HI_S05_UW_S04.txt`, a Watcher) replays to PASS with
 `--npc-human-complete HI_S05 UW_S04 --script "<its last line>"`.
+
+## UW_S05 → UW_S07 (The Wall)
+
+UW_S05 → D02 → E02 → E03 → D03 → D04 → B01 → UW_PREGATE → UW_S07, Survivor,
+`--npc-guess` (no walkable way known end to end yet). UW_PREGATE is a
+Downpour room: load `--root game/mods/moreslugcats` too, without it UW_S07
+can't be reached at all (the merged world file links it only through
+there). The NPC climbs D02 (≈2800 ticks), E02 (≈3100, a player's
+recording taught it the foot catches), E03 (≈3400: the crawl-turn vault in,
+the tunnel hops, the drop through the platform into the pipe at the top
+part) and gets to D03, which is not planned: from pole x=25's lower part
+(under a block at row 146) to its upper part and the ledge at (33,148) no
+jump measured works (the tip of x=25, the tip and the side of x=30: the head
+gets to row 145). It needs a spear for its last jump (thrown into a wall
+for a step: a stuck spear lends its tile and the free ones beside it a
+horizontal beam, items.cpp); D03 has three placed, one at (45,135) in the
+part it gets to. The NPC doesn't plan spear steps yet. D04 is planned; B01
+isn't.
 
 ## The whole world
 

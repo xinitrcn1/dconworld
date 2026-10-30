@@ -33,6 +33,10 @@ namespace npc {
         wall,
         // from a pole's tip into a wall, off it back to a pole
         bounce,
+        // a crawl-turn vault (the community's "perfect CTV"): down on fours
+        // facing the way, back for 5 ticks cancelled with up at the second,
+        // then down, the way and jump at once: far higher than a jump
+        vault,
     };
 
     // what it is after

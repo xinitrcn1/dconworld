@@ -73,7 +73,7 @@ namespace pathing {
     // a pole to another one, from a pole's tip (onto the ground, or off a
     // wall back to a pole over it), wall jumps up a narrow shaft, a pipe
     // within the room
-    enum class step_kind : uint8_t { walk, drop, rise, leap, pounce, swing, tip, bounce, wall, pipe };
+    enum class step_kind : uint8_t { walk, drop, rise, leap, pounce, swing, tip, bounce, wall, pipe, vault };
     // A slugcat move other than a plain step or a straight drop, between
     // two tiles of a room (row major indices), its cost in tenths and its
     // side (-1 left, 1 right, 0 straight up)
