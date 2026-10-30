@@ -1,8 +1,9 @@
 #pragma once
 
 // One 40Hz tick of the whole world. Every room of every region is loaded and
-// simulated all the time (no AbstractRoom/AbstractCreature layer): players,
-// creatures, items, rot, water, sand and gates of all the rooms, in
+// simulated all the time (no AbstractRoom/AbstractCreature layer): the rain
+// cycles, players, creatures (and the ones in pipes and dens), items, rot,
+// water, sand, the rooms' rain and gates of all the rooms, in
 // parallel, one task per room (TBB). A room's update only reads and writes
 // what is in it; what reaches beyond (objects created or deleted, anything
 // moving to another room) is queued on the room and applied after, serially,
@@ -26,7 +27,9 @@ namespace simulation {
     // Room.Loaded's first visit side effects (items, scavenger loot, rot,
     // warp points, sand) for every room that hasn't had them yet: all of
     // them at startup, deterministically, each room rolling with its own
-    // generator seeded from game_state::random and its name. Set the
+    // generator seeded from game_state::random and its name; then, once,
+    // the rain cycles (rain.hpp) and the world files' creatures in their
+    // dens (spawns.hpp, unless game_state::spawn_dens is off). Set the
     // campaign (story_slugcat) and the seed first. tick() calls it too, for
     // rooms added later (tests)
     void populate(sys::game_state& state);

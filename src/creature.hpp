@@ -131,8 +131,18 @@ namespace creature {
     // slugcats and their kin)
     void update_room(sys::game_state& state, world::room_view const& room);
     // InitiateGraphicsModule + Reset for every creature of a room a camera
-    // starts looking at
+    // starts looking at, or for one
     void came_into_view(sys::game_state& state, dcon::room_id room);
+    void reset_graphics(sys::game_state& state, dcon::creature_id c);
+    // out of a pipe in `room` at `at` (dens.hpp): what keeps tiles of the
+    // room it was in starts over, the graphics module too
+    void placed_in_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, rw::vec2 at);
+    // Creature.Stun and Creature.Die as the rain deals them (the kinds' own
+    // reactions aside): the stun, death and letting go
+    void stun(sys::game_state& state, dcon::creature_id c, int32_t st);
+    void die(sys::game_state& state, dcon::creature_id c);
+    // lets go of every slugcat of the room
+    void release_all(sys::game_state& state, dcon::creature_id c, dcon::room_id room);
 
     // What a projectile hit: a body chunk, or an appendage (a daddy's
     // tentacle: the segment before the hit and how far along it)

@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <string>
 
 #include "creature.hpp"
+#include "dens.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
 #include "cicada.hpp"
@@ -41,6 +43,22 @@ namespace creature {
         w.creature_set_type(c, t);
         auto& pl = w.creature_get_payload(c);
         pl = payload{};
+        // out in a room, no den yet (dens.hpp)
+        w.creature_set_home_room(c, dcon::room_id{});
+        w.creature_set_home_den(c, dens::no_den);
+        w.creature_set_away(c, 0);
+        w.creature_set_away_room(c, dcon::room_id{});
+        w.creature_set_entering_shortcut(c, rw::ivec2{-1, -1});
+        w.creature_set_shortcut_rad_add(c, 0.f);
+        w.creature_set_shortcut_delay(c, 0);
+        w.creature_set_vessel_shortcut(c, dcon::shortcut_id{});
+        w.creature_set_vessel_reverse(c, 0);
+        w.creature_set_vessel_progress(c, 0.f);
+        w.creature_set_remain_in_den(c, -1);
+        w.creature_set_going_home(c, 0);
+        w.creature_set_travel_tile(c, rw::ivec2{-1, -1});
+        w.creature_set_rain_death(c, 0.f);
+        w.creature_set_spawn_flags(c, 0);
         switch (t) {
         case type::centipede:
             pl.centipede = centipede_payload{};
@@ -180,6 +198,11 @@ namespace creature {
 
     std::string describe(sys::game_state const& state, dcon::creature_id c) {
         auto const& w = state.world;
+        if (w.creature_get_away(c) != 0) {
+            auto const room = w.creature_get_away_room(c);
+            auto const where = std::string{w.creature_get_away(c) == 1 ? "in a pipe" : "in a den"} + " of " + std::string{state.to_string_view(w.room_get_name(room))};
+            return std::string{to_string(w.creature_get_type(c))} + " " + where + (w.creature_get_away(c) == 2 ? " (out in " + std::to_string(w.creature_get_remain_in_den(c)) + " ticks)" : "");
+        }
         auto const at = [](vec2 p) { return std::to_string(int(p.x)) + "," + std::to_string(int(p.y)); };
         std::string const behavior = std::to_string(int(w.creature_get_behavior(c)));
         std::string const dead = w.creature_get_dead(c) ? " dead" : "";
@@ -244,8 +267,19 @@ namespace creature {
             return true;
         }
 
+        void update_kind(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed);
+
         // the kind's Update, and its graphics module's where a camera looks
         void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed) {
+            // squeezing into a pipe: only that (Creature.Update's enteringShortCut)
+            if (dens::before_update(state, c, room))
+                return;
+            update_kind(state, c, room, viewed);
+            // close to the pipe home: in it goes
+            dens::after_update(state, c, room);
+        }
+
+        void update_kind(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed) {
             switch (state.world.creature_get_type(c)) {
             case type::centipede:
                 centipede::update(state, c, room);
@@ -373,27 +407,59 @@ namespace creature {
         }
     }
 
-    void came_into_view(sys::game_state& state, dcon::room_id room) {
+    void reset_graphics(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
-            switch (w.creature_get_type(c)) {
-            case type::centipede: centipede_graphics::reset_positions(state, c); return;
-            case type::dropbug: dropbug_graphics::reset_positions(state, c); return;
-            case type::cicada: cicada_graphics::reset_positions(state, c); return;
-            case type::lizard: {
-                lizard_graphics::reset_positions(state, c);
-                // no limb has found a grip yet: Lizard.LegsGripping's 2 until
-                // the first update
-                auto& g = w.lizard_data_get_graphics(lizard_data(w, c));
-                g.legs_grabbing = 2;
-                g.no_grip_counter = 0;
-                return;
-            }
-            case type::daddy: daddy_graphics::reset(state, c); return;
-            case type::leech: leech_graphics::reset_positions(state, c); return;
-            case type::count: return;
-            }
-        });
+        switch (w.creature_get_type(c)) {
+        case type::centipede: centipede_graphics::reset_positions(state, c); return;
+        case type::dropbug: dropbug_graphics::reset_positions(state, c); return;
+        case type::cicada: cicada_graphics::reset_positions(state, c); return;
+        case type::lizard: {
+            lizard_graphics::reset_positions(state, c);
+            // no limb has found a grip yet: Lizard.LegsGripping's 2 until
+            // the first update
+            auto& g = w.lizard_data_get_graphics(lizard_data(w, c));
+            g.legs_grabbing = 2;
+            g.no_grip_counter = 0;
+            return;
+        }
+        case type::daddy: daddy_graphics::reset(state, c); return;
+        case type::leech: leech_graphics::reset_positions(state, c); return;
+        case type::count: return;
+        }
+    }
+
+    void came_into_view(sys::game_state& state, dcon::room_id room) {
+        rooms::for_each_creature(state, room, [&](dcon::creature_id c) { reset_graphics(state, c); });
+    }
+
+    void placed_in_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, vec2 at) {
+        // what keeps tiles of the room it was in (a daddy's tentacles)
+        auto& w = state.world;
+        if (w.creature_get_type(c) == type::daddy)
+            daddy::place_in_room(state, c, room, at);
+        // a leech out of the den is done fleeing the rain
+        if (w.creature_get_type(c) == type::leech) {
+            w.creature_get_payload(c).leech.flee_from_rain = 0;
+            w.creature_get_payload(c).leech.has_goal = 0;
+        }
+        reset_graphics(state, c);
+    }
+
+    void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
+        int32_t& s = state.world.creature_get_stun(c);
+        s = std::max(s, st);
+    }
+
+    void die(sys::game_state& state, dcon::creature_id c) {
+        auto& w = state.world;
+        if (w.creature_get_dead(c))
+            return;
+        w.creature_set_dead(c, 1);
+        release_all(state, c, room_of(state, c));
+    }
+
+    void release_all(sys::game_state& state, dcon::creature_id c, dcon::room_id room) {
+        rooms::for_each_player(state, room, [&](dcon::player_id p) { release_player(state, c, p); });
     }
 
     bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::creature_id& hit, hit_part& part) {

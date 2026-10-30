@@ -148,6 +148,13 @@ namespace sound {
             "Warp_Point_Ripple_Suck_In_Objects_LOOP",
             "Normal_Rain_LOOP",
             "Heavy_Rain_LOOP",
+            "Death_Rain_LOOP",
+            "Death_Rain_Heard_From_Underground_LOOP",
+            "Death_Rain_Rumble_LOOP",
+            "Flash_Flood_LOOP",
+            "Death_Rain_Approaching_LOOP",
+            "Death_Rain_Approaching_Heard_From_Underground_LOOP",
+            "Screen_Shake_LOOP",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

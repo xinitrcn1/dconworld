@@ -69,6 +69,9 @@ add_executable(rwcpp
     src/item_graphics.cpp
     src/gates.cpp
     src/simulation.cpp
+    src/rain.cpp
+    src/dens.cpp
+    src/spawns.cpp
     src/pathing.cpp
     src/body_parts.cpp
     src/creature.cpp

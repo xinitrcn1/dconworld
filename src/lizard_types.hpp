@@ -364,6 +364,7 @@ namespace lizard {
     struct utilities {
         float threat = 0.f;
         float prey = 0.f;
+        float rain = 0.f;
         module best = module::none;
         float best_utility = 0.f;
     };

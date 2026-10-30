@@ -2,6 +2,8 @@
 #include <vector>
 
 #include "leech.hpp"
+#include "dens.hpp"
+#include "rain.hpp"
 #include "items.hpp"
 #include "leech_graphics.hpp"
 #include "pathing.hpp"
@@ -367,8 +369,14 @@ namespace leech {
             if (sea && territory.x < 0 && accessible(room, room_view::get_tile_position(at)))
                 territory = room_view::get_tile_position(at);
             pl(state, c).hunt_prey = 0;
-            // (no rain cycle: it never flees from the rain)
-            {
+            if (pl(state, c).flee_from_rain) {
+                // FleeFromRainGoal: a den's pipe (dens.hpp)
+                auto& x = pl(state, c);
+                if (auto const t = dens::home_tile(state, c, room)) {
+                    x.off_shoot_goal = room_view::middle_of_tile(*t);
+                    x.has_goal = 1;
+                }
+            } else {
                 // the school's prey: the closest one it can see, the submerged ones closer
                 auto const kd = data(state, keeper(state, c));
                 auto& prey = w.leech_data_get_prey(kd).items;
@@ -692,7 +700,9 @@ namespace leech {
         auto const c = creature::make(state, creature::type::leech);
         auto const d = data(state, c);
         rw::rng rng{state.random.next() | 1u};
-        int32_t const seed = int32_t(rng.next() & 0x7FFFFFFFu);
+        int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
+        if (state.spawn_seed >= 0)
+            seed = state.spawn_seed;
         physics::object_desc desc;
         desc.gravity = 0.9f;
         desc.air_friction = 0.99f;
@@ -769,6 +779,12 @@ namespace leech {
         else if (w.creature_get_grasp_player(c)[0] != 0)
             lose_all_grasps(state, c);
         else if (consious(state, c)) {
+            // less than a minute before the rain: off to a den
+            if (auto const* rc = rain::of_room(state, room.id); rc && rain::time_until_rain(*rc) < 40 * 60 && rng.value() < 0.0125f
+            && dens::rain_utility(state, c, room.id) > 0.f)
+                x.flee_from_rain = 1;
+            if (x.flee_from_rain && x.has_goal)
+                dens::home_tile(state, c, room);
             if (physics::submersion(state, room, m) > 0.2f)
                 swim(state, c, room);
             else

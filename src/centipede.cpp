@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "centipede.hpp"
+#include "dens.hpp"
 #include "rooms.hpp"
 #include "centipede_graphics.hpp"
 #include "items.hpp"
@@ -224,7 +225,7 @@ namespace centipede {
         bool want_to_shock(sys::game_state const& state, dcon::creature_id c, dcon::player_id p) {
             auto const& w = state.world;
             auto const behavior = world::centipede_behavior(w.creature_get_behavior(c));
-            if (pl(state, c).annoying_collisions < 150 && behavior == centipede_behavior::flee && w.creature_get_current_utility(c) > 0.1f)
+            if (pl(state, c).annoying_collisions < 150 && (behavior == centipede_behavior::flee || behavior == centipede_behavior::escape_rain) && w.creature_get_current_utility(c) > 0.1f)
                 return false;
             if (w.player_get_dead(p))
                 return false;
@@ -472,7 +473,8 @@ namespace centipede {
                 w.centipede_data_set_seen_age(d, 0);
 
             // UtilityComparer: prey (its weight follows how long ago it was
-            // seen, the red centipede's stays at 0.9), threat (1), injury (0.7)
+            // seen, the red centipede's stays at 0.9), threat (1), rain (1),
+            // injury (0.7)
             float prey_utility = 0.f, threat_utility = 0.f;
             if (tracked) {
                 auto const rel = relationship_to(state, c, tracked);
@@ -490,6 +492,10 @@ namespace centipede {
             if (threat_utility > utility) {
                 utility = threat_utility;
                 behavior = centipede_behavior::flee;
+            }
+            if (float const rain = dens::rain_utility(state, c, room.id); rain > utility) {
+                utility = rain;
+                behavior = centipede_behavior::escape_rain;
             }
             if (injury_utility > utility) {
                 utility = injury_utility;
@@ -555,6 +561,12 @@ namespace centipede {
             case centipede_behavior::hunt:
                 excitement_goal = relationship_to(state, c, tracked).intensity;
                 dest = room_view::get_tile_position(w.creature_get_last_seen_pos(c));
+                break;
+            case centipede_behavior::escape_rain:
+                // the den (DenFinder, dens.hpp)
+                excitement_goal = 0.5f;
+                if (auto const t = dens::home_tile(state, c, room))
+                    dest = *t;
                 break;
             }
             float& excitement = pl(state, c).excitement;
@@ -1070,7 +1082,9 @@ namespace centipede {
         rw::rng rng{state.random.next() | 1u};
         // AbstractCreature.ID.RandomSeed: Centipede.GenerateSize and the
         // graphics' layout roll from it
-        int32_t const seed = int32_t(rng.next() & 0x7FFFFFFFu);
+        int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
+        if (state.spawn_seed >= 0)
+            seed = state.spawn_seed;
         {
             rw::unity_random r{seed};
             float const roll = mathf::lerp(0.f, 1.f, mathf::pow(r.value(), 1.5f));

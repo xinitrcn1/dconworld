@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "lizard_ai.hpp"
+#include "dens.hpp"
 #include "rooms.hpp"
 #include "lizard_graphics.hpp"
 #include "items.hpp"
@@ -14,10 +15,12 @@
 // the modules it keeps: a Tracker of the slugcat (vision with the breed's
 // angles and the Black lizard's SuperHearing), the PreyTracker, NoiseTracker,
 // StuckTracker, LurkTracker, LizardSpitTracker and the Yellow pack's YellowAI.
-// Nothing threatens a lizard here (no vultures, no masks), there is no rain
-// or migration, and lizards don't fight each other, so the Flee, EscapeRain,
-// Travelling, Fighting, ActingOutMission and FollowFriend behaviours don't
-// come up. The den is a room exit.
+// Nothing threatens a lizard here (no vultures, no masks), there is no
+// migration, and lizards don't fight each other, so the Flee, Travelling,
+// Fighting, ActingOutMission and FollowFriend behaviours don't come up. The
+// RainTracker sends it home to its den as the rain approaches (EscapeRain),
+// and it carries its prey there (ReturnPrey) or goes there hurt (Injured):
+// dens.hpp, through other rooms when the den is elsewhere.
 
 namespace lizard::ai {
     using rw::ivec2;
@@ -40,18 +43,6 @@ namespace lizard::ai {
 
         bool lurker(breed b) {
             return b == breed::white || b == breed::salamander || b == breed::eel || b == breed::peach;
-        }
-
-        // the first room exit's entrance: where the den would be (no dens,
-        // no creatures in shortcuts)
-        std::optional<ivec2> den(sys::game_state const& state, dcon::room_id room) {
-            std::optional<ivec2> e;
-            state.world.room_for_each_shortcut_location(room, [&](dcon::shortcut_location_id sl) {
-                auto const s = state.world.shortcut_location_get_shortcut(sl);
-                if (!e && state.world.shortcut_get_type(s) == world::shortcut_type::room_exit)
-                    e = state.world.shortcut_get_start(s);
-            });
-            return e;
         }
 
         // LizardAI.LikeOfPlayer: the community's like (0, nothing changes it
@@ -697,7 +688,9 @@ namespace lizard::ai {
             float const injury = injury_utility(state, l) * (b == breed::red ? 0.4f : 0.9f);
             float const noise = noise_utility(state, l) * 0.2f;
             float const lurk = lurker(b) ? lurk_utility(state, l, room) * mathf::lerp(0.4f, 0.3f, w.creature_get_payload(l).lizard.energy) : 0.f;
-            float const values[] = {a.u.threat, a.u.prey, 0.f, injury, 0.f, 0.f, noise, 0.f, lurk};
+            // rain: weight 0.9 (FriendTracker.CareAboutRain: no friend to stay with)
+            a.u.rain = dens::rain_utility(state, l, room.id) * 0.9f;
+            float const values[] = {a.u.threat, a.u.prey, a.u.rain, injury, 0.f, 0.f, noise, 0.f, lurk};
             float best = std::numeric_limits<float>::lowest();
             a.u.best = module::none;
             for (uint32_t i = 0; i < 9; ++i) {
@@ -880,7 +873,8 @@ namespace lizard::ai {
         // the utilities as the comparer smoothed them last tick
         a.fear = a.u.threat;
         a.hunger = a.u.prey / 0.6f;
-        a.rain_fear = 0.f;
+        // UtilityComparer.GetSmoothedNonWeightedUtility(rainTracker)
+        a.rain_fear = a.u.rain / 0.9f;
         a.excitement = mathf::lerp(a.excitement, mathf::max(a.hunger, mathf::max(a.fear, mathf::pow(a.rain_fear, 3.f))), 0.1f);
         if (a.fear > 0.8f)
             a.last_distress_length = custom::int_clamp(a.last_distress_length + 1, 0, 500);
@@ -892,7 +886,8 @@ namespace lizard::ai {
         if (lurker(b) && behavior(state.world.creature_get_behavior(l)) == behavior::hunt && prey && a.run_speed < 0.1f && float_dist(here(state, l), best_guess(state, l)) > 17.f)
             state.world.creature_set_behavior(l, uint8_t(behavior::lurk));
         ivec2 const at = here(state, l);
-        auto const den_tile = den(state, room.id);
+        // DenFinder: the pipe home (only asked for by the behaviours heading there)
+        auto const den_tile = [&] { return dens::home_tile(state, l, room); };
         switch (behavior(state.world.creature_get_behavior(l))) {
         case behavior::hunt:
             if (prey && player_relationship(state, l, prey).eats)
@@ -957,23 +952,20 @@ namespace lizard::ai {
             break;
         }
         case behavior::return_prey:
-            if (den_tile)
-                state.world.creature_get_destination(l) = *den_tile;
+            // (carried into the den, the slugcat is eaten: dens.hpp)
+            if (auto const t = den_tile())
+                state.world.creature_get_destination(l) = *t;
             a.run_speed = mathf::lerp(a.run_speed, mathf::pow(mathf::max(a.fear, 0.5f), 0.5f), 0.1f);
-            // carried into the den: eaten (the slugcat carried into a shortcut)
-            if (den_tile && custom::manhattan_distance(at, *den_tile) < 2)
-                if (auto const p = grasped(state, l)) {
-                    items::release_all(state, p);
-                    // (the room's lizards let go of it)
-                    rooms::for_each_creature(state, rooms::room_of(state, p), creature::type::lizard, [&](dcon::creature_id o) { release_player(state, o, p); });
-                    if (!w.player_get_dead(p))
-                        player::die(state, p);
-                    w.player_set_eaten(p, 1);
-                }
+            break;
+        case behavior::escape_rain:
+            // LizardAI: the den, at full speed
+            if (auto const t = den_tile())
+                state.world.creature_get_destination(l) = *t;
+            a.run_speed = mathf::lerp(a.run_speed, 1.f, 0.1f);
             break;
         case behavior::injured:
-            if (den_tile)
-                state.world.creature_get_destination(l) = *den_tile;
+            if (auto const t = den_tile())
+                state.world.creature_get_destination(l) = *t;
             a.run_speed = mathf::lerp(a.run_speed, 1.f, 0.01f);
             if (rng.value() < 0.0125f)
                 make_sound(state, l, emotion::pain_idle, 1.f - w.creature_get_health(l));

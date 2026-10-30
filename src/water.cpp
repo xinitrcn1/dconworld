@@ -182,6 +182,16 @@ namespace water {
         surface_t* s = find(state, room.id);
         if (s == nullptr)
             s = &make(state, room);
+        // the rain's flood moves the surface (rain.cpp): its walls change with it
+        if (std::fabs(s->level - room.float_water_level) > 0.01f) {
+            bool const rewall = int32_t(s->level / 20.f) != int32_t(room.float_water_level / 20.f);
+            s->level = room.float_water_level;
+            if (rewall)
+                for (uint32_t x = 0; x < s->nx; ++x) {
+                    float const px = s->x0 + float(x) * s->spacing;
+                    s->wall[x] = room.get_tile(vec2{px, s->level - 4.f}).solid() && room.get_tile(vec2{px, s->level + 4.f}).solid() ? 1 : 0;
+                }
+        }
         // Water.waterSounds: a RectangularDynamicSoundLoop along the surface,
         // heard from its point nearest the listener (SilenceWater isn't read)
         sound::loop_request r;
@@ -189,8 +199,8 @@ namespace water {
         r.id = sound::sound_id::water_surface_calm_loop;
         r.room = uint32_t(room.id.index());
         r.shape = sound::loop_shape::rect;
-        r.pos = vec2{0.f, float(room.default_water_level - 1) * 20.f};
-        r.rect_max = vec2{room.pixel_width(), float(room.default_water_level) * 20.f};
+        r.pos = vec2{0.f, s->level - 30.f};
+        r.rect_max = vec2{room.pixel_width(), s->level - 10.f};
         state.play_loop(r);
         s->time += 1.f;
         s->last_h = s->h;

@@ -101,6 +101,7 @@ namespace world {
         flee,
         hunt,
         injured,
+        escape_rain,
     };
 
     // RoomSettings.DangerType
@@ -109,6 +110,13 @@ namespace world {
         flood,
         flood_and_rain,
         none,
+        // Downpour's and the Watcher's: the Aerie's blizzard rains like Rain
+        // (RoomRain pushes with the global rain at full strength), the rest
+        // have no RoomRain at all
+        aerie_blizzard,
+        blizzard,
+        sandstorm,
+        thunder,
         unknown,
     };
 

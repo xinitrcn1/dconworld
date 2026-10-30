@@ -29,6 +29,8 @@
 #include "unity_assets.hpp"
 #include "items.hpp"
 #include "rot.hpp"
+#include "rain.hpp"
+#include "dens.hpp"
 #include "warps.hpp"
 #include "reports.hpp"
 #include "selftest.hpp"
@@ -63,8 +65,12 @@ namespace {
             "                      spearmaster | saint | sofanthiel | watcher (or white/yellow/red)\n"
             "  --selftest          run the scripted movement tests and exit\n"
             "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
-            "  --bench [ticks]     time the whole world (a creature of each kind in every room)\n"
-            "                      on one thread and on every thread, and exit\n"
+            "  --bench [ticks]     time the whole world on one thread and on every thread, and\n"
+            "                      exit: without creatures, one of each kind in every room, the\n"
+            "                      world files' den population\n"
+            "  --bench-mode <m>    only one of them: none, each, dens\n"
+            "  --rain-in <ticks>   every region's rain comes in that many ticks\n"
+            "  --no-dens           no world file creatures in their dens\n"
             "  --audio-check       load the sound effects, decode a song, report and exit\n"
             "  --audio-dump <wav>  no window: run --ticks ticks (and --script) mixing what is heard into a WAV,\n"
             "                      report its loudness and the loops' lifetimes\n"
@@ -104,7 +110,8 @@ namespace {
             "          F5 add a co-op player (gamepad), P pause, N single step, T slow motion,\n"
             "          1-9/0 slugcat (Survivor, Monk, Hunter, Gourmand, Artificer, Rivulet,\n"
             "          Spearmaster, Saint, Sofanthiel, Watcher; 0 again toggles the Watcher's\n"
-            "          Void Weaver decorations), M play a song of the region\n"
+            "          Void Weaver decorations), F6 storm (rain streaks everywhere, sandstorms),\n"
+            "          F7 the rain of the region in 30 seconds, M play a song of the region\n"
             "          (again for another one), Ctrl+M stop the music, Esc quit\n",
             argv0);
     }
@@ -283,6 +290,18 @@ namespace {
                 w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), w.player_get_dead(p) ? "  DEAD (R)" : "",
                 rocks, spears, stuck, held.c_str(), w.player_get_in_shortcut(p) ? "  IN PIPE" : "");
             std::string out = buf;
+            if (auto const* rc = rain::of_room(gs, room)) {
+                // the region's rain cycle (RainMeter) and this room's rain
+                char rb[200];
+                int32_t const left = rain::time_until_rain(*rc);
+                if (rain::deadly(*rc))
+                    std::snprintf(rb, sizeof(rb), "\nDEATH RAIN %d/%d  intensity %.2f  room %.2f  flood %.0f", rc->death_rain_ticks, rain::deadly_rain_ticks,
+                        rc->intensity, w.room_get_rain_now(room), rc->flood);
+                else
+                    std::snprintf(rb, sizeof(rb), "\nrain in %d:%02d (cycle %d s)  intensity %.2f  room %.2f%s", left / 40 / 60, left / 40 % 60,
+                        rc->cycle_length / 40, rc->intensity, w.room_get_rain_now(room), w.region_get_never_rains(w.room_get_rain_region(room)) ? "  (never rains)" : "");
+                out += rb;
+            }
             if (auto const g = gates::gate_of(gs, room)) {
                 static char const* const modes[] = {"MiddleClosed", "ClosingAirLock", "Waiting", "OpeningMiddle",
                     "MiddleOpen", "ClosingMiddle", "OpeningSide", "Closed", "Broken"};
@@ -354,6 +373,9 @@ int main(int argc, char* argv[]) {
     std::string audio_dump;
     int32_t fuzz_ticks = -1;
     int32_t bench_ticks = -1;
+    std::string bench_mode;
+    int32_t rain_in = -1;
+    bool no_dens = false;
     player::slugcat_name slugcat = player::slugcat_name::white;
     for (int i = 1; i < argc; ++i) {
         std::string const a = argv[i];
@@ -380,6 +402,12 @@ int main(int argc, char* argv[]) {
             bench_ticks = 200;
             if (i + 1 < argc && argv[i + 1][0] != '-')
                 bench_ticks = std::atoi(argv[++i]);
+        } else if (a == "--bench-mode") {
+            bench_mode = next();
+        } else if (a == "--rain-in") {
+            rain_in = std::atoi(next().c_str());
+        } else if (a == "--no-dens") {
+            no_dens = true;
         } else if (a == "--screenshot") {
             screenshot = next();
         } else if (a == "--script") {
@@ -501,12 +529,16 @@ int main(int argc, char* argv[]) {
         bool first = true;
         return selftest::bench([&] {
             auto ptr = load_world(first);
+            ptr->story_slugcat = slugcat;
             first = false;
             return ptr;
-        }, uint32_t(bench_ticks));
+        }, uint32_t(bench_ticks), bench_mode);
     }
     auto const gs_ptr = load_world(true);
     auto& gs = *gs_ptr;
+    gs.spawn_dens = !no_dens;
+    // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
+    gs.story_slugcat = slugcat;
 
     if (fuzz_ticks >= 0) {
         simulation::populate(gs);
@@ -525,10 +557,11 @@ int main(int argc, char* argv[]) {
         gs.random.state ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
     app a{gs};
     a.slugcat = slugcat;
-    // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
-    gs.story_slugcat = slugcat;
-    // every room's first visit, now: items, scavenger loot, rot, warps, sand
+    // every room's first visit, now: items, scavenger loot, rot, warps,
+    // sand, the rain cycles and the creatures in their dens
     simulation::populate(gs);
+    if (rain_in >= 0)
+        gs.world.for_each_region([&](dcon::region_id r) { rain::rain_in(gs, r, rain_in); });
     dcon::room_id start = gs.find_room(start_room);
     if (!start) {
         reports::add_log("unknown room \"" + start_room + "\", using the first one");
@@ -622,8 +655,12 @@ int main(int argc, char* argv[]) {
         for (uint32_t t = 0; t < screenshot_ticks; ++t)
             step(player::input_package{});
         run_script(step);
+        // the creatures of the room the camera shows
         for (auto const t : creature::all_types)
-            creature::for_each_of(gs.world, t, [&](dcon::creature_id c) { reports::add_log(creature::describe(gs, c)); });
+            creature::for_each_of(gs.world, t, [&](dcon::creature_id c) {
+                if (creature::room_of(gs, c) == a.room || (dens::where_is(gs, c) != dens::where::room && gs.world.creature_get_away_room(c) == a.room))
+                    reports::add_log(creature::describe(gs, c));
+            });
         if (auto const rs = rot::system_of(gs, a.room); rs) {
             auto const& w = gs.world;
             uint32_t bulbs = 0, eyes = 0, legs = 0, tendrils = 0, vines = 0, meals = 0;
@@ -872,6 +909,10 @@ int main(int argc, char* argv[]) {
                     break;
                 case SDLK_N: step_once = true; break;
                 case SDLK_F6: gs.storm = !gs.storm; break;
+                case SDLK_F7:
+                    // the rain of the region (and the regions linked to it) in 30 seconds
+                    rain::rain_in(gs, w.room_get_rain_region(a.room), 30 * 40);
+                    break;
                 case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
                     // the Watcher's ripple level in half steps, any other slugcat's karma
                     int32_t const d = e.key.key == SDLK_RIGHTBRACKET ? 1 : -1;

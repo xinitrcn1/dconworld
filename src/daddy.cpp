@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "daddy.hpp"
+#include "dens.hpp"
 #include "rooms.hpp"
 #include "daddy_graphics.hpp"
 #include "daddy_internal.hpp"
@@ -414,11 +415,12 @@ namespace daddy {
                         heard_noise(x, n, hearing);
             x.set_current(behavior::idle);
             --a.react_noise_time;
-            // UtilityComparer: prey at 1, noise at 0.1 (rain isn't ported)
+            // UtilityComparer: prey at 1, rain at 1, noise at 0.1
             float const prey = prey_utility(x);
+            float const rain = dens::rain_utility(x.state, x.d, x.room.id);
             float const noise = listens ? noise_utility(x) * 0.1f : 0.f;
-            if (mathf::max(prey, noise) > 0.01f)
-                x.set_current(prey >= noise ? behavior::hunt : behavior::examine_sound);
+            if (mathf::max(prey, mathf::max(rain, noise)) > 0.01f)
+                x.set_current(rain > prey && rain >= noise ? behavior::escape_rain : prey >= noise ? behavior::hunt : behavior::examine_sound);
             if (x.hd && x.current() == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
                 x.set_current(behavior::examine_sound);
             ivec2& dest = x.destination;
@@ -443,6 +445,10 @@ namespace daddy {
                     if (reachable_and_getbackable(x, c) && float_dist(c, x.here()) >= 7.f)
                         dest = c;
                 }
+            } else if (x.current() == behavior::escape_rain) {
+                // DenFinder.GetDenPosition (dens.hpp)
+                if (auto const t = dens::home_tile(x.state, x.d, x.room))
+                    dest = *t;
             } else if (x.current() == behavior::examine_sound) {
                 if (a.react_noise_time > 0)
                     dest = a.react_target;
@@ -1020,6 +1026,8 @@ namespace daddy {
 
         // Random.InitState(abstractCreature.ID.RandomSeed): the layout rolls
         rw::unity_random r{int32_t(rng.next() & 0x7FFFFFFFu)};
+        if (state.spawn_seed >= 0)
+            r = rw::unity_random{state.spawn_seed};
         w.creature_get_payload(d).daddy.graphics_seed = r.range(0, std::numeric_limits<int32_t>::max());
         float num = size_class ? 12.f : 8.f;
         int32_t num2 = 8, num3 = 7;
@@ -1119,27 +1127,33 @@ namespace daddy {
         }
         w.creature_set_random(d, rng);
 
+        place_in_room(state, d, room, at);
+        daddy_graphics::create(state, d);
+        return d;
+    }
+
+    void place_in_room(sys::game_state& state, dcon::creature_id d, dcon::room_id room, vec2 at) {
+        auto& w = state.world;
+        auto const view = world::get_room_view(state, room);
         // Creature.PlaceInRoom: the chunks a random pixel off the tile's middle
         vec2 const mid = room_view::middle_of_tile(at);
-        for (auto const c : cs) {
+        uint32_t const n = chunk_count(state, d);
+        for (uint32_t i = 0; i < n; ++i) {
+            auto const c = chunk(state, d, i);
             physics::hard_set_position(state, c, mid + custom::rnv(w.creature_get_random(d)));
             w.body_chunk_set_vel(c, vec2{0.f, 0.f});
         }
         // NewRoom (the tentacles, pastPositions) and PlaceInRoom
-        {
-            auto& tents = work_buffer();
-            ctx x(state, d, view, tents, scratch_buffer());
-            load(x);
-            for (auto& tw : tents)
-                tentacle_new_room(x, tw);
-            vec2 const middle = x.middle_of_body();
-            for (auto& tw : tents)
-                tentacle_place(x, tw, middle);
-            x.z.unconditional_support = 1.f;
-            store(x);
-        }
-        daddy_graphics::create(state, d);
-        return d;
+        auto& tents = work_buffer();
+        ctx x(state, d, view, tents, scratch_buffer());
+        load(x);
+        for (auto& tw : tents)
+            tentacle_new_room(x, tw);
+        vec2 const middle = x.middle_of_body();
+        for (auto& tw : tents)
+            tentacle_place(x, tw, middle);
+        x.z.unconditional_support = 1.f;
+        store(x);
     }
 
     void destroy(sys::game_state& state, dcon::creature_id d) {

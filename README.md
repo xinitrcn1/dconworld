@@ -27,9 +27,13 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --root <StreamingAssets> [--root <more>...]
 ./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
 ./build/rwcpp --selftest         # scripted movement/item/gate tests (no game data needed)
-./build/rwcpp --fuzz 600         # a creature of each kind in every room, slugcats with random input
-                                 # in 128 rooms at a time (the whole world ticking), then every room exit pipe
-./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread
+./build/rwcpp --fuzz 600         # a creature of each kind in every room on top of the world files' creatures,
+                                 # the rain half way, slugcats with random input in 128 rooms at a time
+                                 # (the whole world ticking), then every room exit pipe
+./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread: no creatures,
+                                 # one of each kind per room, the world files' den population
+./build/rwcpp --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
+./build/rwcpp --rain-in 600      # every region's rain comes in 15 seconds (--no-dens: no den creatures)
 ./build/rwcpp --audio-check      # load the sound effects, loops and ambient clips, decode whole songs, report
 ./build/rwcpp --audio-dump a.wav --room su_a22 --ticks 400   # mix what is heard into a WAV, headless
 ```
@@ -58,7 +62,8 @@ Rivulet, Spearmaster, Saint, Sofanthiel, Watcher (0 again toggles the
 Watcher's Void Weaver decorations), E holds the Watcher's ability
 (camouflage, levitation; gamepad north button), `[`/`]` lower/raise the
 Watcher's ripple level (any other slugcat's karma), F6 toggles a rain storm
-(a sandstorm over sand), I spawns the next kind of item at the cursor, M plays a song of the
+(streaks everywhere, cosmetic; a sandstorm over sand), F7 brings the region's
+rain (and its gate linked regions') in 30 seconds, I spawns the next kind of item at the cursor, M plays a song of the
 region (again for another one; the game itself has long silent stretches),
 Ctrl+M stops the music. Spearmaster pulls a spear out of its tail by holding
 pick up with a free hand; Hunter stows a held spear on its back (or takes it
@@ -85,8 +90,11 @@ stun, death and health (every kind), the AI's behaviour and destination
 tracked slugcat, whether it is seen, for how long it hasn't been and where it
 was last (every AI; the centipede has no visual contact flag), the grasps on
 a slugcat (centipede, dropwig, lizard, leech), the forbidden idle spot
-(centipede, squidcada, lizard) and the graphics module's generator (every
-kind); the body is a `physical_object` (`creature_body`). What only one kind
+(centipede, squidcada, lizard), the graphics module's generator, and the
+den it lives in, its trip through a pipe or its wait in a den, its
+`rainDeath` and spawn flags (every kind, dens.hpp); the body is a
+`physical_object` (`creature_body`), in no room while the creature is in a
+pipe or a den. What only one kind
 has is its `payload`, a union of one struct per kind of at most 64 bytes (one
 cache line, `static_assert`ed: centipede 64, dropwig 60, squidcada 56,
 lizard 52, leech 48, daddy 40 bytes): its hottest state and the index of its
@@ -125,21 +133,26 @@ tick, viewed or not, with full physics and AI for every creature in it.
 - **Startup**: `simulation::populate` does what `Room.Loaded` does on a
   room's first visit (placed and random items, scavenger outposts and
   treasuries, story items, fruit, rot, warp points, the sand height map) for
-  every room, in room order. Every room has its own `UnityEngine.Random`
+  every room, in room order, then sets up the rain cycles (`rain::setup`)
+  and makes the world files' creatures in their dens (`spawns::spawn_world`). Every room has its own `UnityEngine.Random`
   (`room.random`), seeded from the world seed (`game_state::random`) and the
   room's name, so a room rolls the same whatever else happens. Objects are
   created serially; the sand maps are built in parallel.
-- **Serial, before**: players in a shortcut travel their vessel (coming out
+- **Serial, before**: every region's rain cycle ticks (`rain::update_world`),
+  players in a shortcut travel their vessel (coming out
   moves them, what they hold and the squidcada they carry to another room),
   the viewed rooms are worked out (the players' rooms and
   `game_state::camera_rooms`), creatures in a room that just came into view
   get their graphics modules reset (`reset_positions`: the parts back on the
   body, the look kept), and `rooms::build_index` buckets every player,
-  creature, item and spit by room.
-- **Parallel**: one TBB task per room runs its players, creatures (kind by
-  kind: every creature's Update and graphics module, then its collisions
-  with the slugcats and its kin, `creature::update_room`), outposts, items, rot, water, sand and mud, ambient particles
-  and gate, in that order. A room's update reads and writes only its own
+  creature, item and spit by room, and the creatures in pipes and dens by the
+  room holding them (their bodies are in no room).
+- **Parallel**: one TBB task per room runs its players, the vessels in its
+  pipes and the creatures in its dens (`dens::update_room`), its creatures
+  (kind by kind: every creature's Update and graphics module, then its
+  collisions with the slugcats and its kin, `creature::update_room`),
+  outposts, items, rot, water, sand and mud, its RoomRain (`rain::update_room`),
+  ambient particles and gate, in that order. A room's update reads and writes only its own
   objects: every loop over creatures is `rooms::for_each_*` over the room's
   bucket, and what holds a slugcat is looked for in the slugcat's room. Each
   room has its own caches and buffers (`sys::room_runtime`): path fields,
@@ -147,8 +160,9 @@ tick, viewed or not, with full physics and AI for every creature in it.
   noises, sounds, loop requests, music, particles and ripple rings.
 - **Transactions**: whatever would change the data container's structure
   (creating or deleting objects, a lizard's spit, Spearmaster's needle, a
-  rot meal, a bomb gone off, a centipede eaten by the rot) is queued on the
-  room with `game_state::defer` and applied after the parallel phase, room
+  rot meal, a bomb gone off, a centipede eaten by the rot, a creature
+  squeezing into a pipe, coming out of one or travelling on to another room)
+  is queued on the room with `game_state::defer` and applied after the parallel phase, room
   by room in order, each room's in the order queued; outside the parallel
   phase `defer` runs at once. Grasps of items are plain properties of the
   player and the item, so picking up and throwing need no transaction.
@@ -175,16 +189,20 @@ music only come from viewed rooms. The slugcat's room is always viewed, so
 its graphics (which hold the hands items hang from) always run. The water
 surface runs in every room with water.
 
-`--bench N` puts a creature of each kind in every room and times N ticks of
-the whole world on one thread and on every thread. On a 6 core Xeon
-(Skylake, KVM):
+`--bench N` times N ticks of the whole world on one thread and on every
+thread, three times: without creatures, with a creature of each kind in every
+room, and with the world files' population (made in their dens; 1000 ticks
+of warm up first, by when every one that wants to is out). On a 6 core Xeon
+(Skylake, KVM), Survivor's campaign for vanilla, the Watcher's with it:
 
 | world | creatures | 1 thread | 6 threads | ticks/s |
 | --- | --- | --- | --- | --- |
-| vanilla, 760 rooms | none (no den spawns yet) | 3.8 ms | 0.87 ms | 1150 |
-| vanilla, 760 rooms | 4413, one of each per room (every centipede variant in turn) and a leech school in the rooms with water | 59 ms | 10.5 ms | 96 |
-| + Watcher, 2074 rooms | none | 12.8 ms | 2.6 ms | 381 |
-| + Watcher, 2074 rooms | 9705, one of each per room | 175 ms | 29 ms | 34 |
+| vanilla, 760 rooms | none | 3.8 ms | 1.04 ms | 966 |
+| vanilla, 760 rooms | 4413, one of each per room (every centipede variant in turn) and a leech school in the rooms with water | 64 ms | 10.3 ms | 97 |
+| vanilla, 760 rooms | 652, the world files' (all out) | 7.1 ms | 1.53 ms | 653 |
+| + Watcher, 2074 rooms | none | 12.1 ms | 2.4 ms | 412 |
+| + Watcher, 2074 rooms | 12115, one of each per room | 166 ms | 30 ms | 33 |
+| + Watcher, 2074 rooms | 1577, the world files' (1565 out, 12 PreCycle ones in their dens) | 21.5 ms | 4.1 ms | 244 |
 
 With a creature of each kind in all 2074 rooms about half the time goes to
 the daddy long legs' tentacles (`Tentacle`/`DaddyTentacle`: terrain
@@ -192,6 +210,91 @@ collisions, grab path searches, ray traces), and a quarter to building path
 fields (~60 a tick, mostly squidcadas and daddies changing destination); the
 rest is the other creatures, the rot and the water. Rooms scale to about 6x
 on 6 cores; the serial phases take ~0.25 ms a tick.
+
+### Rain, dens and the world's creatures
+
+**The rain** (`src/rain.*`) ports `RainCycle`, `GlobalRain` with its
+`DeathRain` and `RoomRain` in story mode (no precycles, no Remix). Every
+region has its own cycle (the region's `rain`, a `rain::cycle` in the data
+container): World's constructor rolls 400 to 800 seconds (Monk, Rivulet,
+Gourmand and Saint get the skewed roll, Rivulet's and Saint's cut by
+`GetDesiredCycleLength`), `GlobalRain.Intensity` builds up over the last 600
+ticks, `RainApproaching` over the last minute, and when the timer runs out
+the death rain hits. Regions linked by gates (the merged world connections'
+gate rooms) are grouped at world load; within a group every region runs the
+cycle of the first one in region order (`rain_leader`), copying it every
+tick. A region where under a fifth of its rooms have a RoomRain that rains or
+floods never rains and links nothing (Five Pebbles: 8 of 74 rooms; the
+Watcher's WARA, WAUA, WBLA, WMPA, WORA, WPTA, WRSA, WSSR, WTDA, WTDB, WVWB).
+Vanilla: one group led by CC (every other region), SS dry; with the Watcher
+its regions (linked by warps, not gates) are groups of their own.
+
+The death rain is short: `rain::deadly_rain_ticks` (400, ten seconds) from
+the moment it hits, then the region (group) rolls its next cycle and goes
+on; no restart, sleep screen or karma. Its phases are vanilla's
+(`NextDeathRainMode`: 70% AlternateBuildUp then GradeAPlateu, 30%
+CalmBeforeStorm, GradeABuildUp, GradeAPlateu; then GradeBBuildUp,
+GradeBPlateu, FinalBuildUp, Mayhem), each with its vanilla length rolled when
+the rain hits and the whole sequence squeezed into the window in proportion:
+the phases before Mayhem share 300 ticks (CalmBeforeStorm, which isn't
+deadly, at most 60 of them), Mayhem has the last 100. Their intensity, rumble
+and screen shake curves are vanilla's over the compressed progression; the
+flood rises with the same time scale (vanilla's speed and acceleration times
+the compression, so it reaches vanilla's height), and drains away over 400
+ticks after the rain. F7 brings the rain of the player's region (group) in
+30 seconds, `--rain-in N` every region's.
+
+RoomRain runs in every room's update: the room's intensity follows its
+region's (Rain, FloodAndRain and the Aerie's blizzard; capped by the room's
+RainIntensity), `ThrowAroundObjects` pushes, stuns and builds up
+`rainDeath` on every body chunk (players, creatures, items) with vanilla's
+OutsidePushAround under the open sky (`rainReach`: above the topmost solid
+tile of the column) and InsidePushAround under cover (Rain rooms only), and
+a creature or slugcat past a full `rainDeath` dies (it limits the
+slugcat's breath too). Shelters have no RoomRain. Flood and FloodAndRain
+rooms flood (`flood_level`: the water level `room_view` reports, the water
+surface follows; rooms without water get some from below). The viewed rooms
+keep up RoomRain's loops.
+
+**Dens** (`src/dens.*`): a creature lives in a den (`home_room`, `home_den`:
+AbstractCreature.spawnDen). Every AI compares `RainTracker.Utility`
+(`dens::rain_utility`) with its other modules at vanilla's weight; when it
+wins (EscapeRain), and for ReturnPrey and Injured where the kind has them,
+`dens::home_tile` gives the pipe entrance to head for: the den's in the home
+room, else the room exit on the route there (a breadth first search over the
+rooms' exits, `dens::build_route`, built once per home room; gates and
+shelters are out of bounds), the AI paths to the open tile in front of it
+with its own distance fields, and a creature close to it squeezes in
+(Creature.enteringShortCut: its chunks pulled into the hole, its update
+skipped). In the pipe it is a vessel (`away` 1) moving like the slugcat's,
+its body in no room: a room exit takes it into the connected room's matching
+pipe; a den keeps it (`away` 2, `AbstractRoom.entitiesInDens`: not
+simulated) if it wants to stay (`OpportunityToEnterDen`: the rain is near,
+it is hurt, or it carries prey, which dies), else it turns back.
+`InDenUpdate` counts `remain_in_den` down and lets it out through its den's
+pipe (`SpitOutOfShortCut`: the body at the entrance, the kind's room bound
+state starting over, the daddy's tentacles placed anew). When a region's
+next cycle starts, the creatures waiting in its dens get 100 to 1000 ticks
+to come out, like a new cycle's spawns. Night creatures stay in (night never
+comes), {Ignorecycle} ones don't mind the rain, {PreCycle} ones never come
+out (no precycles). A slugcat carried into a pipe is eaten.
+
+**The world's creatures** (`src/spawns.*`): every region's world file's
+CREATURES (and the CREATURES lines of every root's
+`modify/world/<region>/world_<region>.txt` [MERGE] blocks, how the Watcher
+adds to the vanilla regions) are read like `WorldLoader`: den spawns with
+their counts and spawn data, lineages (a fresh save's first step, NONE
+spawning nothing), `(White,Yellow)` and `(X-...)` campaign filters for
+`story_slugcat`, OFFSCREEN (nothing ported lives there). At world load every
+spawn of a ported kind is made in its den with an EntityID-like number as its
+seed (`{Seed:N}` instead when given) and out in 100 to 1000 ticks. The type
+names map to the ported kinds (the lizard breeds, the centipede and leech
+variants, CicadaA/B, the four long legs); the rest are counted and
+skipped. Survivor's vanilla world: 652 creatures (228 leeches, 125 sea
+leeches, 46 baby centipedes...), 762 of kinds not ported (spiders,
+scavengers, snails, lantern mice...); the Watcher as the Watcher: 1577, and
+1615 skipped; 9 spawns name rooms or dens the loaded world lacks (the
+Watcher's `modify` ROOMS merges aren't read).
 
 ### Adding a creature kind
 
@@ -208,8 +311,12 @@ on 6 cores; the serial phases take ~0.25 ms a tick.
    hooks) uses the shared properties and `creature::stun_countdown`,
    `consious`, `body`, `chunk`, `player_of` where vanilla's Creature does.
 4. A case in the switches of `src/creature.cpp` (create, destroy, describe,
-   update, collides/collide_player/collide_kin, came_into_view, violence,
-   release_player) and in render.cpp's `build_creatures`.
+   update, collides/collide_player/collide_kin, reset_graphics, violence,
+   release_player, placed_in_room for what keeps tiles of a room) and in
+   render.cpp's `build_creatures`.
+5. Its AI weighs `dens::rain_utility` and heads for `dens::home_tile` when it
+   escapes the rain (dens.hpp does the rest), and its world file name goes in
+   `spawns::kind_of`.
 
 Weapon hits, explosions, flare bombs, warps, pipes, the rot's prey, the
 slugcat letting go, the fuzz and the bench then take it as they come.
@@ -237,6 +344,9 @@ slugcat letting go, the fuzz and the bench then take it as they come.
 | `src/gates.*` | `RegionGate` airlock state machine and door tiles |
 | `src/audio.*`, `src/sound_types.hpp` | SDL3 audio: sound effects from `sounds.txt`, loops kept up by the simulation's per tick requests, the rooms' ambient sounds, music triggers and songs; the simulation only queues requests on the game state |
 | `src/unity_bundle.*`, `src/fsb5.*` | reading the game's audio out of its Unity asset bundles (UnityFS, LZ4) and FMOD FSB5 banks (PCM16, Vorbis rebuilt as Ogg) |
+| `src/rain.*`, `src/rain_types.hpp` | `RainCycle`, `GlobalRain` and its `DeathRain`, `RoomRain`: a cycle per region, gate linked regions on their leader's, the short death rain, pushing and killing outside of shelter, the flood, the rain loops |
+| `src/dens.*` | dens and creatures in pipes: going home (`DenFinder`, room to room routes over the exits), squeezing into a pipe, the vessel, `entitiesInDens` and `InDenUpdate`, coming out |
+| `src/spawns.*` | the world files' CREATURES (den spawns, lineages, campaign filters, spawn data, the Watcher's modify merges) made in their dens at world load |
 | `src/simulation.*` | one tick of the whole world: every room in parallel (TBB), the deferred transactions, vessels and warps; startup population of every room |
 | `src/rooms.hpp` | the objects of a room: per tick buckets of players, creatures (by room and kind), items and spit by room, for the parallel room updates |
 | `src/creature.*`, `src/creature_types.hpp` | the `creature` object's type tag and payloads, `creature_part`'s; what every kind shares (body, chunks, Creature.Update's stun countdown, consciousness, collisions with the slugcats and kin, the projectile trace, explosions and flashes, letting go) and the dispatch to the kinds |
@@ -380,8 +490,8 @@ a territory column and has a longer body; the jungle leech lives on dry
 land, wanders between floor spots, latches on to a slugcat it bumps into and
 drains its food, then its strength. Rocks stun and spears kill them
 (instantDeathDamageLimit 1). Not ported: snails' clicks scaring them
-(`HeardSnailClick`), fleeing the rain (no rain cycle), going through pipes,
-prey other than slugcats, Remix's grasp wiggling (shaking one off), Safari
+(`HeardSnailClick`), going through pipes other than into a den of its room
+when it flees the rain (`fleeFromRain`), prey other than slugcats, Remix's grasp wiggling (shaking one off), Safari
 control. Leeches and centipedes are the rot's prey.
 
 The dropwig (`--dropbug x,y`, V) follows `DropBug`/`DropBugAI`: three
@@ -395,9 +505,10 @@ it twitch, one holding a spear close by or a spear thrown at it makes it
 let go early), biting or grabbing on landing, then it hunts for a while,
 charging up and pouncing from the ground, before looking for another
 spot. A grabbed slugcat is worried and slashed loose, a dead one carried off
-(to a room exit: there are no dens). Rocks, spears and explosions hurt it
-like `DropBug.Violence`. Not ported: items it carries as bait, threats
-(nothing here scares it), rain, dens and leaving rooms, being grabbed,
+to its den. Rocks, spears and explosions hurt it like `DropBug.Violence`; it
+goes home before the rain. Not ported: items it carries as bait, threats
+(nothing here scares it), migrating to other rooms (LeaveRoom heads for a
+room exit and stops there), being grabbed,
 the AImap visibility terms, mud, Safari control.
 
 The squidcada (`--cicada x,y[,b]`, Q, Shift+Q for the dark one) follows
@@ -420,8 +531,9 @@ lets go of it, throw tosses it, and it panics away when let go. It goes
 through pipes with the slugcat. Rocks, spears and explosions hurt it
 through `Creature.Violence`. Not ported: the looping wing sounds (no
 looping sound emitters here, only the one shot sounds), the `CicadaWing`
-shader (the wings are their sprites tinted and faded), dens, swarm rooms
-and rain, flies and leeches to hunt and carry, the social memory beyond
+shader (the wings are their sprites tinted and faded), going home to its
+den other than before the rain (CicadaA's idle trips), swarm rooms, flies
+and leeches to hunt and carry, the social memory beyond
 this cycle, `CreatureLooker`'s interest scores (it looks at the slugcat
 it is busy with or sees), screen shake, mud, Safari control.
 
@@ -441,8 +553,8 @@ its prey, injury, noise and lurk utilities: it spots the slugcat with the
 breed's vision cone (the Black lizard is blind and hears instead), hunts
 it, lunges, shoots its tongue (Blue, White, Salamander, Cyan, Zoop,
 Indigo, Peach) and bites; a bite kills at the breed's chance, otherwise
-the slugcat is grabbed, shaken and carried to the den (a room exit, where
-it is eaten), and a slugcat held in a lizard's jaws for 60 ticks is done
+the slugcat is grabbed, shaken and carried to its den (where it is
+eaten), it heads home before the rain and when hurt, and a slugcat held in a lizard's jaws for 60 ticks is done
 for (`Player.dangerGrasp`). Idle lizards wander between idle spots by the
 breed's taste, lurkers (White, Salamander, Eel, Peach) wait for prey, Red
 and Caramel spit (`LizardSpit`) at prey out of reach, Cyan finds and makes
@@ -458,7 +570,8 @@ Watcher's heads come from its mod atlas in the install), the tongue, the
 head's colour flashing with the blink, the lunge and the voice. Not
 ported: the `LizardCosmetics` (pass 2, see `lizard_graphics.cpp`), lizards
 fighting and signalling each other (aggression, submission), friendship
-and taming, rain, dens and shortcuts, the threats a lizard would flee,
+and taming, migrating and following prey to other rooms, the threats a
+lizard would flee,
 reach-over-gap paths, the voices' articulation (a sample plays once, and
 only Pink, Green and Blue have voices without Remix), the Blizzard's beam,
 the Basilisk's poison field, the Indigo's mud, burrowing in the Watcher's
@@ -486,8 +599,9 @@ tentacles feel. Spears and rocks hit the body or a tentacle (stunning and
 hurting that tentacle), explosions hurt it a lot more. `DaddyGraphics`
 draws the leg graphics, dead legs and danglers with their bumps and little
 eyes, the eye bulbs with their slits and the Hunter's slugcat dummy with
-the game's elements. Not ported: shortcuts (squeezing and the
-BigCreatureShortCutSqueeze), rain and dens, other creatures as prey or
+the game's elements. It goes home before the rain like the others. Not
+ported: the BigCreatureShortCutSqueeze (it squeezes into a pipe like any
+creature), other creatures as prey or
 being touched (slugcats only), daddies eating each other, the timeline
 rule that makes a Brother a Daddy before Artificer's time, `stuckPos`,
 Safari control, `DaddyBubble`s and `DaddyRipple`, the digestion sound loop
@@ -563,7 +677,8 @@ opacity of their corners blended across them and broken up by the decal's
 noise. Their per corner smudge isn't used yet.
 
 Particles are cosmetic and kept outside the data container: rain streaks
-(rooms' RainIntensity, or everywhere during an F6 storm) that burst on
+(as thick as the room's RoomRain intensity, denser and faster in the death
+rain, slanted by its direction, or everywhere during an F6 storm) that burst on
 terrain and ripple water, drops forming under ceilings (CeilingDrips),
 splash droplets, sparks and flashes where weapons hit walls and creatures
 and where centipedes shock, dust where the slugcat lands hard or pushes off,
@@ -685,11 +800,12 @@ spear through the air loops are commented out in sounds.txt), the water
 surface (a rect along the default water level), gates' background
 machinery (Gate_Water/Electric_Working_Background_LOOP from the mode, electric
 gates from `gates/egates.txt`), and warp points' idle, suck in and ripple
-hint loops. Left for later, with what they need: the other RegionGateGraphics
+hint loops, and RoomRain's (rain.cpp, disembodied, with vanilla's volume
+formulas: the normal and heavy rain, the death rain or its rumble heard from
+underground in Flood rooms, the rumble, the approaching rain, the flash
+flood, the screen shake). Left for later, with what they need: the other RegionGateGraphics
 loops (steam, waterfall, clamps, screws: the gate graphics), waterfalls
-(`WaterFall` objects), the rain cycle's rain/rumble/flood loops (a hook in
-`particles::ambient`: RoomRain's sounds follow the cycle's intensity), the
-Watcher's dynamic warp and ripplesickness loops, Mushroom_Trip_LOOP
+(`WaterFall` objects), the Watcher's dynamic warp and ripplesickness loops, Mushroom_Trip_LOOP
 (mushrooms), shelter machinery (shelter doors). The dropwig, the rot and
 shortcut travel have no loops in vanilla.
 
@@ -723,7 +839,9 @@ as a soft circle gliding along the pipe and lighting nearby pipe tiles instead
 of vanilla's tile by tile blink. In-room pipes spit the slugcat out at the
 other end; room exits follow `world_<region>.txt` connections (merged across
 region files, gates included) to the destination's matching exit. Every one
-of the 1414 connected room exits is exercised by `--fuzz`.
+of the 1414 connected room exits is exercised by `--fuzz`. Creatures travel
+pipes the same way on their way home (dens.hpp, see Rain, dens and the
+world's creatures), shown only while they squeeze in and come out.
 
 Rocks and spears spawn like `Room.Loaded` does on a room's first visit, for every room at startup: placed
 rocks at 75% and spears at 60%, then `RandomItemDensity` random items on

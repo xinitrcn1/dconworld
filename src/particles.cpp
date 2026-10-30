@@ -4,6 +4,7 @@
 #include "particles.hpp"
 #include "water.hpp"
 #include "terrain.hpp"
+#include "rain.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "rooms.hpp"
@@ -187,23 +188,25 @@ namespace particles {
         if (!state.viewed(room.id))
             return;
         auto& r = random(state, room.id);
-        // RoomRain: streaks from the top of the room
-        // (a storm over sand is a sandstorm, terrain.cpp blows that)
-        float const rain = terrain::sand_if_built(state, room.id) ? 0.f : mathf::max(w.room_get_rain_intensity(room.id) * 0.6f, state.storm ? 1.f : 0.f);
-        // (RoomRain's sounds follow the rain cycle's intensity, which isn't
-        // ported: once it is, its DisembodiedDynamicSoundLoops go here as
-        // disembodied loop requests, owner loop_owner::rain: normal_rain_loop
-        // at 0.1 + 0.9 * clamp01(sin(InverseLerp(0.001, 0.7, i) * pi))^1.5,
-        // heavy_rain_loop at InverseLerp(0.12, 0.5, i)^0.85, then the death
-        // rain, rumble, flood and approaching loops)
+        // RoomRain: streaks from the top of the room, as thick as the room's
+        // rain (RoomRain.intensity through the DeathRain shader's
+        // InverseLerp(0, 0.5)), denser and faster as the deadly rain gets
+        // under the ceilings, slanted by the rain's direction (a storm over
+        // sand is a sandstorm, terrain.cpp blows that)
+        float const now = w.room_get_rain_now(room.id);
+        float const under = mathf::inverse_lerp(0.5f, 1.f, now);
+        float const rain = terrain::sand_if_built(state, room.id) ? 0.f : mathf::max(mathf::inverse_lerp(0.f, 0.5f, now), state.storm ? 1.f : 0.f);
         if (rain > 0.f) {
-            float const want = rain * room.pixel_width() / 260.f;
+            auto const* cycle = rain::of_room(state, room.id);
+            float const slant = cycle ? cycle->rain_direction * 4.f : -1.f;
+            float const want = rain * (1.f + 3.f * under) * room.pixel_width() / 260.f;
             int n = int(want);
             if (r.value() < want - float(n))
                 ++n;
             for (int i = 0; i < n; ++i) {
                 vec2 const at{range(r, -40.f, room.pixel_width() + 40.f), room.pixel_height() + 20.f};
-                spawn(state, room.id, kind::rain, at, vec2{range(r, -1.5f, -0.5f), range(r, -26.f, -20.f)}, range(r, 0.8f, 1.2f), 3.f, water_color, 0.35f + 0.3f * rain);
+                vec2 const vel{slant + range(r, -0.5f, 0.5f), range(r, -26.f, -20.f) * (1.f + 0.5f * under)};
+                spawn(state, room.id, kind::rain, at, vel, range(r, 0.8f, 1.2f), 3.f, water_color, 0.35f + 0.3f * rain + 0.2f * under);
             }
         }
         // WaterDrip: drops forming under ceilings

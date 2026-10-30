@@ -7,6 +7,10 @@
 
 #include "simulation.hpp"
 #include "creature.hpp"
+#include "dens.hpp"
+#include "rain.hpp"
+#include "spawns.hpp"
+#include "reports.hpp"
 #include "gates.hpp"
 #include "items.hpp"
 #include "outposts.hpp"
@@ -63,6 +67,11 @@ namespace rooms {
         });
         fill(x.items, n, [&](auto&& f) { w.for_each_item(f); }, of);
         fill(x.spits, n, [&](auto&& f) { w.for_each_lizard_spit(f); }, of);
+        // the creatures in a room's pipes and dens (their bodies in no room)
+        fill(x.away, n, [&](auto&& f) { w.for_each_creature(f); }, [&](dcon::creature_id c) {
+            auto const r = w.creature_get_away(c) != 0 ? w.creature_get_away_room(c) : dcon::room_id{};
+            return r && size_t(r.index()) < n ? size_t(r.index()) : n;
+        });
     }
 }
 
@@ -105,6 +114,24 @@ namespace simulation {
         }
         // ...the sand height maps only touch their own room
         tbb::parallel_for(size_t(0), fresh.size(), [&](size_t i) { terrain::sand(state, fresh[i]); });
+        // the rain cycles (once for the world; rooms added later follow
+        // their region's), then the world files' creatures in their dens
+        // (logged for the game's world, not the tests' rooms)
+        bool const game_world = !state.fs.roots.empty();
+        if (!state.rain_ready) {
+            rain::setup(state);
+            state.rain_ready = true;
+            if (game_world)
+                reports::add_log(rain::describe_groups(state));
+        } else {
+            rain::add_rooms(state, fresh);
+        }
+        if (state.spawn_dens && !state.dens_populated) {
+            state.dens_populated = true;
+            auto const r = spawns::spawn_world(state);
+            if (game_world)
+                reports::add_log(spawns::to_string(r));
+        }
     }
 
     namespace {
@@ -190,12 +217,15 @@ namespace simulation {
                 items::carry_update(state, p);
                 items::back_spear_update(state, p);
             }
+            // the vessels in the room's pipes and the creatures in its dens
+            dens::update_room(state, view);
             creature::update_room(state, view);
             outposts::update_room(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
             water::update_room(state, view);
             terrain::update_room(state, view);
+            rain::update_room(state, view);
             particles::ambient(state, view);
             gates::update_room(state, room);
         }
@@ -214,6 +244,8 @@ namespace simulation {
         populate(state);
         // the loops are kept up tick by tick: this tick's start empty
         state.loops.clear();
+        // every region's rain cycle
+        rain::update_world(state);
 
         // the players out in a room update with it; the ones in a pipe travel
         // it first, serially (coming out moves them to another room)

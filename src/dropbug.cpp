@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "dropbug.hpp"
+#include "dens.hpp"
 #include "rooms.hpp"
 #include "dropbug_graphics.hpp"
 #include "items.hpp"
@@ -208,9 +209,8 @@ namespace dropbug {
             return num;
         }
 
-        // the first room exit's entrance: where the behaviours that would
-        // head for the den or another room go (no dens, migrations or
-        // creatures in shortcuts yet)
+        // the first room exit's entrance: where LeaveRoom heads (there is no
+        // migration between rooms yet)
         std::optional<ivec2> exit_tile(sys::game_state const& state, room_view const& room) {
             std::optional<ivec2> e;
             state.world.room_for_each_shortcut_location(room.id, [&](dcon::shortcut_location_id l) {
@@ -648,8 +648,8 @@ namespace dropbug {
             tracker_update(state, d, room);
             stuck_update(state, d);
             // UtilityComparer: threat (1, nothing threatens it here), prey (1,
-            // tick 0.01), rain (no rain cycle), stuck (1), injury (1, tick
-            // 1/150), ceiling (lerp 0.2 up, tick 0.005 down)
+            // tick 0.01), rain (1), stuck (1), injury (1, tick 1/150),
+            // ceiling (lerp 0.2 up, tick 0.005 down)
             auto& u = w.dropbug_data_get_utilities(creature::dropbug_data(w, d));
             auto const tween_tick = [](float a, float b, float speed) { return a < b ? mathf::min(a + speed, b) : mathf::max(a - speed, b); };
             u.prey = tween_tick(u.prey, prey_utility(state, d) * u.prey_weight, 0.01f);
@@ -666,6 +666,7 @@ namespace dropbug {
                 }
             };
             consider(u.prey, behavior::hunt);
+            consider(dens::rain_utility(state, d, room.id), behavior::escape_rain);
             consider(stuck, behavior::get_unstuck);
             consider(u.injury, behavior::injured);
             consider(u.ceiling, behavior::sit_in_ceiling);
@@ -709,11 +710,15 @@ namespace dropbug {
                     dest = room_view::get_tile_position(pos(state, d, 0) + custom::rnv(rng) * 100.f);
                 break;
             case behavior::leave_room:
+                // another room: a room exit (no migration between rooms)
+                if (auto const e = exit_tile(state, room))
+                    dest = *e;
+                break;
             case behavior::escape_rain:
             case behavior::return_prey:
             case behavior::injured:
-                // the den, or another room: a room exit stands in for both
-                if (auto const e = exit_tile(state, room))
+                // DenFinder: the den (dens.hpp)
+                if (auto const e = dens::home_tile(state, d, room))
                     dest = *e;
                 break;
             case behavior::idle: {

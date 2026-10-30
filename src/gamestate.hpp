@@ -58,6 +58,9 @@ namespace sys {
         room_buckets<dcon::creature_id> creatures;
         room_buckets<dcon::item_id> items;
         room_buckets<dcon::lizard_spit_id> spits;
+        // the creatures in a room's pipes and dens (dens.hpp), by that room:
+        // their bodies are in no room while away
+        room_buckets<dcon::creature_id> away;
     };
 
     struct game_state;
@@ -156,6 +159,8 @@ namespace sys {
         uint16_t access_version = 0;
         std::vector<rw::ivec2> ceiling_tiles;
         std::optional<uint16_t> ceiling_version;
+        // rain.cpp's RoomRain.rainReach: the highest solid tile per column
+        std::vector<int16_t> rain_reach;
         std::optional<water_surface> water;
         // built on first use (an empty height map: no sand in the room)
         std::optional<sand_field> sand;
@@ -228,6 +233,20 @@ namespace sys {
         bool parallel = false;
         // rooms a camera looks at besides the players' (the app's view)
         std::vector<dcon::room_id> camera_rooms;
+        // dens.hpp's routes from room to room through the room exits: for a
+        // room the creatures head home to (its index), per room the exit
+        // node to leave by on the way there (-1 none). Built serially when
+        // a creature gets that home, read while the rooms update
+        std::unordered_map<uint32_t, std::vector<int16_t>> routes;
+        // whether the rooms get their world file creature spawns when they
+        // are populated (simulation::populate, spawns.hpp)
+        bool spawn_dens = true;
+        bool dens_populated = false;
+        // the rain cycles were set up (rain.hpp)
+        bool rain_ready = false;
+        // AbstractCreature.ID.RandomSeed of the creature being made, for the
+        // kinds that roll from it (-1: they roll their own)
+        int32_t spawn_seed = -1;
 
         // story progress the warps and the HUD care about (SaveState's
         // deathPersistentSaveData): karma 0..9 under its cap, and the

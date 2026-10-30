@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "cicada.hpp"
+#include "dens.hpp"
 #include "rooms.hpp"
 #include "cicada_graphics.hpp"
 #include "items.hpp"
@@ -539,8 +540,8 @@ namespace cicada {
             }
             w.cicada_data_set_panic_flee_player(creature::cicada_data(w, c), 0);
 
-            // UtilityComparer: threat (weight 1), prey (0.5), rain (no rain
-            // cycle), stuck (1), none smoothed
+            // UtilityComparer: threat (weight 1), prey (0.5), rain (1), stuck
+            // (1), none smoothed
             auto const prey = tracked(state, c);
             relationship rel;
             if (prey && player_here(state, prey, room.id))
@@ -553,6 +554,10 @@ namespace cicada {
             if (hunt > utility) {
                 utility = hunt;
                 b = behavior::antagonize;
+            }
+            if (float const rain = dens::rain_utility(state, c, room.id); rain > utility) {
+                utility = rain;
+                b = behavior::escape_rain;
             }
             if (stuck > utility) {
                 utility = stuck;
@@ -693,6 +698,11 @@ namespace cicada {
             }
             case behavior::get_unstuck:
                 dest = w.cicada_data_get_stuck(creature::cicada_data(w, c)).unstuck_goal;
+                break;
+            case behavior::escape_rain:
+                // the den (DenFinder, dens.hpp)
+                if (auto const t = dens::home_tile(state, c, room))
+                    dest = *t;
                 break;
             default:
                 break;

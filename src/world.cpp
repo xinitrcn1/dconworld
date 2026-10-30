@@ -99,6 +99,11 @@ namespace world {
         v.water = v.default_water_level != -1;
         if (v.water)
             v.float_water_level = room_view::middle_of_tile(0, v.default_water_level).y;
+        // the rain's flood (rain.cpp) over the room's own water level
+        if (float const flood = dc.room_get_flood_level(rid); flood > v.float_water_level) {
+            v.water = true;
+            v.float_water_level = flood;
+        }
         v.gravity = dc.room_get_gravity(rid);
         return v;
     }
@@ -617,6 +622,10 @@ namespace world {
                 : sv == "Flood" ? danger_type::flood
                 : sv == "FloodAndRain" ? danger_type::flood_and_rain
                 : sv == "None" ? danger_type::none
+                : sv == "AerieBlizzard" ? danger_type::aerie_blizzard
+                : sv == "Blizzard" ? danger_type::blizzard
+                : sv == "Sandstorm" ? danger_type::sandstorm
+                : sv == "Thunder" ? danger_type::thunder
                 : danger_type::unknown;
         }
 

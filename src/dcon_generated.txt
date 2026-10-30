@@ -64,6 +64,7 @@ include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
 include{"item_types.hpp"}
+include{"rain_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -104,6 +105,13 @@ object{
 	property{ name{albinos} type{bitfield} }
 	// pseudo regions group the gate and shared shelter rooms
 	property{ name{is_pseudo} type{bitfield} }
+	// The rain cycle (rain.hpp): every region has its own, regions linked
+	// through gates run their leader's (the first of them in region order,
+	// itself for a leader) and regions where it never rains (SS...) have
+	// none of the deadly rain and link nothing
+	property{ name{rain} type{rain::cycle} }
+	property{ name{rain_leader} type{region_id} }
+	property{ name{never_rains} type{bitfield} }
 }
 
 object{
@@ -167,6 +175,14 @@ object{
 	// the world seed and its index, so rooms can tick in parallel and still
 	// roll the same numbers
 	property{ name{random} type{rw::rng} }
+	// whose rain cycle the room follows (its region's; a gate or a shared
+	// shelter takes a region it connects to)
+	property{ name{rain_region} type{region_id} }
+	// RoomRain.intensity
+	property{ name{rain_now} type{float} }
+	// the water level (pixels) while the rain's flood rises over the
+	// room's own, lowest() otherwise
+	property{ name{flood_level} type{float} }
 }
 
 relationship{
@@ -680,6 +696,8 @@ object{
 	property{ name{vessel_reverse} type{uint8_t} }
 	property{ name{vessel_progress} type{float} }
 	property{ name{vessel_last_progress} type{float} }
+	// Creature.rainDeath
+	property{ name{rain_death} type{float} }
 
 	// grabbing (Player.GrabUpdate)
 	property{ name{want_to_pick_up} type{int32_t} }
@@ -970,6 +988,31 @@ object{
 	// camera looks)
 	property{ name{graphics_random} type{rw::rng} }
 	property{ name{payload} type{::creature::payload} }
+	// Dens and shortcut travel (dens.hpp). The den it lives in
+	// (AbstractCreature.spawnDen: a room and its exitAndDenIndex node, 0xFF
+	// none); whether it is out in a room (0), in a pipe (1) or in a den (2),
+	// and the room whose pipe or den holds it (its body is in no room then);
+	// the entrance it is squeezing into (Creature.enteringShortCut, x < 0
+	// none), the vessel, AbstractCreature.remainInDenCounter
+	property{ name{home_room} type{room_id} }
+	property{ name{home_den} type{uint8_t} }
+	property{ name{away} type{uint8_t} }
+	property{ name{away_room} type{room_id} }
+	property{ name{entering_shortcut} type{rw::ivec2} }
+	property{ name{shortcut_rad_add} type{float} }
+	property{ name{shortcut_delay} type{int16_t} }
+	property{ name{vessel_shortcut} type{shortcut_id} }
+	property{ name{vessel_reverse} type{uint8_t} }
+	property{ name{vessel_progress} type{float} }
+	property{ name{remain_in_den} type{int32_t} }
+	// the AI wants to go home this tick (EscapeRain, ReturnPrey...): the
+	// pipe entrance it heads for, its den's or a room exit's on the way
+	property{ name{going_home} type{uint8_t} }
+	property{ name{travel_tile} type{rw::ivec2} }
+	// Creature.rainDeath
+	property{ name{rain_death} type{float} }
+	// the spawn data's flags (dens.hpp's spawn_flag)
+	property{ name{spawn_flags} type{uint8_t} }
 }
 relationship{
 	name{creature_body}

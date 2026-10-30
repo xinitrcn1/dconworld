@@ -159,6 +159,13 @@ namespace sound {
         warp_point_ripple_suck_in_objects_loop,
         normal_rain_loop,
         heavy_rain_loop,
+        death_rain_loop,
+        death_rain_heard_from_underground_loop,
+        death_rain_rumble_loop,
+        flash_flood_loop,
+        death_rain_approaching_loop,
+        death_rain_approaching_heard_from_underground_loop,
+        screen_shake_loop,
         count
     };
     char const* to_string(sound_id id) noexcept;

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "math.hpp"
 #include "gamestate.hpp"
@@ -20,10 +21,12 @@ namespace selftest {
     // slugcats in every room (a batch of rooms at a time, the whole world
     // ticking), then every room exit pipe
     int fuzz(sys::game_state& gs, uint32_t ticks_per_room);
-    // `ticks` ticks of the whole world with a creature of each kind in every
-    // room, once on one thread and once on every thread: ms per tick, and
-    // whether both end in the same world (`load` makes a fresh one)
-    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks);
+    // `ticks` ticks of the whole world, once on one thread and once on every
+    // thread: ms per tick, and whether both end in the same world (`load`
+    // makes a fresh one). `mode`: "none" (no creatures), "each" (a creature
+    // of each kind in every room), "dens" (the world files' population in
+    // their dens, coming out), empty for all three
+    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks, std::string const& mode = {});
     // the creatures spawn_creatures put in a room (invalid: no spot found)
     struct world_creatures {
         dcon::creature_id centipede;

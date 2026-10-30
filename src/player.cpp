@@ -253,6 +253,7 @@ namespace player {
     X(vessel_reverse) \
     X(vessel_progress) \
     X(vessel_last_progress) \
+    X(rain_death) \
     X(want_to_pick_up) \
     X(want_to_throw) \
     X(dont_grab_stuff) \

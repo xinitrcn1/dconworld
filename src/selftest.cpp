@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <span>
 #include <cstdio>
@@ -31,6 +32,9 @@
 #include "water.hpp"
 #include "terrain.hpp"
 #include "simulation.hpp"
+#include "dens.hpp"
+#include "rain.hpp"
+#include "spawns.hpp"
 #include "world.hpp"
 
 namespace selftest {
@@ -68,7 +72,9 @@ namespace selftest {
 
         // Builds a level file from ASCII art (top row first) and loads it
         // through the real parser. '#' solid, '/' slope, '=' floor, '|' vertical
-        // beam, '-' horizontal beam, '+' both beams, ' ' air.
+        // beam, '-' horizontal beam, '+' both beams, ' ' air; pipes: 'S' an
+        // entrance, '.' a pipe through the rock, 'D' a den at its end, 'E' a
+        // room exit at its end.
         dcon::room_id make_room(sys::game_state& gs, dcon::region_id region, std::vector<std::string> const& rows, int32_t water_level = -1) {
             int32_t const h = int32_t(rows.size());
             int32_t const wd = int32_t(rows[0].size());
@@ -83,6 +89,10 @@ namespace selftest {
                     case '|': txt += "0,1"; break;
                     case '-': txt += "0,2"; break;
                     case '+': txt += "0,1,2"; break;
+                    case 'S': txt += "4,3"; break;
+                    case '.': txt += "1,3"; break;
+                    case 'D': txt += "1,5"; break;
+                    case 'E': txt += "1,4"; break;
                     default: txt += "0"; break;
                     }
                     txt += "|";
@@ -203,6 +213,45 @@ namespace selftest {
         vec2 feet_at(int32_t tx, int32_t ty) {
             return vec2{10.f + float(tx) * 20.f, float(ty) * 20.f + 8.f};
         }
+
+        // a 40x20 room on a two tile thick floor with pipes into the floor:
+        // `den_x` a den's entrance (0 none), `exit_x` a room exit's (0 none);
+        // each pipe goes down one tile and ends beside it, away from the
+        // room's middle
+        std::vector<std::string> pipe_room(int32_t den_x, int32_t exit_x, std::function<char(int32_t, int32_t)> const& extra = nullptr) {
+            return box(40, 20, [=](int32_t x, int32_t y) {
+                for (auto const& [px, end] : {std::pair{den_x, 'D'}, std::pair{exit_x, 'E'}}) {
+                    if (px == 0)
+                        continue;
+                    int32_t const side = px < 20 ? -1 : 1;
+                    if (x == px && y == 2)
+                        return 'S';
+                    if (x == px && y == 1)
+                        return '.';
+                    if (x == px + side && y == 1)
+                        return end;
+                    if ((x == px + side && y == 2) || (x == px && y == 3))
+                        return '#';
+                }
+                if (y == 1)
+                    return '#';
+                return extra ? extra(x, y) : ' ';
+            });
+        }
+        // the room's exitAndDenIndex entries, in order
+        std::vector<dcon::room_exit_id> exits_of(sys::game_state& gs, dcon::room_id room) {
+            std::vector<dcon::room_exit_id> v;
+            gs.world.room_for_each_exit_location(room, [&](dcon::exit_location_id el) { v.push_back(gs.world.exit_location_get_exit(el)); });
+            std::sort(v.begin(), v.end(), [&](auto a, auto b) { return gs.world.room_exit_get_index(a) < gs.world.room_exit_get_index(b); });
+            return v;
+        }
+        void tick_world(sys::game_state& gs, uint32_t n) {
+            for (uint32_t i = 0; i < n; ++i) {
+                simulation::tick(gs, {}, {});
+                gs.sounds.clear();
+                gs.music.clear();
+            }
+        }
     }
 
     namespace {
@@ -228,7 +277,20 @@ namespace selftest {
                     items::create(gs, rid, world::room_view::middle_of_tile(5 + i * 6, 3),
                         i % 3 == 0 ? world::item_type::spear : i % 3 == 1 ? world::item_type::rock : world::item_type::bomb);
             }
-            std::vector<dcon::player_id> ps{player::create(gs, rooms[0], feet_at(10, 1)), player::create(gs, rooms[2], feet_at(5, 1), player::slugcat_name::red)};
+            // a den with a lizard and a centipede coming out of it, the rain
+            // half way through: they go back in, the slugcat out in the
+            // open is thrown around
+            rooms.push_back(make_room(gs, region, pipe_room(30, 0)));
+            simulation::populate(gs);
+            for (auto const k : {creature::spawn_desc{creature::type::lizard, -1.f, false, uint8_t(lizard::breed::green)},
+                     creature::spawn_desc{creature::type::centipede, 0.5f}}) {
+                auto const c = creature::create(gs, rooms.back(), world::room_view::middle_of_tile(30, 2), k);
+                dens::set_home(gs, c, rooms.back(), 0);
+                dens::put_in_den(gs, c, 20);
+            }
+            rain::rain_in(gs, region, 150);
+            std::vector<dcon::player_id> ps{player::create(gs, rooms[0], feet_at(10, 1)), player::create(gs, rooms[2], feet_at(5, 1), player::slugcat_name::red),
+                player::create(gs, rooms.back(), feet_at(10, 2))};
             rw::rng rng{0xDE7E2u};
             std::vector<player::input_package> in(ps.size());
             for (uint32_t t = 0; t < 300; ++t) {
@@ -248,6 +310,11 @@ namespace selftest {
         auto& gs = *gs_ptr;
         auto const region = gs.world.create_region();
         gs.world.region_set_name(region, gs.add_text("test"));
+        // the movement and creature tests run without the rain (its own
+        // tests below have their own worlds)
+        gs.rain_ready = true;
+        gs.world.region_set_never_rains(region, true);
+        rain::new_cycle(gs, region);
         results r;
 
         auto const flat = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
@@ -1581,6 +1648,233 @@ namespace selftest {
             r.check("loops only where viewed", hums && !far_heard && ticked && viewed && unviewed && destroyed, s.describe() + d);
         }
         {
+            // RainCycle timing and the gate groups: A and B linked by a gate
+            // share A's timer, C (linked to the never raining D only) has its
+            // own, D (every room DangerType None, like Five Pebbles) never rains
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            dcon::region_id rg[4];
+            char const* const names[] = {"ta", "tb", "tc", "ss"};
+            dcon::room_id rr[4];
+            for (int i = 0; i < 4; ++i) {
+                rg[i] = w.create_region();
+                w.region_set_name(rg[i], st.add_text(names[i]));
+                rr[i] = make_room(st, rg[i], box(20, 10, [](int32_t, int32_t) { return ' '; }));
+            }
+            w.room_set_danger_type(rr[3], world::danger_type::none);
+            st.spawn_dens = false;
+            simulation::populate(st);
+            rain::group(st, {{rg[0], rg[1]}, {rg[2], rg[3]}});
+            bool const leaders = w.region_get_rain_leader(rg[1]) == rg[0] && w.region_get_rain_leader(rg[0]) == rg[0]
+                && w.region_get_rain_leader(rg[2]) == rg[2] && w.region_get_rain_leader(rg[3]) == rg[3] && w.region_get_never_rains(rg[3]);
+            // vanilla's story cycle: 400 to 800 seconds
+            bool lengths = true;
+            for (auto const g : rg)
+                lengths = lengths && w.region_get_rain(g).cycle_length >= 16000 && w.region_get_rain(g).cycle_length <= 32000;
+            rain::rain_in(st, rg[0], 50);
+            rain::rain_in(st, rg[2], 2000);
+            bool synced = true, hit = false, deadly_max = false, flooded = false;
+            int32_t hit_at = -1, over_at = -1;
+            float peak = 0.f;
+            for (int32_t t = 0; t < 600; ++t) {
+                tick_world(st, 1);
+                auto const& a = w.region_get_rain(rg[0]);
+                auto const& b = w.region_get_rain(rg[1]);
+                synced = synced && a.timer == b.timer && a.cycle_length == b.cycle_length && a.intensity == b.intensity;
+                if (rain::deadly(a) && hit_at < 0)
+                    hit_at = t;
+                if (hit_at >= 0 && !rain::deadly(a) && over_at < 0)
+                    over_at = t;
+                hit = hit || rain::deadly(a);
+                peak = std::max(peak, a.intensity);
+                deadly_max = deadly_max || a.mode == rain::death_mode::mayhem;
+                flooded = flooded || a.flood > 100.f;
+            }
+            auto const& a = w.region_get_rain(rg[0]);
+            auto const& c = w.region_get_rain(rg[2]);
+            bool const restarted = a.cycles == 1 && a.timer < 300 && a.cycle_length >= 16000 && !rain::deadly(a);
+            bool const own = !rain::deadly(c) && rain::time_until_rain(c) > 1000 && c.cycle_length != a.cycle_length;
+            bool const dry = rain::tracker_utility(st, rr[3]) == 0.f && !rain::rains_in(st, rr[3]) && rain::rains_in(st, rr[0]);
+            char d[256];
+            std::snprintf(d, sizeof(d), " leaders=%d lengths=%d synced=%d hit_at=%d over_at=%d peak=%.2f mayhem=%d flooded=%d restarted=%d own=%d dry=%d",
+                int(leaders), int(lengths), int(synced), hit_at, over_at, peak, int(deadly_max), int(flooded), int(restarted), int(own), int(dry));
+            r.check("rain cycles and gate groups", leaders && lengths && synced && hit && over_at - hit_at == rain::deadly_rain_ticks && peak > 0.95f
+                && deadly_max && flooded && restarted && own && dry, d);
+        }
+        {
+            // the deadly rain: a slugcat under the open sky dies, one in a
+            // shelter doesn't
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st.add_text("rain"));
+            auto const open = make_room(st, rgn, box(40, 20, [](int32_t x, int32_t y) { return y == 1 || (y > 12 && x > 25) ? '#' : ' '; }));
+            // (a room with nothing over its floor but the room's top border)
+            for (int32_t x = 1; x < 39; ++x)
+                st.world.tile_set_terrain(dcon::tile_id{dcon::tile_id::value_base_t(st.world.room_get_first_tile(open).id.index() + 19 * 40 + x)}, world::terrain::air);
+            auto const shelter = make_room(st, rgn, box(20, 10, [](int32_t, int32_t) { return ' '; }));
+            w.room_set_is_shelter(shelter, true);
+            st.spawn_dens = false;
+            simulation::populate(st);
+            std::vector<dcon::player_id> ps{player::create(st, open, feet_at(10, 2)), player::create(st, shelter, feet_at(10, 1))};
+            rain::rain_in(st, rgn, 20);
+            std::vector<player::input_package> in(ps.size());
+            bool pushed = false;
+            float death = 0.f;
+            for (uint32_t t = 0; t < 440; ++t) {
+                vec2 const before = w.body_chunk_get_vel(player::body_chunk(st, ps[0], 0));
+                simulation::tick(st, ps, in);
+                st.sounds.clear();
+                st.music.clear();
+                pushed = pushed || rw::magnitude(w.body_chunk_get_vel(player::body_chunk(st, ps[0], 0)) - before) > 3.f;
+                death = std::max(death, w.player_get_rain_death(ps[0]));
+            }
+            bool const exposed_dead = w.player_get_dead(ps[0]) != 0;
+            bool const sheltered = !w.player_get_dead(ps[1]) && w.player_get_rain_death(ps[1]) == 0.f;
+            char d[160];
+            std::snprintf(d, sizeof(d), " exposed dead=%d pushed=%d rainDeath %.2f; sheltered alive=%d", int(exposed_dead), int(pushed), death, int(sheltered));
+            r.check("deadly rain, shelter", exposed_dead && pushed && sheltered, d);
+            for (auto const p : ps)
+                player::destroy(st, p);
+        }
+        {
+            // a lizard comes out of its den, goes back in as the rain
+            // approaches, waits it out and comes back out of the same den
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st.add_text("dens"));
+            auto const room = make_room(st, rgn, pipe_room(34, 0));
+            st.spawn_dens = false;
+            simulation::populate(st);
+            auto const den = dens::den_entrance(st, room, 0);
+            auto const l = creature::create(st, room, world::room_view::middle_of_tile(34, 2), creature::spawn_desc{creature::type::lizard, -1.f, false, uint8_t(lizard::breed::pink)});
+            dens::set_home(st, l, room, 0);
+            dens::put_in_den(st, l, 10);
+            bool const starts_in = dens::where_is(st, l) == dens::where::den && !creature::room_of(st, l);
+            tick_world(st, 60);
+            bool const came_out = dens::where_is(st, l) == dens::where::room && creature::room_of(st, l) == room;
+            // off to the far side of the room for a while
+            tick_world(st, 400);
+            float const away = std::fabs(w.body_chunk_get_pos(creature::chunk(st, l, 0)).x - world::room_view::middle_of_tile(34, 2).x);
+            rain::rain_in(st, rgn, 900);
+            bool went_in = false, escaped = false;
+            for (uint32_t t = 0; t < 900 && !went_in; ++t) {
+                tick_world(st, 1);
+                escaped = escaped || lizard::behavior(w.creature_get_behavior(l)) == lizard::behavior::escape_rain;
+                went_in = dens::where_is(st, l) == dens::where::den;
+            }
+            // the rain, then the next cycle: out again
+            bool stayed = true, out_again = false;
+            vec2 out_at{0.f, 0.f};
+            for (uint32_t t = 0; t < 2600 && !out_again; ++t) {
+                tick_world(st, 1);
+                if (rain::deadly(w.region_get_rain(rgn)))
+                    stayed = stayed && dens::where_is(st, l) != dens::where::room;
+                if (dens::where_is(st, l) == dens::where::room) {
+                    out_again = true;
+                    out_at = w.body_chunk_get_pos(creature::chunk(st, l, 0));
+                }
+            }
+            bool const same_den = den && out_again && rw::distance(out_at, world::room_view::middle_of_tile(*den)) < 60.f;
+            char d[200];
+            std::snprintf(d, sizeof(d), " den=%d in=%d out=%d wandered %.0fpx escape=%d back_in=%d stayed=%d out_again=%d same_den=%d cycles=%u", int(bool(den)),
+                int(starts_in), int(came_out), away, int(escaped), int(went_in), int(stayed), int(out_again), int(same_den), w.region_get_rain(rgn).cycles);
+            r.check("den before the rain", starts_in && came_out && escaped && went_in && stayed && out_again && same_den, d);
+        }
+        {
+            // a centipede whose den is in the next room goes through the
+            // room exit pipe to get to it
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st.add_text("pipes"));
+            auto const a = make_room(st, rgn, pipe_room(0, 34));
+            auto const b = make_room(st, rgn, pipe_room(5, 34));
+            auto const ea = exits_of(st, a), eb = exits_of(st, b);
+            bool const built = ea.size() == 1 && eb.size() == 2;
+            if (built) {
+                w.room_exit_set_target_from_exit_connection(ea[0], b);
+                w.room_exit_set_target_from_exit_connection(eb[0], a);
+            }
+            st.spawn_dens = false;
+            simulation::populate(st);
+            auto const c = creature::create(st, a, world::room_view::middle_of_tile(8, 2), creature::spawn_desc{creature::type::centipede, 0.4f});
+            dens::set_home(st, c, b, 1);
+            rain::rain_in(st, rgn, 2400);
+            bool piped = false, crossed = false, home = false;
+            for (uint32_t t = 0; t < 2400 && !home; ++t) {
+                tick_world(st, 1);
+                piped = piped || dens::where_is(st, c) == dens::where::shortcut;
+                crossed = crossed || creature::room_of(st, c) == b;
+                home = dens::where_is(st, c) == dens::where::den && w.creature_get_away_room(c) == b;
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " built=%d piped=%d in_b=%d home=%d moves=%u", int(built), int(piped), int(crossed), int(home), dens::stats().room_changes.load());
+            r.check("through a pipe to its den", built && piped && crossed && home, d);
+        }
+        {
+            // a world file's creatures: den spawns, counts, lineages,
+            // campaign filters, spawn data
+            std::string const text = "ROOMS\nTEST_A : DISCONNECTED\nEND ROOMS\n\nCREATURES\n"
+                "//all\n"
+                "TEST_A : 3-Green, 3-CicadaA-2, 3-Scavenger\n"
+                "(White,Yellow)TEST_A : 3-Pink-{Seed:1234}\n"
+                "(Red)TEST_A : 3-Red\n"
+                "(X-White)TEST_A : 3-Black\n"
+                "LINEAGE : TEST_A : 3 : NONE-0.1, Blue-0.5, Red-0\n"
+                "LINEAGE : TEST_A : 3 : Centipede-{0.7}-0.5, Red-0\n"
+                "TEST_A : 3-Small Centipede-{Night,Seed:55}-3\n"
+                "OFFSCREEN : 0-Vulture-2\n"
+                "END CREATURES\n";
+            auto const white = spawns::parse(text, player::slugcat_name::white);
+            auto const red = spawns::parse(text, player::slugcat_name::red);
+            auto const has = [](std::vector<spawns::spawn> const& v, std::string const& type) {
+                return std::any_of(v.begin(), v.end(), [&](auto const& x) { return x.type == type; });
+            };
+            bool parsed = white.size() == 8 && white[1].count == 2 && white[3].data == "{Seed:1234}" && white[4].lineage && white[4].type == "NONE"
+                && white[5].type == "Centipede" && white[5].data == "{0.7}" && white[6].type == "Small Centipede" && white[6].count == 3 && white[7].room == "OFFSCREEN";
+            bool const filters = has(white, "Pink") && !has(white, "Red") && !has(white, "Black") && has(red, "Red") && has(red, "Black") && !has(red, "Pink");
+            auto const night = spawns::parse_data("{Night,Seed:55}");
+            auto const size = spawns::parse_data("{0.7}");
+            bool const data = (night.flags & dens::flag_night) && night.seed == 55 && size.size == 0.7f && spawns::parse_data("{PreCycle,Lavasafe}").flags == (dens::flag_pre_cycle | dens::flag_lava_safe);
+            bool const kinds = spawns::kind_of("Small Centipede") && spawns::kind_of("Small Centipede")->variety == uint8_t(centipede::variant::small)
+                && spawns::kind_of("Caramel")->variety == uint8_t(lizard::breed::caramel) && spawns::kind_of("CicadaA")->size == 1.f
+                && spawns::kind_of("TerrorLongLegs")->variety == uint8_t(daddy::variant::mother) && !spawns::kind_of("Scavenger") && !spawns::kind_of("NONE");
+            // made in a room's den: the count, the skipped kind, NONE, the seed
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto const rgn = st.world.create_region();
+            st.world.region_set_name(rgn, st.add_text("test"));
+            auto const room = make_room(st, rgn, pipe_room(34, 0));
+            st.spawn_dens = false;
+            simulation::populate(st);
+            spawns::report rep;
+            uint32_t made = 0;
+            for (auto const& x : white) {
+                if (x.room == "OFFSCREEN" || (x.lineage && x.type == "NONE"))
+                    continue;
+                // (the room's only den is node 0)
+                auto y = x;
+                y.den = 0;
+                made += spawns::spawn_in_den(st, room, y, rep);
+            }
+            uint32_t in_den = 0, nights = 0;
+            st.world.for_each_creature([&](dcon::creature_id c) {
+                in_den += dens::where_is(st, c) == dens::where::den ? 1 : 0;
+                nights += st.world.creature_get_spawn_flags(c) & dens::flag_night ? 1 : 0;
+            });
+            bool const spawned = made == 8 && in_den == 8 && nights == 3 && rep.skipped["Scavenger"] == 1;
+            char d[200];
+            std::snprintf(d, sizeof(d), " parsed=%d (%zu lines) filters=%d data=%d kinds=%d made=%u in_den=%u night=%u", int(parsed), white.size(), int(filters),
+                int(data), int(kinds), made, in_den, nights);
+            r.check("world file creature spawns", parsed && filters && data && kinds && spawned, d);
+        }
+        {
             // every room updates in parallel: the same world comes out on one
             // thread and on every thread
             uint32_t const cores = std::max(2u, std::thread::hardware_concurrency());
@@ -1728,6 +2022,14 @@ namespace selftest {
                 leeches += l ? 1 : 0;
             schools += c.leeches[0] ? 1 : 0;
         });
+        // the world files' creatures (simulation::populate made them in their
+        // dens) come out over the first seconds; the rain comes half way
+        // through the visits: they go home, the slugcats in the open get
+        // it, the next cycle lets the creatures back out
+        uint32_t natural = 0;
+        w.for_each_creature([&](dcon::creature_id c) { natural += w.creature_get_home_room(c) ? 1 : 0; });
+        uint32_t const rain_at = uint32_t((size_t(w.room_size()) + batch - 1) / batch) * ticks_per_room / 2;
+        w.for_each_region([&](dcon::region_id r) { rain::rain_in(gs, r, int32_t(rain_at)); });
         std::vector<dcon::player_id> players;
         for (uint32_t i = 0; i < batch; ++i)
             players.push_back(player::create(gs, dcon::room_id{0}, vec2{0.f, 0.f}));
@@ -1872,7 +2174,7 @@ namespace selftest {
                 bugs_dropped += x.bug_dropped ? 1 : 0;
                 if (c.cicada) {
                     vec2 const hp = w.body_chunk_get_pos(cicada::chunk(gs, c.cicada, 0));
-                    if (!in_room(cicada::body(gs, c.cicada)))
+                    if (!in_room(cicada::body(gs, c.cicada)) && dens::where_is(gs, c.cicada) == dens::where::room)
                         ++cicadas_carried; // through a pipe, in the slugcat's hands
                     else if (left_room(room, hp) && ++cicadas_lost <= 5)
                         std::printf("  squidcada left %s at (%.0f, %.0f)\n", name.c_str(), hp.x, hp.y);
@@ -1970,6 +2272,22 @@ namespace selftest {
             lizards, lizards_hunted, lizards_bit, lizards_tongued, lizards_jumped, lizards_spat, lizards_swam, lizards_lost);
         std::printf("daddy long legs: %u (one per room, every variant in turn), %u gripped the terrain, %u hunted, %u held the slugcat, %u ate it, %u fell out of their room\n",
             daddies, daddies_gripped, daddies_hunted, daddies_held, daddies_ate, daddies_lost);
+        {
+            uint32_t out = 0, in_pipes = 0, in_dens = 0, dead = 0;
+            w.for_each_creature([&](dcon::creature_id c) {
+                if (!w.creature_get_home_room(c))
+                    return;
+                auto const where = dens::where_is(gs, c);
+                (where == dens::where::room ? out : where == dens::where::shortcut ? in_pipes : in_dens) += 1;
+                dead += w.creature_get_dead(c) ? 1 : 0;
+            });
+            auto const& ds = dens::stats();
+            auto const& rs = rain::stats();
+            std::printf("rain: due after %u ticks in every region, %u death rains came and went (once per group of regions), %u slugcats and %u creatures killed by it\n",
+                rain_at, rs.cycles_finished.load(), rs.players_killed.load(), rs.creatures_killed.load());
+            std::printf("dens: %u creatures from the world files (at the end %u out, %u in pipes, %u in dens, %u dead); %u went into pipes, %u into dens, %u came out of dens, %u changed rooms, %u slugcats carried off\n",
+                natural, out, in_pipes, in_dens, dead, ds.into_pipes.load(), ds.into_dens.load(), ds.out_of_dens.load(), ds.room_changes.load(), ds.prey_taken.load());
+        }
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
             auto const k = w.rot_tube_get_kind(t);
@@ -2042,13 +2360,17 @@ namespace selftest {
         return bad == 0 ? 0 : 1;
     }
 
-    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks) {
-        // the world as it is (no creature spawns yet: items, rot, water,
-        // sand, gates), then with a creature of each kind in every room; each
-        // twice: one thread, then every thread
+    int bench(std::function<std::unique_ptr<sys::game_state>()> const& load, uint32_t ticks, std::string const& mode) {
+        // the world as it is without creatures (items, rot, water, sand,
+        // gates, the rain), then with a creature of each kind in every room,
+        // then with the world files' creatures (out of their dens as they
+        // come); each twice: one thread, then every thread
         uint32_t const cores = std::max(1u, std::thread::hardware_concurrency());
         bool same = true;
-        for (int with_creatures = 0; with_creatures < 2; ++with_creatures) {
+        char const* const modes[] = {"none", "each", "dens"};
+        for (int m = 0; m < 3; ++m) {
+        if (!mode.empty() && mode != modes[m])
+            continue;
         uint64_t hashes[2] = {};
         double ms[2] = {};
         for (int run = 0; run < 2; ++run) {
@@ -2057,15 +2379,18 @@ namespace selftest {
                 return 1;
             auto& gs = *gs_ptr;
             auto& w = gs.world;
+            gs.spawn_dens = m == 2;
             simulation::populate(gs);
             uint32_t creatures = 0;
-            if (with_creatures)
+            if (m == 1)
                 w.for_each_room([&](dcon::room_id rid) {
                     auto const c = spawn_creatures(gs, rid);
                     creatures += (c.centipede ? 1 : 0) + (c.dropbug ? 1 : 0) + (c.cicada ? 1 : 0) + (c.lizard ? 1 : 0) + (c.daddy ? 1 : 0);
                     for (auto const l : c.leeches)
                         creatures += l ? 1 : 0;
                 });
+            if (m == 2)
+                w.for_each_creature([&](dcon::creature_id) { ++creatures; });
             // one slugcat, viewed, standing in the first room
             auto const first = dcon::room_id{0};
             auto const room = world::get_room_view(gs, first);
@@ -2073,8 +2398,11 @@ namespace selftest {
             uint32_t const threads = run == 0 ? 1u : cores;
             tbb::global_control limit{tbb::global_control::max_allowed_parallelism, threads};
             player::input_package const in{};
-            // a few ticks to settle (path fields, first falls) before timing
-            for (uint32_t t = 0; t < 10; ++t) {
+            // a few ticks to settle (path fields, first falls) before timing;
+            // the den population gets 1000 (25 s): their remainInDenCounters
+            // (100 to 1000 ticks) have run out, every creature that wants to
+            // is out
+            for (uint32_t t = 0; t < (m == 2 ? 1000u : 10u); ++t) {
                 simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
                 gs.sounds.clear();
                 gs.music.clear();
@@ -2092,8 +2420,13 @@ namespace selftest {
             hashes[run] = simulation::hash(gs);
             uint32_t chunks = 0;
             w.for_each_body_chunk([&](dcon::body_chunk_id) { ++chunks; });
-            std::printf("%u rooms, %u creatures, %u items, %u body chunks; %u thread%s: %.2f ms/tick (%.1f ticks/s), %.1f path fields built a tick, world hash %016llx\n",
-                w.room_size(), creatures, w.item_size(), chunks, threads, threads == 1 ? "" : "s", ms[run], 1000.0 / ms[run],
+            uint32_t out = 0, in_pipes = 0, in_dens = 0;
+            w.for_each_creature([&](dcon::creature_id c) {
+                auto const where = dens::where_is(gs, c);
+                (where == dens::where::room ? out : where == dens::where::shortcut ? in_pipes : in_dens) += 1;
+            });
+            std::printf("[%s] %u rooms, %u creatures (at the end %u out, %u in pipes, %u in dens), %u items, %u body chunks; %u thread%s: %.2f ms/tick (%.1f ticks/s), %.1f path fields built a tick, world hash %016llx\n",
+                modes[m], w.room_size(), creatures, out, in_pipes, in_dens, w.item_size(), chunks, threads, threads == 1 ? "" : "s", ms[run], 1000.0 / ms[run],
                 double(pathing::builds() - builds0) / double(std::max(1u, ticks)), (unsigned long long)hashes[run]);
             auto const& tt = simulation::times();
             std::printf("  per tick: %.2f ms serial before, %.2f ms rooms (parallel), %.2f ms serial after\n", tt.serial_before / tt.ticks,

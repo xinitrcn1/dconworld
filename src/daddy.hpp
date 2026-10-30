@@ -40,6 +40,9 @@ namespace daddy {
     // DaddyLongLegs constructor + PlaceInRoom (and the DaddyGraphics layout)
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, variant v);
     void destroy(sys::game_state& state, dcon::creature_id d);
+    // Creature.PlaceInRoom + NewRoom: the body at `pos` of `room`, the
+    // tentacles starting over there (made, out of a pipe)
+    void place_in_room(sys::game_state& state, dcon::creature_id d, dcon::room_id room, rw::vec2 pos);
     // DaddyLongLegs.Update
     void update(sys::game_state& state, dcon::creature_id d, world::room_view const& room);
     // Room object collisions: whether it collides with the slugcat (not one
