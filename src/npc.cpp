@@ -598,7 +598,9 @@ namespace npc {
                     // the ledge's corner for the grab; leaning over at once it
                     // bumps the ceiling beside the column)
                     bool const high = nav.aim.y - nav.from.y >= 2;
-                    return input(high && t < 15 ? 0 : dir, t < 22 ? 0 : 1, t < 24 && t > 8);
+                    // (for a pole: up once the hands are by it, to catch it)
+                    bool const by_pole = room.get_tile(nav.aim).vertical_beam() && std::abs(pos(state, p, 0).x - room_view::middle_of_tile(nav.aim).x) < 20.f;
+                    return input(high && t < 15 && !by_pole ? 0 : dir, t < 22 && !by_pole ? 0 : 1, t < 24 && t > 8);
                 }
                 case move::crouch: {
                     if (t > 60) {
@@ -964,8 +966,10 @@ namespace npc {
                 case pathing::step_kind::rise:
                     // (holding a pole: from its tip; up on a horizontal beam
                     // it is a plain jump up)
-                    begin(on_pole && anim != player::animation_index::stand_on_beam && anim != player::animation_index::hang_from_beam && st->dir == 0 ? move::tip
-                                                                                                                                                 : move::rise,
+                    begin(on_pole && room.get_tile(at).vertical_beam() && anim != player::animation_index::stand_on_beam
+                                && anim != player::animation_index::hang_from_beam && anim != player::animation_index::get_up_on_beam && st->dir == 0
+                            ? move::tip
+                            : move::rise,
                         st->tile, st->dir);
                     nav.cool = 0;
                     return started();
@@ -1912,9 +1916,17 @@ namespace npc {
         if (!target || target == room)
             return std::nullopt;
         auto const view = world::get_room_view(state, room);
-        auto const& s = explore(state, room, goals_from(state, view, tile_of(state, p, view)));
-        if (!set_trip(state, c, s, target))
-            return std::nullopt;
+        // (no walkable way: the way its guessed trip goes, the rooms'
+        // connections where the walkable way doesn't reach)
+        auto& nav = w.slugcat_npc_get_nav(n);
+        if (!set_trip(state, c, explore(state, room, goals_from(state, view, tile_of(state, p, view))), target)) {
+            uint64_t start = goals_from(state, view, tile_of(state, p, view));
+            if (start == 0)
+                start = all_exits(state, room);
+            if (!set_trip(state, c, explore(state, room, start, true, &nav), target)
+                && !set_trip(state, c, explore(state, room, all_exits(state, room), true, &nav, true), target))
+                return std::nullopt;
+        }
         auto const& t = w.creature_get_trip(c);
         next = room_at(t.room[t.next]);
         uint8_t const exit = t.exit[t.next];

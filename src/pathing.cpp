@@ -232,6 +232,16 @@ namespace pathing {
             // a one tile hole in the floor it runs over (AImapper's floor)
             if (standable(room, t - ivec2{1, 0}) && standable(room, t + ivec2{1, 0}))
                 return true;
+            // where corridors meet (rock on every diagonal: it crawls through,
+            // UW_D02's shaft into its side passage)
+            {
+                bool all = true;
+                for (int32_t const dx : {-1, 1})
+                    for (int32_t const dy : {-1, 1})
+                        all = all && room.inside(t.x + dx, t.y + dy) && room.get_tile(t + ivec2{dx, dy}).solid();
+                if (all)
+                    return true;
+            }
             // the mouth of a pipe (it climbs or pushes into it)
             for (auto const d : rw::custom::four_directions)
                 if (room.inside(t.x + d.x, t.y + d.y) && room.get_tile(t + d).t == terrain::shortcut_entrance
@@ -284,8 +294,10 @@ namespace pathing {
         constexpr int32_t leap_reach(int32_t dy) noexcept { return dy >= 3 ? 4 : dy >= 1 ? 5 : 6; }
         // a jump off a pole onto another one `d` tiles across: how much
         // higher it can be (measured: it grabs the other pole on the way)
-        constexpr int32_t max_swing = 8;
-        constexpr int32_t swing_rise(int32_t d) noexcept { return d <= 4 ? 1 : d == 5 ? 0 : d == 6 ? -2 : d == 7 ? -4 : -7; }
+        // (nine across only falling eight or more, as a jump off a pole onto
+        // the ground carries: UW_E02's poles x=31 and x=22)
+        constexpr int32_t max_swing = 9;
+        constexpr int32_t swing_rise(int32_t d) noexcept { return d <= 4 ? 1 : d == 5 ? 0 : d == 6 ? -2 : d == 7 ? -4 : d == 8 ? -7 : -8; }
         // off a pole's side onto the ground `dy` over the tile it holds
         // (in CC_A02 eight tiles over and five down, into a corridor)
         // (measured with the start a player used in CC_B08: up and towards
@@ -301,8 +313,55 @@ namespace pathing {
         // A jump from `g` to the ground at `v` on side `s` clears the
         // terrain: the body (two tiles tall) along a parabola rising
         // `height` tiles over a level jump, down to the landing
+        // A jump goes its full length: past a landing at `v` going `sd`, within
+        // `left` tiles, a wall it stops against, else ground all the way to
+        // land on (short of that, onto a ledge with nothing past it, it carries
+        // on over the edge: out of WARG_B35's and UW_E02's open sides)
+        bool stops(room_view const& room, ivec2 v, int32_t sd, int32_t left) {
+            for (int32_t k = 1; k <= left - 1; ++k) {
+                ivec2 const t = v + ivec2{sd * k, 0};
+                if (!room.inside(t.x, t.y) || !open(room, t) || !open(room, t + ivec2{0, 1}))
+                    return room.inside(t.x, t.y);
+                if (!standable(room, t))
+                    return false;
+            }
+            return true;
+        }
+
+        // the tile in front of a pipe's entrance, the hole facing it: in the
+        // air there, pushing on, it goes in (UW_D02's exit high in its wall,
+        // jumped into from a pole's tip)
+        bool pipe_mouth(room_view const& room, ivec2 v) {
+            for (auto const d : rw::custom::four_directions)
+                if (room.inside(v.x + d.x, v.y + d.y) && room.get_tile(v + d).t == terrain::shortcut_entrance
+                    && room.shortcut_entrance_hole_direction(v + d) == ivec2{-d.x, -d.y})
+                    return true;
+            return false;
+        }
+
         bool arc_clear(room_view const& room, ivec2 g, ivec2 v, int32_t s, int32_t height) {
-            if (!standable(room, v) || room.get_tile(v).water != 0)
+            if (room.get_tile(v).water != 0)
+                return false;
+            // (into a pipe's mouth or a passage's end, the way up to just
+            // before it; the mouth only has to be open: a notch one tile high,
+            // a crawlway it goes into sideways, a corridor it goes up into
+            // from below. UW_D02's crawlway and shaft off its open middle)
+            if (open(room, v)) {
+                auto const solid_at = [&](ivec2 t) { return room.inside(t.x, t.y) && room.get_tile(t).solid(); };
+                bool const crawlway = solid_at(v + ivec2{0, 1}) && solid_at(v - ivec2{0, 1}) && open(room, v - ivec2{s, 0});
+                bool const shaft = solid_at(v + ivec2{1, 0}) && solid_at(v - ivec2{1, 0}) && open(room, v - ivec2{0, 1}) && !solid_at(v - ivec2{0, 1});
+                if (pipe_mouth(room, v) || crawlway) {
+                    ivec2 const before = v - ivec2{s, 0};
+                    if (before.x != g.x && arc_open(room, g, before, s, height))
+                        return true;
+                }
+                if (shaft) {
+                    ivec2 const before = v - ivec2{0, 1};
+                    if (before.x != g.x && arc_open(room, g, before, s, height))
+                        return true;
+                }
+            }
+            if (!standable(room, v))
                 return false;
             return arc_open(room, g, v, s, height);
         }
@@ -361,18 +420,6 @@ namespace pathing {
                         // from it (the body crouches over two tiles)
                         if (!ground || !open(room, side) || standable(room, side))
                             continue;
-                        // past a landing at `v` going `s`, within `left` tiles: a wall
-                        // it stops against, else ground all the way to land on
-                        auto const stops = [&](ivec2 v, int32_t sd, int32_t left) {
-                            for (int32_t k = 1; k <= left - 1; ++k) {
-                                ivec2 const t = v + ivec2{sd * k, 0};
-                                if (!room.inside(t.x, t.y) || !open(room, t) || !open(room, t + ivec2{0, 1}))
-                                    return room.inside(t.x, t.y);
-                                if (!standable(room, t))
-                                    return false;
-                            }
-                            return true;
-                        };
                         bool const run_up = standable(room, g - ivec2{s, 0}) && standable(room, g - ivec2{2 * s, 0}) && open(room, g + ivec2{0, 1})
                             && open(room, g - ivec2{s, -1}) && open(room, g - ivec2{2 * s, -1});
                         // (onto the ground, or catching a pole on the way)
@@ -384,7 +431,7 @@ namespace pathing {
                                     if (!(arc_clear(room, g, v, s, 2) || (pole(v) && arc_open(room, g, v, s, 2))))
                                         continue;
                                     // (a running jump carries on too)
-                                    if (!pole(v) && !stops(v, s, leap_reach(dy) - dx))
+                                    if (!pole(v) && !stops(room, v, s, leap_reach(dy) - dx))
                                         continue;
                                     add(g, v, 30u + 10u * uint32_t(dx) + edge_of_reach(dx, leap_reach(dy)), step_kind::leap, s);
                                 }
@@ -398,19 +445,46 @@ namespace pathing {
                                     // (a pounce goes its full length: short of that, onto a
                                     // ledge with nothing past it to stop it, it carries on
                                     // over the edge, out of WARG_B35's open side)
-                                    if (!pole(v) && !stops(v, s, pounce_reach(dy) - dx))
+                                    if (!pole(v) && !stops(room, v, s, pounce_reach(dy) - dx))
                                         continue;
                                     add(back, v, 40u + 10u * uint32_t(dx) + edge_of_reach(dx, pounce_reach(dy)), step_kind::pounce, s);
                                 }
                     }
-                    // a hop onto a pole close by
+                    // a hop onto a pole close by (from up on a beam with something
+                    // under it a little further, not much higher: UW_D02's stubs up
+                    // its wall to the pole four over)
                     for (int32_t const s : {-1, 1})
-                        for (int32_t d = 1; d <= 3 && ground; ++d)
-                            for (int32_t dy = 3; dy >= -3; --dy) {
+                        for (int32_t d = 1; d <= (ground ? 3 : 4) && (ground || (on_beam_top && beam_safe)); ++d)
+                            // (a pole's foot right beside it up to five over its feet: a
+                            // straight jump, hands up, catches it; UW_E03's pole x=9)
+                            for (int32_t dy = !ground ? 1 : d <= 2 ? 5 : 3; dy >= -3; --dy) {
                                 ivec2 const v = g + ivec2{s * d, dy};
                                 if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && !room.get_tile(g).vertical_beam() && arc_open(room, g, v, s, 1))
                                     add(g, v, 25u + 10u * uint32_t(d + std::abs(dy)), step_kind::rise, s);
                             }
+                    // out of a crawlway's open end (a low ceiling over it: on all
+                    // fours, no room to jump up) straight across onto a pole a
+                    // few tiles out (UW_E03's tunnels up its left wall to pole x=9)
+                    if (standable(room, g) && !open(room, g + ivec2{0, 1}))
+                        for (int32_t const s : {-1, 1}) {
+                            ivec2 const out = g + ivec2{s, 0};
+                            if (!open(room, out) || standable(room, out))
+                                continue;
+                            for (int32_t d = 2; d <= 4; ++d) {
+                                bool clear = true;
+                                for (int32_t i = 1; i < d && clear; ++i)
+                                    clear = open(room, g + ivec2{s * i, 0});
+                                if (!clear)
+                                    break;
+                                for (int32_t dy = 0; dy >= -2; --dy) {
+                                    ivec2 const v = g + ivec2{s * d, dy};
+                                    if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam()) {
+                                        add(g, v, 40u + 10u * uint32_t(d - dy), step_kind::rise, s);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     // straight up to a pole, a beam, into a corridor (a
                     // shelter's shaft up to its pipe; from up on a beam too,
                     // over something to land on, though not onto another beam:
@@ -420,8 +494,14 @@ namespace pathing {
                         ivec2 const c = g + ivec2{0, k};
                         if (!open(room, c) || !open(room, c - ivec2{0, 1}) || walkable(c - ivec2{0, 1}))
                             break;
-                        if (!ground && room.get_tile(c).horizontal_beam())
-                            break;
+                        if (!ground && room.get_tile(c).horizontal_beam()) {
+                            // (not up a narrow shaft's ladder of beams, walls close
+                            // on both sides: HI_C11's, wall jumped up; a wall's
+                            // stubs with the room open beside them are fine, UW_D02)
+                            auto const wall_near = [&](int32_t sd) { return !open(room, c + ivec2{sd, 0}) || !open(room, c + ivec2{2 * sd, 0}); };
+                            if (wall_near(-1) && wall_near(1))
+                                break;
+                        }
                         if (walkable(c)) {
                             add(g, c, 20u + 10u * uint32_t(k), step_kind::rise, 0);
                             break;
@@ -443,14 +523,18 @@ namespace pathing {
                         for (int32_t d = 2; d <= max_swing && !top; ++d)
                             for (int32_t dy = swing_rise(d); dy >= -max_fall_jump - 2; --dy) {
                                 ivec2 const v = u + ivec2{s * d, dy};
-                                if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && arc_open(room, u, v, s, 1))
+                                // (coming down onto it: pole under where it aims too, to
+                                // catch on the way down; at its foot it drops past)
+                                bool const below = dy >= -2
+                                    || (room.inside(v.x, v.y - 2) && room.get_tile(v - ivec2{0, 1}).vertical_beam() && room.get_tile(v - ivec2{0, 2}).vertical_beam());
+                                if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && below && arc_open(room, u, v, s, 1))
                                     add(u, v, 30u + 10u * uint32_t(d) + (dy == swing_rise(d) ? 30u : 0u) + (d >= 6 ? 60u : 0u), step_kind::swing, s);
                             }
                     // or onto the ground
                     for (int32_t const s : {-1, 1})
                         for (int32_t dy = 2; dy >= -8; --dy)
                             for (int32_t d = 2; d <= pole_jump_reach(dy); ++d)
-                                if (ivec2 const v = u + ivec2{s * d, dy}; arc_clear(room, u, v, s, 1))
+                                if (ivec2 const v = u + ivec2{s * d, dy}; arc_clear(room, u, v, s, 1) && stops(room, v, s, pole_jump_reach(dy) - d))
                                     add(u, v, 35u + 10u * uint32_t(d) + edge_of_reach(d, pole_jump_reach(dy)), step_kind::swing, s);
                 }
             // from the tip of a pole (standing on it): a jump onto the
@@ -513,6 +597,10 @@ namespace pathing {
                     ivec2 const u{x, y};
                     if (!walkable(u) || room.get_tile(u).water != 0)
                         continue;
+                    // (holding a pole that goes on up: it climbs, no wall jumps; up
+                    // along it into a pipe, WRFA's)
+                    if (room.get_tile(u).vertical_beam() && room.get_tile(u + ivec2{0, 1}).vertical_beam())
+                        continue;
                     // the shaft's span around column `cx` on row `yy` (none: not a shaft)
                     auto const span = [&](int32_t cx, int32_t yy, int32_t& lo, int32_t& hi) {
                         if (!open(room, ivec2{cx, yy}))
@@ -550,6 +638,12 @@ namespace pathing {
                         for (int32_t yy = start; yy < h - 1 && yy - y <= 40; ++yy) {
                             int32_t lo, hi;
                             if (!span(cx, yy, lo, hi))
+                                break;
+                            // (a pole up the shaft: from there it climbs)
+                            bool pole_in = false;
+                            for (int32_t xx = lo; xx <= hi; ++xx)
+                                pole_in = pole_in || room.get_tile(ivec2{xx, yy}).vertical_beam();
+                            if (pole_in)
                                 break;
                             if (yy - y < 3)
                                 continue;

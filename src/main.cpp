@@ -327,7 +327,9 @@ namespace {
                     take_over(gs, "died");
                 else if (npc::stats().stuck != stuck)
                     take_over(gs, "got stuck");
-                else if (npc::stats().no_way != no_way)
+                // (with --npc-guess it plans by the rooms' connections where
+                // it knows no walkable way: it takes over only once stuck)
+                else if (npc::stats().no_way != no_way && !npc::debug().guess)
                     take_over(gs, "found no way");
                 else if (r == gs.find_room(route.substr(route.find(" -> ") + 4)) && w.slugcat_npc_get_nav(npc::of(gs, p)).what == npc::goal::rest) {
                     reports::add_log("the NPC got there on its own");

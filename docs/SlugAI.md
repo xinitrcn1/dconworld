@@ -81,6 +81,25 @@ the tools for tracing them, and what is known not to work yet.
   sequence's second half. Each warp keeps its own pull
   (`game_state::warp_pulls`), so warps in different rooms go at once. A
   tear out of reach from the ground carries it after 400 ticks of waiting.
+- **Into openings.** A jump may end in a pipe's mouth (in the air in
+  front of its entrance: pushing on, it goes in) or at a passage's end (a
+  crawlway one tile high it goes into sideways, a corridor it goes up into
+  from below): the arc only has to reach the tile before it (UW_D02's exit
+  high in its wall, from pole x=9's tip). A tile with rock on all four
+  diagonals is walkable (corridors meeting).
+- **Beam ladders, pole hops.** Straight up from a beam's top onto the beam
+  over it, unless walls close on both sides make it a narrow shaft (HI_C11
+  is wall jumped). From a beam's top a hop onto a pole up to 4 over and 1
+  up; from the ground up to 5 up when the pole is 1 or 2 over (UW_E03's
+  pole x=9). Rising to a pole it reaches up as soon as its hands are by it.
+  The tip move only off a vertical pole it holds.
+- **Out of a crawlway** (a tile one high, its open end over air): straight
+  across onto a pole 2 to 4 tiles out, level or a little lower (UW_E03's
+  tunnels up its left wall onto pole x=9, twice).
+- **Pole to pole** up to nine across (falling eight or more); coming down
+  onto a pole it aims where there is pole under it too.
+- **No wall jumps on a pole**: holding a pole that goes on up, or with a
+  pole up the shaft, it climbs (WRFA: up the pole into a pipe).
 - **Jumps that carry too far.** A charge pounce or a running jump goes its
   full length: one planned onto a ledge short of that needs a wall to stop
   against or ground all the way past it (WARG_B35's open side sent slugcats
@@ -361,7 +380,7 @@ again; after three of those the target is dropped.
 | `--npc-dead-ends` | soak | the exits from which no other exit can be walked to |
 | `--npc-unreachable` | soak | for every NPC with no shelter in reach: its room and the rooms its search reaches (the first three: their route data) |
 | `--npc-list` | soak | every NPC at the end |
-| `--npc-guess` | trip | set off even with no walkable way known (a guessed trip, retargeting on the way; getting stuck or finding no way doesn't fail it, it learns from it) |
+| `--npc-guess` | trip, human-complete | set off even with no walkable way known (a guessed trip, retargeting on the way; getting stuck or finding no way doesn't fail it, it learns from it) |
 | `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
 
