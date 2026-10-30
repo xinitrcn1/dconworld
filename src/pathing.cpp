@@ -455,9 +455,7 @@ namespace pathing {
                     // its wall to the pole four over)
                     for (int32_t const s : {-1, 1})
                         for (int32_t d = 1; d <= (ground ? 3 : 4) && (ground || (on_beam_top && beam_safe)); ++d)
-                            // (a pole's foot right beside it up to five over its feet: a
-                            // straight jump, hands up, catches it; UW_E03's pole x=9)
-                            for (int32_t dy = !ground ? 1 : d <= 2 ? 5 : 3; dy >= -3; --dy) {
+                            for (int32_t dy = !ground ? 1 : 3; dy >= -3; --dy) {
                                 ivec2 const v = g + ivec2{s * d, dy};
                                 if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && !room.get_tile(g).vertical_beam() && arc_open(room, g, v, s, 1))
                                     add(g, v, 25u + 10u * uint32_t(d + std::abs(dy)), step_kind::rise, s);
@@ -528,8 +526,10 @@ namespace pathing {
                             for (int32_t dy = swing_rise(d); dy >= -max_fall_jump - 2; --dy) {
                                 ivec2 const v = u + ivec2{s * d, dy};
                                 // (coming down onto it: pole under where it aims too, to
-                                // catch on the way down; at its foot it drops past)
-                                bool const below = dy >= -2
+                                // catch on the way down; or the pole's very foot, caught
+                                // hanging under it, as a player does in UW_E02)
+                                bool const foot = room.inside(v.x, v.y - 1) && !room.get_tile(v - ivec2{0, 1}).vertical_beam();
+                                bool const below = dy >= -2 || foot
                                     || (room.inside(v.x, v.y - 2) && room.get_tile(v - ivec2{0, 1}).vertical_beam() && room.get_tile(v - ivec2{0, 2}).vertical_beam());
                                 if (room.inside(v.x, v.y) && room.get_tile(v).vertical_beam() && below && headroom(u, s) && arc_open(room, u, v, s, 1))
                                     add(u, v, 30u + 10u * uint32_t(d) + (dy == swing_rise(d) ? 30u : 0u) + (d >= 6 ? 60u : 0u), step_kind::swing, s);

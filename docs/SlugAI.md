@@ -104,7 +104,15 @@ the tools for tracing them, and what is known not to work yet.
   player's up-and-towards ticks (holding up climbs the pole, the jump leaves
   higher and bonks).
 - **Pole to pole** up to nine across (falling eight or more); coming down
-  onto a pole it aims where there is pole under it too.
+  onto a pole it aims where there is pole under it too, or at the pole's
+  very foot, caught hanging under it (a player's UW_E02: pole x=39 to
+  x=31's foot, twice). A sideways jump from a pole's tip onto another pole
+  (the player did that too) was tried and dropped: CC_B06 then took it
+  over its working jump-and-bounce and got stuck.
+- **Back and forth.** Going back into the room it just came from three
+  times in a row (each room's way on leading through the other): on a
+  guessed trip neither room is guessed through again; on a walkable one the
+  target is given up and another picked.
 - **No wall jumps on a pole**: holding a pole that goes on up, or with a
   pole up the shaft, it climbs (WRFA: up the pole into a pipe).
 - **Jumps that carry too far.** A charge pounce or a running jump goes its

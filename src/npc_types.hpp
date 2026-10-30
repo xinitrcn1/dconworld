@@ -75,6 +75,9 @@ namespace npc {
         // somewhere moves its trip on
         uint16_t room = 0;
         uint16_t room_before = 0;
+        // how often in a row it went back into the room before (back and
+        // forth between two: a way that leads nowhere either side)
+        uint8_t bounces = 0;
         // no progress along the path: the best distance to the goal so far
         // and the ticks since it got better
         rw::ivec2 goal_tile{-1, -1};
