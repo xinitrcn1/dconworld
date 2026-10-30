@@ -31,19 +31,7 @@ namespace explosions {
             });
         });
         // and what lives is hurt
-        creature::blast(state, room.id, at, d.rad, d.force, d.damage, d.stun);
-        if (d.kill_rad > 0.f) {
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                auto const o = player::body(state, p);
-                if (o == source || w.player_get_in_shortcut(p) || w.player_get_dead(p))
-                    return;
-                vec2 const cp = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
-                if (rw::custom::dist_less(cp, at, d.kill_rad))
-                    player::die(state, p);
-                else if (rw::custom::dist_less(cp, at, d.rad))
-                    player::stun(state, p, int32_t(d.stun * (1.f - rw::distance(cp, at) / d.rad)));
-            });
-        }
+        creature::blast(state, room.id, at, d.rad, d.force, d.damage, d.stun, d.kill_rad, source);
         state.play_sound(sound::sound_id::fire_spear_explode, room.id, at);
         state.add_noise(room.id, at, 8000.f);
         if (room.water && room.point_submerged(at))

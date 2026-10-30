@@ -213,7 +213,7 @@ namespace {
         // VirtualMicrophone.listenerPoint: the followed slugcat, or the
         // middle of the view when it is elsewhere
         vec2 listener(vec2 view_center) const {
-            if (gs.world.player_get_in_shortcut(players[0]))
+            if (player::in_shortcut(gs, players[0]))
                 return shortcuts::vessel_position(gs, players[0], 1.f);
             if (simulation::player_room(gs, players[0]) != room)
                 return view_center;
@@ -221,7 +221,7 @@ namespace {
         }
 
         void update_camera(float view_w, float view_h) {
-            vec2 const head = gs.world.player_get_in_shortcut(players[0]) ? shortcuts::vessel_position(gs, players[0], 1.f)
+            vec2 const head = player::in_shortcut(gs, players[0]) ? shortcuts::vessel_position(gs, players[0], 1.f)
                 : gs.world.body_chunk_get_pos(player::body_chunk(gs, players[0], 0));
             if (follow_camera) {
                 cam.pos = head - vec2{view_w / 2.f, view_h / 2.f};
@@ -286,9 +286,9 @@ namespace {
                 w.body_chunk_get_vel(c0).x, w.body_chunk_get_vel(c0).y, w.body_chunk_get_pos(c1).x, w.body_chunk_get_pos(c1).y,
                 w.body_chunk_get_contact_point(c0).x, w.body_chunk_get_contact_point(c0).y,
                 w.body_chunk_get_contact_point(c1).x, w.body_chunk_get_contact_point(c1).y, int(w.body_chunk_get_on_slope(c1)),
-                int(w.player_get_standing(p)), w.player_get_can_jump(p), w.player_get_want_to_jump(p), w.player_get_stun(p),
-                w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), w.player_get_dead(p) ? "  DEAD (R)" : "",
-                rocks, spears, stuck, held.c_str(), w.player_get_in_shortcut(p) ? "  IN PIPE" : "");
+                int(w.player_get_standing(p)), w.player_get_can_jump(p), w.player_get_want_to_jump(p), player::stun_of(gs, p),
+                w.player_get_air_in_lungs(p), w.player_get_aerobic_level(p), players.size(), player::dead(gs, p) ? "  DEAD (R)" : "",
+                rocks, spears, stuck, held.c_str(), player::in_shortcut(gs, p) ? "  IN PIPE" : "");
             std::string out = buf;
             if (auto const* rc = rain::of_room(gs, room)) {
                 // the region's rain cycle (RainMeter) and this room's rain
@@ -938,7 +938,7 @@ int main(int argc, char* argv[]) {
                     a.slugcat = player::slugcat_name(k);
                     // rebuild player one where it stands (body mass depends on the slugcat)
                     auto const old = a.players[0];
-                    bool const travelling = w.player_get_in_shortcut(old);
+                    bool const travelling = player::in_shortcut(gs, old);
                     dcon::room_id const pr = travelling ? a.room : simulation::player_room(gs, old);
                     vec2 const feet = travelling ? a.spawn : w.body_chunk_get_pos(player::body_chunk(gs, old, 1));
                     player::destroy(gs, old);

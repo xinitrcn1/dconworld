@@ -69,9 +69,13 @@ namespace dens {
     // exit's, or the closest den of the room for a creature without one);
     // marks the creature as going home this tick
     std::optional<rw::ivec2> home_tile(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
-    // RainTracker.Utility for the creature in `room`: 0 for a night creature
-    // or one ignoring the cycle
+    // RainTracker.Utility for the creature in `room`, by its home region's
+    // cycle (where it is if it has no den): 0 for a night creature or one
+    // ignoring the cycle
     float rain_utility(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) noexcept;
+    // a creature moved from room `from` to `to` (a pipe, a warp): counts
+    // the region it changed (the fuzz's)
+    void changed_rooms(sys::game_state& state, dcon::creature_id c, dcon::room_id from, dcon::room_id to, bool warp);
     // AbstractCreature.WantToStayInDenUntilEndOfCycle
     bool want_to_stay(sys::game_state const& state, dcon::creature_id c, dcon::room_id room);
 
@@ -97,6 +101,16 @@ namespace dens {
         std::atomic<uint32_t> room_changes{0};
         std::atomic<uint32_t> prey_taken{0};
         std::atomic<uint32_t> creatures_eaten{0};
+        // creatures that went to another region through a gate, a warp
+        std::atomic<uint32_t> gated_regions{0};
+        std::atomic<uint32_t> warped_regions{0};
+        // trips planned (migrate.hpp), to another region
+        std::atomic<uint32_t> trips{0};
+        std::atomic<uint32_t> cross_trips{0};
+        std::atomic<uint32_t> warp_trips{0};
+        // creatures a warp carried on their own (not pulled along with the
+        // Watcher)
+        std::atomic<uint32_t> warp_carried{0};
     };
     counters& stats() noexcept;
 }

@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "leech.hpp"
+#include "migrate.hpp"
 #include "dens.hpp"
 #include "rain.hpp"
 #include "items.hpp"
@@ -67,22 +68,22 @@ namespace leech {
         bool charging_attack(creature::leech_payload const& x) { return x.charge_counter > 0 && x.charge_counter < 15; }
 
         // what it is latched on to (grasps[0]), if it can be reached
-        creature::target grasped(sys::game_state const& state, dcon::creature_id c) {
+        dcon::creature_id grasped(sys::game_state const& state, dcon::creature_id c) {
             auto const t = creature::grasped(state.world, c, 0);
-            return creature::live(state, t) ? t : creature::target{};
+            return creature::live(state, t) ? t : dcon::creature_id{};
         }
-        creature::target hunt_prey(sys::game_state const& state, dcon::creature_id c) {
+        dcon::creature_id hunt_prey(sys::game_state const& state, dcon::creature_id c) {
             auto const t = pl(state, c).hunt_prey;
-            return creature::live(state, t) ? t : creature::target{};
+            return creature::live(state, t) ? t : dcon::creature_id{};
         }
 
         // ReallyTrulyRealizedInRoom: in the room, not in a pipe
-        bool here(sys::game_state const& state, creature::target p, dcon::room_id room) {
+        bool here(sys::game_state const& state, dcon::creature_id p, dcon::room_id room) {
             return creature::here(state, p, room);
         }
 
         // TargetBodyChunk: SeededRandomRange(ID.RandomSeed, 0, chunks)
-        dcon::body_chunk_id target_chunk(sys::game_state const& state, dcon::creature_id c, creature::target p) {
+        dcon::body_chunk_id target_chunk(sys::game_state const& state, dcon::creature_id c, dcon::creature_id p) {
             rw::unity_random r{state.world.leech_data_get_seed(data(state, c))};
             return creature::chunk_of(state, p, uint32_t(r.range(0, int32_t(creature::chunk_count_of(state, p)))));
         }
@@ -178,7 +179,7 @@ namespace leech {
         }
 
         // LeechSchool.AddPrey
-        void add_prey(sys::game_state& state, dcon::creature_id k, creature::target p) {
+        void add_prey(sys::game_state& state, dcon::creature_id k, dcon::creature_id p) {
             auto& w = state.world;
             auto const d = data(state, k);
             auto& prey = w.leech_data_get_prey(d).items;
@@ -209,7 +210,7 @@ namespace leech {
 
         // LeechSchool.BitDeadPrey: a dead one is only good for so many bites
         // (by its bodySize)
-        void bit_dead_prey(sys::game_state& state, dcon::creature_id c, creature::target p) {
+        void bit_dead_prey(sys::game_state& state, dcon::creature_id c, dcon::creature_id p) {
             auto& w = state.world;
             auto const d = data(state, keeper(state, c));
             auto& prey = w.leech_data_get_prey(d).items;
@@ -224,26 +225,25 @@ namespace leech {
 
         // Creature.Grab of `p`'s chunk `j`, and the bite (Violence: Bite,
         // 0.02 damage, 3 stun)
-        void latch_on(sys::game_state& state, dcon::creature_id c, creature::target p, uint32_t j) {
+        void latch_on(sys::game_state& state, dcon::creature_id c, dcon::creature_id p, uint32_t j) {
             auto& w = state.world;
             creature::grab(state, c, 0, p, j);
-            state.play_sound(p.is_player() ? sound::sound_id::leech_attatch_player : sound::sound_id::leech_attatch_npc, creature::room_of(state, c), main_pos(state, c));
+            state.play_sound(creature::is_slugcat(w, p) ? sound::sound_id::leech_attatch_player : sound::sound_id::leech_attatch_npc, creature::room_of(state, c), main_pos(state, c));
             auto const k = creature::chunk_of(state, p, j);
             vec2 const momentum = w.body_chunk_get_vel(main(state, c)) * w.body_chunk_get_mass(main(state, c));
-            if (p.is_player()) {
+            if (creature::is_slugcat(w, p)) {
                 w.body_chunk_get_vel(k) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(k), 10.f);
-                creature::stun_target(state, p, int32_t((0.02f * 30.f + 3.f) / 1.f));
+                creature::stun(state, p, int32_t((0.02f * 30.f + 3.f) / 1.f));
             } else {
                 creature::violence_on(state, p, j, momentum, 0.02f, 3.f, creature::damage_type::bite, creature::template_of(state, c));
             }
         }
 
         // Leech.ConsiderOtherCreature: prey for the school, or another school to join
-        void consider(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id other, dcon::player_id p) {
+        void consider(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id t) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
             vec2 const at = main_pos(state, c);
-            auto const t = p ? creature::of(p) : creature::of(other);
             if (!here(state, t, room.id))
                 return;
             uint32_t const n = creature::chunk_count_of(state, t);
@@ -253,7 +253,8 @@ namespace leech {
             if (!custom::dist_less(at, cp, 150.f) || !room.visual_contact(at, cp))
                 return;
             // what it eats is prey for the school (the snails it fears aren't ported)
-            if (p || w.creature_get_type(other) != creature::type::leech) {
+            dcon::creature_id const other = t;
+            if (w.creature_get_type(other) != creature::type::leech) {
                 if (creature::static_relationship(state, c, t).type == creature::rel::eats)
                     add_prey(state, keeper(state, c), t);
                 return;
@@ -364,7 +365,7 @@ namespace leech {
             ivec2& territory = w.leech_data_get_territory(d);
             if (sea && territory.x < 0 && accessible(room, room_view::get_tile_position(at)))
                 territory = room_view::get_tile_position(at);
-            pl(state, c).hunt_prey = creature::target{};
+            pl(state, c).hunt_prey = dcon::creature_id{};
             if (pl(state, c).flee_from_rain) {
                 // FleeFromRainGoal: a den's pipe (dens.hpp)
                 auto& x = pl(state, c);
@@ -383,7 +384,7 @@ namespace leech {
                     auto& e = prey[size_t(i)];
                     if (e.leeched_out)
                         continue;
-                    auto const p = creature::live(state, e.who) ? e.who : creature::target{};
+                    auto const p = creature::live(state, e.who) ? e.who : dcon::creature_id{};
                     vec2 const tp = p ? w.body_chunk_get_pos(target_chunk(state, c, p)) : vec2{0.f, 0.f};
                     if (p && custom::dist_less(tp, at, visual_radius) && here(state, p, room.id) && room.visual_contact(tp, at)) {
                         float score = rw::distance(tp, at) / mathf::lerp(1.f, 1.f, 0.7f);
@@ -432,13 +433,8 @@ namespace leech {
                     for (uint32_t i = 0; i < school.n; ++i)
                         if (school.ids[i] != c && custom::dist_less(at, main_pos(state, school.ids[i]), 25.f))
                             sd += custom::dir_vec(main_pos(state, school.ids[i]), at) * 0.1f;
-                    if (auto const pp = creature::as_player(state, prey)) {
-                        if (auto const sc = w.player_get_entering_shortcut(pp)) {
-                            x.off_shoot_goal = room_view::middle_of_tile(*sc);
-                            x.has_goal = 1;
-                        }
-                    } else if (auto const o = creature::as_creature(state, prey); o && w.creature_get_entering_shortcut(o).x >= 0) {
-                        x.off_shoot_goal = room_view::middle_of_tile(w.creature_get_entering_shortcut(o));
+                    if (creature::live(state, prey) && w.creature_get_entering_shortcut(prey).x >= 0) {
+                        x.off_shoot_goal = room_view::middle_of_tile(w.creature_get_entering_shortcut(prey));
                         x.has_goal = 1;
                     }
                     if (custom::dist_less(at, tp, trad + 50.f) && !custom::dist_less(at, tp, trad + 10.f) && rw::dot(rw::normalized(sd), rw::normalized(tp - at)) > 0.6f)
@@ -493,29 +489,18 @@ namespace leech {
             }
             sd = rw::normalized(sd);
             // one creature of the room at random (Room.abstractRoom.creatures:
-            // the creatures kind by kind, then the slugcats)
-            uint32_t creatures = 0, players = 0;
+            // the slugcats, then the creatures kind by kind)
+            uint32_t creatures = 0;
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id) { ++creatures; });
-            rooms::for_each_player(state, room.id, [&](dcon::player_id) { ++players; });
-            if (creatures + players > 0) {
-                uint32_t const pick = uint32_t(rng.range(0, int32_t(creatures + players)));
-                if (pick < creatures) {
-                    uint32_t k = 0;
-                    dcon::creature_id other;
-                    rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) {
-                        if (k++ == pick)
-                            other = o;
-                    });
-                    consider(state, c, room, other, dcon::player_id{});
-                } else {
-                    uint32_t k = creatures;
-                    dcon::player_id p;
-                    rooms::for_each_player(state, room.id, [&](dcon::player_id o) {
-                        if (k++ == pick)
-                            p = o;
-                    });
-                    consider(state, c, room, dcon::creature_id{}, p);
-                }
+            if (creatures > 0) {
+                uint32_t const pick = uint32_t(rng.range(0, int32_t(creatures)));
+                uint32_t k = 0;
+                dcon::creature_id other;
+                rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) {
+                    if (k++ == pick)
+                        other = o;
+                });
+                consider(state, c, room, other);
             }
             // a school member gone or out of sight leaves it
             school = members(state, room.id, keeper(state, c));
@@ -541,16 +526,15 @@ namespace leech {
             // (it never goes into a pipe: creatures don't travel them here)
             if (jungle) {
                 // latching on to what it bumps into and eats (Room.abstractRoom.creatures:
-                // the creatures kind by kind, then the slugcats)
+                // the slugcats, then the creatures kind by kind)
                 if (rng.value() < 0.3f) {
-                    std::vector<creature::target> all;
-                    rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) { all.push_back(creature::of(o)); });
-                    rooms::for_each_player(state, room.id, [&](dcon::player_id p) { all.push_back(creature::of(p)); });
+                    std::vector<dcon::creature_id> all;
+                    rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) { all.push_back(o); });
                     uint32_t const count = uint32_t(all.size());
                     int32_t const first = rng.range(0, int32_t(count) - 1);
                     for (uint32_t i = 0; i < 5 && count > 0; ++i) {
                         auto const p = all[(i + uint32_t(first)) % count];
-                        if (p == creature::of(c) || creature::dead(state, p) || !here(state, p, room.id)
+                        if (p == c || creature::dead(state, p) || !here(state, p, room.id)
                         || creature::static_relationship(state, c, p).type != creature::rel::eats)
                             continue;
                         bool done = false;
@@ -657,7 +641,7 @@ namespace leech {
             if (x.variant == variant::jungle) {
                 // it drains a slugcat's food, then its strength (a creature: a
                 // little bite now and then, LeechSchool's jungle leech's)
-                auto const pp = creature::as_player(state, p);
+                auto const pp = creature::player_of(state, p);
                 if (!pp) {
                     if (!dead && rng.value() < 0.009f)
                         creature::violence_on(state, p, creature::grasp_chunk(w, c, 0), vec2{0.f, 0.f}, 0.02f, 3.f, creature::damage_type::bite, creature::template_of(state, c));
@@ -667,7 +651,7 @@ namespace leech {
                     }
                     return;
                 }
-                int32_t& st = w.player_get_stun(pp);
+                int32_t& st = w.creature_get_stun(p);
                 if (rng.value() < (st > 40 ? 0.009f : 0.002f)) {
                     int32_t& food = w.player_get_food(pp);
                     if (food > 0) {
@@ -683,7 +667,7 @@ namespace leech {
                             player::die(state, pp);
                     }
                 }
-                if (w.player_get_dead(pp)) {
+                if (player::dead(state, pp)) {
                     state.play_sound(sound::sound_id::leech_detatch_player, room.id, mp);
                     lose_all_grasps(state, c);
                 }
@@ -698,7 +682,7 @@ namespace leech {
             if (!let_go)
                 let_go = rng.value() < 0.00083333335f;
             if (let_go) {
-                state.play_sound(p.is_player() ? sound::sound_id::leech_detatch_player : sound::sound_id::leech_detatch_npc, room.id, mp);
+                state.play_sound(creature::is_slugcat(w, p) ? sound::sound_id::leech_detatch_player : sound::sound_id::leech_detatch_npc, room.id, mp);
                 lose_all_grasps(state, c);
             }
         }
@@ -752,7 +736,7 @@ namespace leech {
         x.air_drown = 0.f;
         x.charge_counter = 0;
         x.loner_counter = 0;
-        x.hunt_prey = creature::target{};
+        x.hunt_prey = dcon::creature_id{};
         x.has_goal = 0;
         x.flee_from_rain = 0;
         w.creature_set_random(c, rng);
@@ -800,6 +784,15 @@ namespace leech {
                 x.flee_from_rain = 1;
             if (x.flee_from_rain && x.has_goal)
                 dens::home_tile(state, c, room);
+            // (AbstractBehavior: now and then a trip to another room, the
+            // way out its off shoot goal)
+            if (!x.flee_from_rain && !x.hunt_prey) {
+                migrate::idle_roll(state, c, room);
+                if (auto const t = migrate::travel_tile(state, c, room)) {
+                    x.off_shoot_goal = room_view::middle_of_tile(*t);
+                    x.has_goal = 1;
+                }
+            }
             if (physics::submersion(state, room, m) > 0.2f)
                 swim(state, c, room);
             else
@@ -818,7 +811,7 @@ namespace leech {
                     x.charge_counter = 0;
                     if (creature::dead(state, p))
                         bit_dead_prey(state, c, p);
-                    x.hunt_prey = creature::target{};
+                    x.hunt_prey = dcon::creature_id{};
                     x.land_walk_dir = rng.value() < 0.5f ? -1 : 1;
                     break;
                 }
@@ -848,11 +841,11 @@ namespace leech {
             die(state, c);
     }
 
-    void release(sys::game_state& state, dcon::creature_id c, creature::target p) {
+    void release(sys::game_state& state, dcon::creature_id c, dcon::creature_id p) {
         if (creature::grasped(state.world, c, 0) == p)
             lose_all_grasps(state, c);
         if (pl(state, c).hunt_prey == p)
-            pl(state, c).hunt_prey = creature::target{};
+            pl(state, c).hunt_prey = dcon::creature_id{};
         // the school forgets it
         auto& w = state.world;
         auto const d = data(state, c);
@@ -865,7 +858,7 @@ namespace leech {
                 ++i;
     }
 
-    creature::target attached_to(sys::game_state const& state, dcon::creature_id c) noexcept {
+    dcon::creature_id attached_to(sys::game_state const& state, dcon::creature_id c) noexcept {
         return grasped(state, c);
     }
 

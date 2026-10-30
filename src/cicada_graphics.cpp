@@ -35,13 +35,6 @@ namespace cicada_graphics {
             return state.world.body_chunk_get_vel(cicada::chunk(state, c, i));
         }
 
-        dcon::player_id player_of(sys::game_state const& state, uint8_t v) {
-            if (v == 0)
-                return dcon::player_id{};
-            dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-            return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
-        }
-
         // Color.Lerp
         vec3 mix(vec3 a, vec3 b, float t) {
             return a + (b - a) * mathf::clamp01(t);
@@ -280,7 +273,7 @@ namespace cicada_graphics {
             }
 
         // the tentacles
-        auto const holder = player_of(state, w.creature_get_payload(c).cicada.held_by);
+        auto const holder = creature::player_of(state, creature::holder(state, c));
         auto const sticky = w.creature_get_payload(c).cicada.sticky;
         std::optional<dcon::body_chunk_id> cling;
         if (sticky && creature::live(state, sticky) && w.creature_get_payload(c).cicada.sticky_chunk < creature::chunk_count_of(state, sticky))

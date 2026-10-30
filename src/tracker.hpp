@@ -1,7 +1,7 @@
 #pragma once
 
-// The AI modules every ported AI shares, over every creature and slugcat of
-// its room: Tracker (noticing a random one of the room each tick, keeping up
+// The AI modules every ported AI shares, over every creature of its room (the
+// slugcats included): Tracker (noticing a random one of the room each tick, keeping up
 // visual contact, forgetting), RelationshipTracker (the dynamic
 // relationship of each, sorted into a module), PreyTracker (the most
 // attractive prey, frustration), ThreatTracker (threat of tiles, the most
@@ -23,7 +23,6 @@
 
 namespace tracker {
     using creature::relationship;
-    using creature::target;
     using creature::track_module;
     using creature::tracked;
     using creature::tracker_state;
@@ -79,9 +78,9 @@ namespace tracker {
     inline tracker_state const& of(sys::game_state const& state, dcon::creature_id c) { return state.world.creature_get_tracker(c); }
 
     // a creature's representation of `t`, if it has one
-    tracked* find(tracker_state& s, target t) noexcept;
-    tracked const* find(tracker_state const& s, target t) noexcept;
-    inline tracked const* find(sys::game_state const& state, dcon::creature_id c, target t) noexcept { return find(of(state, c), t); }
+    tracked* find(tracker_state& s, dcon::creature_id t) noexcept;
+    tracked const* find(tracker_state const& s, dcon::creature_id t) noexcept;
+    inline tracked const* find(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) noexcept { return find(of(state, c), t); }
 
     // BestGuessForPosition's tile
     inline rw::ivec2 best_guess(tracked const& r) noexcept { return world::room_view::get_tile_position(r.last_seen); }
@@ -89,7 +88,7 @@ namespace tracker {
     float chance_of_finding(tracked const& r, int32_t see_around_corners) noexcept;
     // AIModule's DynamicRelationship(rep): the current one, or the static one
     // for something it doesn't track
-    relationship dynamic_relationship(sys::game_state const& state, dcon::creature_id c, target t) noexcept;
+    relationship dynamic_relationship(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) noexcept;
 
     // ArtificialIntelligence.Update's modules: Tracker.Update,
     // RelationshipTracker.Update, PreyTracker.Update, ThreatTracker.Update,
@@ -97,9 +96,9 @@ namespace tracker {
     // (abstractCreature.pos)
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room, rw::ivec2 at, params const& p, hooks const& h);
     // Tracker.SeeCreature: visual contact with `t` now (noticed if new)
-    void see(sys::game_state& state, dcon::creature_id c, world::room_view const& room, target t, hooks const& h);
+    void see(sys::game_state& state, dcon::creature_id c, world::room_view const& room, dcon::creature_id t, hooks const& h);
     // Tracker.ForgetCreature
-    void forget(sys::game_state& state, dcon::creature_id c, target t);
+    void forget(sys::game_state& state, dcon::creature_id c, dcon::creature_id t);
     // forgets everything (a new room: the AI's NewRoom)
     void clear(sys::game_state& state, dcon::creature_id c);
 
@@ -124,7 +123,7 @@ namespace tracker {
     // AgressionTracker
     inline tracked const* aggression(tracker_state const& s) noexcept { return s.aggression ? find(s, s.aggression) : nullptr; }
     float aggression_utility(tracker_state const& s) noexcept;
-    void increment_anger(sys::game_state& state, dcon::creature_id c, target t, float add);
+    void increment_anger(sys::game_state& state, dcon::creature_id c, dcon::creature_id t, float add);
     // SetAnger (base < 0: kept)
-    void set_anger(sys::game_state& state, dcon::creature_id c, target t, float anger, float base);
+    void set_anger(sys::game_state& state, dcon::creature_id c, dcon::creature_id t, float anger, float base);
 }

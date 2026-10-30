@@ -198,16 +198,9 @@ namespace items {
             explicit operator bool() const noexcept { return bool(item); }
         };
 
-        void set_hand(sys::game_state& state, dcon::player_id p, uint32_t hand, dcon::item_id it) {
-            if (hand == 0)
-                state.world.player_set_grasp0(p, it);
-            else
-                state.world.player_set_grasp1(p, it);
-        }
-
+        // the item in the slugcat creature's grasp `hand`
         grasp grasp_in_hand(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
-            auto const it = hand == 0 ? state.world.player_get_grasp0(p) : state.world.player_get_grasp1(p);
-            return grasp{it, hand};
+            return grasp{creature::grasped_item(state.world, player::creature_of(state, p), hand), hand};
         }
         // the hand holds something: an item or a baby centipede
         bool hand_busy(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
@@ -216,13 +209,7 @@ namespace items {
 
         // Creature.ReleaseGrasp
         void release_grasp(sys::game_state& state, dcon::player_id p, grasp g) {
-            auto& w = state.world;
-            auto const o = body(state, g.item);
-            uint8_t& n = w.physical_object_get_grabbed_by_count(o);
-            if (n > 0)
-                --n;
-            set_hand(state, p, g.hand, dcon::item_id{});
-            w.item_set_grabbed_by(g.item, dcon::player_id{});
+            creature::release_grasp(state, player::creature_of(state, p), g.hand);
         }
 
         // Player.ThrowDirection
@@ -241,7 +228,7 @@ namespace items {
             auto& w = state.world;
             auto const c = chunk(state, it);
             vec2 const main_vel = w.body_chunk_get_vel(player::body_chunk(state, by, 0));
-            w.item_set_thrown_by(it, by);
+            w.item_set_thrown_by(it, player::creature_of(state, by));
             w.item_set_thrown_pos(it, thrown_pos);
             w.item_set_throw_dir(it, throw_dir);
             w.item_set_change_dir_counter(it, 3);
@@ -510,17 +497,14 @@ namespace items {
             auto& w = state.world;
             if (w.item_get_grabbed_by(it) || hand_busy(state, p, hand))
                 return;
-            set_hand(state, p, hand, it);
-            w.item_set_grabbed_by(it, p);
-            w.item_set_grabbed_hand(it, uint8_t(hand));
-            ++w.physical_object_get_grabbed_by_count(body(state, it));
+            creature::grab_item(state, player::creature_of(state, p), hand, it);
             // Spear.PickedUp: pulled out of a wall
             if (is_spear(state, it) && w.item_get_has_beam_state(it)) {
                 reset_beam_state(state, it);
                 w.item_set_vibrate(it, 20);
             }
             change_mode(state, it, weapon_mode::carried);
-            w.item_set_thrown_by(it, dcon::player_id{});
+            w.item_set_thrown_by(it, dcon::creature_id{});
             // picked off its stalk (DangleFruit, Mushroom, SlimeMold)
             w.item_set_stalk(it, std::nullopt);
             state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_pick_up_spear : sound::sound_id::slugcat_pick_up_rock,
@@ -887,10 +871,11 @@ namespace items {
                     w.item_get_rotation_speed(it) *= 0.7f;
                 break;
             case weapon_mode::thrown: {
-                auto const by = w.item_get_thrown_by(it);
+                // (only slugcats throw here)
+                auto const by = creature::player_of(state, w.item_get_thrown_by(it));
                 ivec2& throw_dir = w.item_get_throw_dir(it);
                 vec2& vel = w.body_chunk_get_vel(c);
-                if (w.item_get_change_dir_counter(it) > 0 && by && w.player_is_valid(by) && rooms::reachable(state, by) && throw_direction(state, by) == -throw_dir.x) {
+                if (w.item_get_change_dir_counter(it) > 0 && by && throw_direction(state, by) == -throw_dir.x) {
                     w.item_set_change_dir_counter(it, 0);
                     throw_dir = ivec2{throw_direction(state, by), 0};
                     vel.x = std::fabs(vel.x) * float(throw_dir.x);
@@ -965,9 +950,9 @@ namespace items {
                             state.play_sound(sound::sound_id::rock_hit_creature, room.id, pos);
                         }
                         w.item_set_forbidden_to_player(it, 40);
-                        w.item_set_thrown_by(it, dcon::player_id{});
+                        w.item_set_thrown_by(it, dcon::creature_id{});
                     };
-                    if (creature::trace(state, room.id, pos, pos + vel, rad, hit, hit_part)) {
+                    if (creature::trace(state, room.id, pos, pos + vel, rad, w.item_get_thrown_by(it), hit, hit_part)) {
                         // a body chunk or an appendage; a Rock turns a lizard
                         // around (Lizard.Violence)
                         bool const rock = w.item_get_type(it) == world::item_type::rock;
@@ -1060,7 +1045,7 @@ namespace items {
     }
 
     dcon::player_id grabber(sys::game_state const& state, dcon::item_id item) noexcept {
-        return state.world.item_get_grabbed_by(item);
+        return creature::player_of(state, state.world.item_get_grabbed_by(item));
     }
 
     namespace {
@@ -1077,7 +1062,7 @@ namespace items {
             auto const o = physics::create_object(state, room, d);
             physics::add_chunk(state, o, pos, 5.f, 0.07f);
             auto const it = w.create_item();
-            w.item_set_grabbed_by(it, dcon::player_id{});
+            w.item_set_grabbed_by(it, dcon::creature_id{});
             bool const pearl = type == world::item_type::data_pearl;
             w.item_set_type(it, type);
             w.item_set_mode(it, weapon_mode::free);
@@ -1095,7 +1080,7 @@ namespace items {
             w.item_set_forbidden_to_player(it, 0);
             w.item_set_override_exit_thrown_speed(it, 0.f);
             w.item_set_throw_mode_frames(it, -1);
-            w.item_set_thrown_by(it, dcon::player_id{});
+            w.item_set_thrown_by(it, dcon::creature_id{});
             // erasable slots are reused: clear the spear state too
             w.item_set_vibrate(it, 0);
             w.item_set_has_stuck(it, 0);
@@ -1291,7 +1276,7 @@ namespace items {
         if (w.item_get_has_beam_state(item))
             reset_beam_state(state, item);
         if (auto const by = w.item_get_grabbed_by(item))
-            release_grasp(state, by, grasp{item, w.item_get_grabbed_hand(item)});
+            creature::release_grasp(state, by, w.item_get_grabbed_hand(item));
         auto const o = body(state, item);
         w.delete_item(item);
         if (o)
@@ -1482,7 +1467,7 @@ namespace items {
             if (back_spear(state, p))
                 return;
             if (auto const by = w.item_get_grabbed_by(spear))
-                release_grasp(state, by, grasp{spear, w.item_get_grabbed_hand(spear)});
+                creature::release_grasp(state, by, w.item_get_grabbed_hand(spear));
             w.player_set_back_spear(p, spear);
             change_mode(state, spear, weapon_mode::on_back);
             w.player_set_back_locked(p, 1);
@@ -1711,7 +1696,7 @@ namespace items {
         // bites every 15 ticks (eatCounter)
         bool eating = false;
         int32_t& eat_counter = w.player_get_eat_counter(p);
-        if (edible && want_pick < 1 && (input[0].pckp || eat_counter <= 15) && w.player_get_stun(p) <= 0 && !w.player_get_dead(p)) {
+        if (edible && want_pick < 1 && (input[0].pckp || eat_counter <= 15) && player::stun_of(state, p) <= 0 && !player::dead(state, p)) {
             auto const main = player::body_chunk(state, p, 0);
             if (custom::dist_less(w.body_chunk_get_pos(main), w.body_chunk_get_last_pos(main), 3.6f)) {
                 eating = true;
@@ -1824,7 +1809,7 @@ namespace items {
         vec2 const v3 = custom::dir_vec(v2, v);
         float& flip = w.player_get_back_flip(p);
         vec2 rot;
-        bool const awake = w.player_get_stun(p) <= 0 && !w.player_get_dead(p);
+        bool const awake = player::stun_of(state, p) <= 0 && !player::dead(state, p);
         using ::player::body_mode_index;
         if (awake) {
             auto const mode = w.player_get_body_mode(p);

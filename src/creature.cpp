@@ -29,6 +29,7 @@ namespace creature {
 
     char const* to_string(type t) noexcept {
         switch (t) {
+        case type::slugcat: return "slugcat";
         case type::centipede: return "centipede";
         case type::dropbug: return "dropwig";
         case type::cicada: return "squidcada";
@@ -62,7 +63,15 @@ namespace creature {
         w.creature_set_travel_tile(c, rw::ivec2{-1, -1});
         w.creature_set_rain_death(c, 0.f);
         w.creature_set_spawn_flags(c, 0);
+        w.creature_set_vessel_last_progress(c, 0.f);
+        w.creature_set_stun(c, 0);
+        w.creature_set_dead(c, 0);
+        w.creature_set_grasps(c, grasp_pair{});
+        w.creature_set_killed_by(c, 0);
         switch (t) {
+        case type::slugcat:
+            pl.slugcat = slugcat_payload{};
+            break;
         case type::centipede:
             pl.centipede = centipede_payload{};
             pl.centipede.data = uint16_t(w.create_centipede_data().index());
@@ -96,6 +105,7 @@ namespace creature {
     void erase(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         switch (w.creature_get_type(c)) {
+        case type::slugcat: break;
         case type::centipede: w.delete_centipede_data(centipede_data(w, c)); break;
         case type::dropbug: w.delete_dropbug_data(dropbug_data(w, c)); break;
         case type::cicada: w.delete_cicada_data(cicada_data(w, c)); break;
@@ -163,182 +173,139 @@ namespace creature {
         return state.world.creature_get_type(c) == type::centipede ? centipede::head_index(state, c) : 0;
     }
 
-    dcon::player_id player_of(sys::game_state const& state, uint8_t v) noexcept {
-        if (v == 0)
+    //
+    // Other creatures
+    //
+
+    dcon::player_id player_of(sys::game_state const& state, dcon::creature_id c) noexcept {
+        if (!live(state, c) || !is_slugcat(state.world, c))
             return dcon::player_id{};
-        dcon::player_id const p{dcon::player_id::value_base_t(v - 1)};
-        return state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
+        return dcon::player_id{dcon::player_id::value_base_t(state.world.creature_get_payload(c).slugcat.player)};
     }
 
-    //
-    // Targets
-    //
-
-    dcon::player_id as_player(sys::game_state const& state, target t) noexcept {
-        auto const p = player_id_of(t);
-        return p && state.world.player_is_valid(p) && rooms::reachable(state, p) ? p : dcon::player_id{};
+    dcon::physical_object_id body_of(sys::game_state const& state, dcon::creature_id c) noexcept {
+        return live(state, c) ? body(state, c) : dcon::physical_object_id{};
     }
 
-    dcon::creature_id as_creature(sys::game_state const& state, target t) noexcept {
-        auto const c = creature_id_of(t);
-        return c && state.world.creature_is_valid(c) && rooms::reachable(state, c) ? c : dcon::creature_id{};
+    uint32_t chunk_count_of(sys::game_state const& state, dcon::creature_id c) noexcept {
+        return live(state, c) ? chunk_count(state, c) : 0;
     }
 
-    dcon::physical_object_id body_of(sys::game_state const& state, target t) noexcept {
-        if (auto const p = as_player(state, t))
-            return player::body(state, p);
-        if (auto const c = as_creature(state, t))
-            return body(state, c);
-        return dcon::physical_object_id{};
+    dcon::body_chunk_id chunk_of(sys::game_state const& state, dcon::creature_id c, uint32_t i) noexcept {
+        return physics::chunk(state, body_of(state, c), i);
     }
 
-    uint32_t chunk_count_of(sys::game_state const& state, target t) noexcept {
-        auto const o = body_of(state, t);
-        if (!o)
-            return 0;
-        auto const r = state.world.physical_object_range_of_chunk_ownership(o);
-        return uint32_t(r.second - r.first);
-    }
-
-    dcon::body_chunk_id chunk_of(sys::game_state const& state, target t, uint32_t i) noexcept {
-        return physics::chunk(state, body_of(state, t), i);
-    }
-
-    uint32_t main_chunk_of(sys::game_state const& state, target t) noexcept {
-        if (auto const c = as_creature(state, t))
-            return main_chunk(state, c);
-        return 0;
-    }
-
-    vec2 main_pos(sys::game_state const& state, target t) noexcept {
-        auto const o = body_of(state, t);
+    vec2 main_pos(sys::game_state const& state, dcon::creature_id c) noexcept {
+        auto const o = body_of(state, c);
         if (!o)
             return vec2{0.f, 0.f};
-        return state.world.body_chunk_get_pos(physics::chunk(state, o, main_chunk_of(state, t)));
+        return state.world.body_chunk_get_pos(physics::chunk(state, o, main_chunk(state, c)));
     }
 
-    float mass_of(sys::game_state const& state, target t) noexcept {
-        auto const o = body_of(state, t);
-        float m = 0.f;
-        if (o)
-            state.world.physical_object_for_each_chunk_ownership_as_owner(o, [&](dcon::chunk_ownership_id co) {
-                m += state.world.body_chunk_get_mass(state.world.chunk_ownership_get_chunk(co));
-            });
-        return m;
+    float mass_of(sys::game_state const& state, dcon::creature_id c) noexcept {
+        return live(state, c) ? total_mass(state, c) : 0.f;
     }
 
-    bool dead(sys::game_state const& state, target t) noexcept {
-        if (auto const p = as_player(state, t))
-            return state.world.player_get_dead(p) != 0;
-        if (auto const c = as_creature(state, t))
-            return state.world.creature_get_dead(c) != 0;
-        return true;
+    bool eaten(sys::game_state const& state, dcon::creature_id c) noexcept {
+        auto const p = player_of(state, c);
+        return p && state.world.player_get_eaten(p);
     }
 
-    bool consious(sys::game_state const& state, target t) noexcept {
-        if (auto const p = as_player(state, t))
-            return state.world.player_get_stun(p) <= 0 && !state.world.player_get_dead(p);
-        if (auto const c = as_creature(state, t))
-            return consious(state, c);
-        return false;
-    }
-
-    bool here(sys::game_state const& state, target t, dcon::room_id room) noexcept {
+    bool here(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) noexcept {
         auto const& w = state.world;
-        if (auto const p = as_player(state, t))
-            return !w.player_get_in_shortcut(p) && player::body(state, p) && rooms::room_of(state, p) == room;
-        if (auto const c = as_creature(state, t))
-            return w.creature_get_away(c) == 0 && body(state, c) && rooms::room_of(state, c) == room;
-        return false;
+        if (!live(state, c) || w.creature_get_away(c) != 0 || !body(state, c) || room_of(state, c) != room)
+            return false;
+        // an eaten slugcat is dead and gone (Destroy in vanilla)
+        return !is_slugcat(w, c) || !w.player_get_eaten(player_of(state, c));
     }
 
     //
     // Grasps
     //
 
-    void grab(sys::game_state& state, dcon::creature_id c, uint32_t i, target t, uint32_t k) {
+    namespace {
+        void hold(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::physical_object_id o, uint32_t k) {
+            auto& w = state.world;
+            if (grasped_object(w, c, i))
+                release_grasp(state, c, i);
+            auto& g = w.creature_get_grasps(c);
+            g.obj[i] = o;
+            g.chunk[i] = uint8_t(k);
+            if (o)
+                ++w.physical_object_get_grabbed_by_count(o);
+        }
+    }
+
+    void grab(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id t, uint32_t k) {
+        hold(state, c, i, body_of(state, t), k);
+    }
+
+    void grab_item(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::item_id it) {
         auto& w = state.world;
-        auto& g = w.creature_get_grasps(c);
-        if (g.who[i])
-            release_grasp(state, c, i);
-        g.who[i] = t;
-        g.chunk[i] = uint8_t(k);
-        if (auto const o = body_of(state, t))
-            ++w.physical_object_get_grabbed_by_count(o);
+        hold(state, c, i, w.item_get_body_from_item_body(it), 0);
+        w.item_set_grabbed_by(it, c);
+        w.item_set_grabbed_hand(it, uint8_t(i));
     }
 
     void release_grasp(sys::game_state& state, dcon::creature_id c, uint32_t i) {
         auto& w = state.world;
         auto& g = w.creature_get_grasps(c);
-        if (!g.who[i])
+        auto const o = g.obj[i];
+        if (!o)
             return;
-        if (auto const o = body_of(state, g.who[i])) {
-            uint8_t& n = w.physical_object_get_grabbed_by_count(o);
-            if (n > 0)
-                --n;
-        }
-        g.who[i] = target{};
+        uint8_t& n = w.physical_object_get_grabbed_by_count(o);
+        if (n > 0)
+            --n;
+        if (auto const it = w.physical_object_get_item_from_item_body(o); it && w.item_get_grabbed_by(it) == c)
+            w.item_set_grabbed_by(it, dcon::creature_id{});
+        g.obj[i] = dcon::physical_object_id{};
         g.chunk[i] = 0;
     }
 
-    bool held_by_creature(sys::game_state const& state, target t, dcon::room_id room) noexcept {
-        bool held = false;
-        for_each_holder(state, room, t, [&](dcon::creature_id, uint32_t) { held = true; });
-        return held;
+    dcon::creature_id holder(sys::game_state const& state, dcon::creature_id t, uint32_t* grasp) noexcept {
+        dcon::creature_id h;
+        if (!live(state, t))
+            return h;
+        for_each_holder(state, room_of(state, t), t, [&](dcon::creature_id o, uint32_t i) {
+            if (h)
+                return;
+            h = o;
+            if (grasp)
+                *grasp = i;
+        });
+        return h;
     }
 
     //
     // Fights
     //
 
+    kill_counts& kills() noexcept {
+        static kill_counts k;
+        return k;
+    }
+
     namespace {
-        // Player.Violence through Creature.Violence as a creature deals it:
-        // a stun, death from a full point of damage; a slugcat stunned hard
-        // drops what it holds (not while held in jaws: Player.dangerGrasp)
-        void player_violence(sys::game_state& state, dcon::player_id p, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
-            auto& w = state.world;
-            auto const c = player::body_chunk(state, p, k);
-            w.body_chunk_get_vel(c) += momentum / w.body_chunk_get_mass(c);
-            int32_t const st = int32_t(damage * 30.f + stun_bonus);
-            player::stun(state, p, st);
-            if (!held_by_creature(state, of(p), rooms::room_of(state, p)) && st > w.player_get_random(p).range(5, 12))
-                items::release_all(state, p);
-            if (damage >= 1.f)
-                player::die(state, p);
+        void killed(sys::game_state& state, dcon::creature_id t, tmpl source) {
+            state.world.creature_set_killed_by(t, uint8_t(uint32_t(source) + 1));
+            ++kills().n[size_t(source)][size_t(template_of(state, t))];
         }
     }
 
-    void violence_on(sys::game_state& state, target t, uint32_t k, vec2 momentum, float damage, float stun_bonus, damage_type type, tmpl source) {
-        if (auto const p = as_player(state, t)) {
-            player_violence(state, p, k, momentum, damage, stun_bonus);
+    void violence_on(sys::game_state& state, dcon::creature_id t, uint32_t k, vec2 momentum, float damage, float stun_bonus, damage_type type, tmpl source) {
+        if (!live(state, t))
             return;
-        }
-        auto const c = as_creature(state, t);
-        if (!c)
-            return;
-        bool const was_dead = state.world.creature_get_dead(c) != 0;
-        violence(state, c, hit_part{int32_t(k)}, momentum, damage, stun_bonus, type);
-        if (!was_dead && state.world.creature_get_dead(c))
-            state.world.creature_set_killed_by(c, uint8_t(uint32_t(source) + 1));
+        bool const was_dead = state.world.creature_get_dead(t) != 0;
+        violence(state, t, hit_part{int32_t(k)}, momentum, damage, stun_bonus, type);
+        if (!was_dead && state.world.creature_get_dead(t))
+            killed(state, t, source);
     }
 
-    void stun_target(sys::game_state& state, target t, int32_t st) {
-        if (auto const p = as_player(state, t))
-            player::stun(state, p, st);
-        else if (auto const c = as_creature(state, t))
-            stun(state, c, st);
-    }
-
-    void kill(sys::game_state& state, target t, tmpl source) {
-        if (auto const p = as_player(state, t)) {
-            player::die(state, p);
+    void kill(sys::game_state& state, dcon::creature_id t, tmpl source) {
+        if (!live(state, t) || state.world.creature_get_dead(t))
             return;
-        }
-        auto const c = as_creature(state, t);
-        if (!c || state.world.creature_get_dead(c))
-            return;
-        die(state, c);
-        state.world.creature_set_killed_by(c, uint8_t(uint32_t(source) + 1));
+        die(state, t);
+        killed(state, t, source);
     }
 
     //
@@ -347,6 +314,7 @@ namespace creature {
 
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 pos, spawn_desc const& d) {
         switch (d.kind) {
+        case type::slugcat: break;
         case type::centipede: return centipede::create(state, room, pos, d.size, centipede::variant(d.variety % centipede::variant_count));
         case type::dropbug: return dropbug::create(state, room, pos, d.relocate);
         case type::cicada: return cicada::create(state, room, pos, d.size != 0.f);
@@ -360,6 +328,7 @@ namespace creature {
 
     void destroy(sys::game_state& state, dcon::creature_id c) {
         switch (state.world.creature_get_type(c)) {
+        case type::slugcat: player::destroy(state, player_of(state, c)); return;
         case type::centipede: centipede::destroy(state, c); return;
         case type::dropbug: dropbug::destroy(state, c); return;
         case type::cicada: cicada::destroy(state, c); return;
@@ -382,6 +351,8 @@ namespace creature {
         std::string const dead = w.creature_get_dead(c) ? " dead" : "";
         auto const& pl = w.creature_get_payload(c);
         switch (w.creature_get_type(c)) {
+        case type::slugcat:
+            return "slugcat at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + dead;
         case type::centipede:
             return std::string{centipede::to_string(pl.centipede.variant)} + " at " + at(w.body_chunk_get_pos(chunk(state, c, centipede::head_index(state, c))))
                 + " behavior " + behavior + (pl.centipede.flying ? " flying" : "")
@@ -398,14 +369,14 @@ namespace creature {
             auto const x = lizard_data(w, c);
             return std::string{lizard::to_string(pl.lizard.breed)} + " lizard at " + at(w.body_chunk_get_pos(chunk(state, c, 0)))
                 + " behavior " + behavior + " animation " + std::to_string(int(w.lizard_data_get_core(x).anim))
-                + " legs " + std::to_string(w.lizard_data_get_graphics(x).legs_grabbing) + (lizard::grasped(state, c) ? " holding the slugcat" : "")
+                + " legs " + std::to_string(w.lizard_data_get_graphics(x).legs_grabbing) + (lizard::grasped(state, c) ? std::string{" holding a "} + to_string(w.creature_get_type(lizard::grasped(state, c))) : std::string{})
                 + (w.lizard_data_get_tongue(x).state != lizard::tongue_state::hidden ? " tongue out" : "") + dead;
         }
         case type::daddy: {
             bool held = false, eating = false;
             w.for_each_player([&](dcon::player_id p) {
-                held = held || daddy::holds(state, c, of(p));
-                eating = eating || daddy::eating(state, c, of(p));
+                held = held || daddy::holds(state, c, w.player_get_creature(p));
+                eating = eating || daddy::eating(state, c, w.player_get_creature(p));
             });
             return std::string{daddy::to_string(pl.daddy.variant)} + " long legs at " + at(daddy::middle_of_body(state, c))
                 + " behavior " + behavior + " chunks " + std::to_string(chunk_count(state, c))
@@ -456,6 +427,9 @@ namespace creature {
 
         void update_kind(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed) {
             switch (state.world.creature_get_type(c)) {
+            // (player.cpp runs the slugcats, before the room's creatures)
+            case type::slugcat:
+                return;
             case type::centipede:
                 centipede::update(state, c, room);
                 if (viewed)
@@ -495,10 +469,13 @@ namespace creature {
 
         // `c` collides with `t` at all (what holds it, what it carries, a
         // slugcat in a pipe or being eaten don't)
-        bool collides(sys::game_state const& state, dcon::creature_id c, target t, dcon::room_id room) {
+        bool collides(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t, dcon::room_id room) {
             if (!here(state, t, room))
                 return false;
             switch (state.world.creature_get_type(c)) {
+            // a slugcat is pushed about by what it touches, it doesn't push
+            // back on its own (its body's collisions are the creatures')
+            case type::slugcat: return true;
             case type::centipede: return centipede::collides(state, c, t);
             case type::dropbug: return dropbug::collides(state, c, t);
             case type::cicada: return cicada::collides(state, c, t);
@@ -512,8 +489,9 @@ namespace creature {
         }
 
         // the kind's Collide: its chunk `i` touched `t`'s chunk `j`
-        void collide_with(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, target t, uint32_t j) {
+        void collide_with(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j) {
             switch (state.world.creature_get_type(c)) {
+            case type::slugcat: return;
             case type::centipede: centipede::collide(state, c, room, i, t, j); return;
             case type::dropbug: dropbug::collide(state, c, room, i, t, j); return;
             case type::cicada: cicada::collide(state, c, room, i, t, j); return;
@@ -556,33 +534,37 @@ namespace creature {
         // Room object collisions (Room.Update's PhysicalObject pairs in
         // collision layer 1) of a creature with the slugcats and with the
         // creatures after it (each pair once): pushing apart, both kinds'
-        // Collide; its own kind's collide_kin
+        // Collide; its own kind's collide_kin. The slugcats (first in the
+        // room's creatures) don't run this: they meet the others in theirs
         void collide(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
             auto const& w = state.world;
             uint32_t const n = chunk_count(state, c);
             auto const t = w.creature_get_type(c);
-            if (t == type::leech)
+            if (t == type::leech || t == type::slugcat)
                 return;
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (!collides(state, c, of(p), room.id))
-                    return;
-                for (uint32_t i = 0; i < n; ++i)
-                    for (uint32_t j = 0; j < 2; ++j)
-                        if (push_apart(state, chunk(state, c, i), player::body_chunk(state, p, j)))
-                            collide_with(state, c, room, i, of(p), j);
-            });
             float const rc = reach(state, c, n);
             vec2 const oc = w.body_chunk_get_pos(chunk(state, c, 0));
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id other) {
+                auto const ot = w.creature_get_type(other);
+                if (ot == type::slugcat) {
+                    // the slugcat's side has no Collide of its own
+                    if (!collides(state, c, other, room.id))
+                        return;
+                    uint32_t const m = chunk_count(state, other);
+                    for (uint32_t i = 0; i < n; ++i)
+                        for (uint32_t j = 0; j < m; ++j)
+                            if (push_apart(state, chunk(state, c, i), chunk(state, other, j)))
+                                collide_with(state, c, room, i, other, j);
+                    return;
+                }
                 if (other.index() <= c.index())
                     return;
-                auto const ot = w.creature_get_type(other);
                 if (ot == type::leech || (ot == t && !pushes_kin(t)) || w.creature_get_away(other) != 0)
                     return;
                 uint32_t const m = chunk_count(state, other);
                 if (!custom::dist_less(oc, w.body_chunk_get_pos(chunk(state, other, 0)), rc + reach(state, other, m)))
                     return;
-                if (ot != t && (!collides(state, c, of(other), room.id) || !collides(state, other, of(c), room.id)))
+                if (ot != t && (!collides(state, c, other, room.id) || !collides(state, other, c, room.id)))
                     return;
                 bool touched = false;
                 for (uint32_t i = 0; i < n; ++i)
@@ -592,8 +574,8 @@ namespace creature {
                             if (ot == t) {
                                 collide_kin(state, c, i, other, j);
                             } else {
-                                collide_with(state, c, room, i, of(other), j);
-                                collide_with(state, other, room, j, of(c), i);
+                                collide_with(state, c, room, i, other, j);
+                                collide_with(state, other, room, j, c, i);
                             }
                         }
                 if (touched && ot == t)
@@ -605,6 +587,9 @@ namespace creature {
     void update_room(sys::game_state& state, world::room_view const& room) {
         bool const viewed = state.viewed(room.id);
         for (auto const t : all_types) {
+            // (the slugcats ran first, player.cpp, and collide in the others' turns)
+            if (t == type::slugcat)
+                continue;
             rooms::for_each_creature(state, room.id, t, [&](dcon::creature_id c) { update(state, c, room, viewed); });
             // the room's LizardSpit flies after the lizards
             if (t == type::lizard)
@@ -619,6 +604,8 @@ namespace creature {
     void reset_graphics(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         switch (w.creature_get_type(c)) {
+        // (PlayerGraphics runs every tick: the slugcat's room is always viewed)
+        case type::slugcat: return;
         case type::centipede: centipede_graphics::reset_positions(state, c); return;
         case type::dropbug: dropbug_graphics::reset_positions(state, c); return;
         case type::cicada: cicada_graphics::reset_positions(state, c); return;
@@ -658,6 +645,10 @@ namespace creature {
     }
 
     void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
+        if (is_slugcat(state.world, c)) {
+            player::stun(state, player_of(state, c), st);
+            return;
+        }
         int32_t& s = state.world.creature_get_stun(c);
         s = std::max(s, st);
     }
@@ -666,33 +657,52 @@ namespace creature {
         auto& w = state.world;
         if (w.creature_get_dead(c))
             return;
+        // (Player.Die: a dead slugcat keeps what it holds)
+        if (is_slugcat(w, c)) {
+            player::die(state, player_of(state, c));
+            return;
+        }
         w.creature_set_dead(c, 1);
         release_all(state, c, room_of(state, c));
+    }
+
+    void lose_all_grasps(sys::game_state& state, dcon::creature_id c) {
+        if (!live(state, c))
+            return;
+        if (is_slugcat(state.world, c))
+            items::release_all(state, player_of(state, c));
+        else
+            release_all(state, c, room_of(state, c));
     }
 
     void release_all(sys::game_state& state, dcon::creature_id c, dcon::room_id room) {
         auto const& g = state.world.creature_get_grasps(c);
         for (uint32_t i = 0; i < 2; ++i)
-            if (g.who[i])
-                release(state, c, g.who[i]);
-        rooms::for_each_player(state, room, [&](dcon::player_id p) { release(state, c, of(p)); });
+            if (auto const t = grasped(state.world, c, i))
+                release(state, c, t);
         rooms::for_each_creature(state, room, [&](dcon::creature_id o) {
             if (o != c)
-                release(state, c, of(o));
+                release(state, c, o);
         });
         // what the kind's code didn't let go of
         for (uint32_t i = 0; i < 2; ++i)
-            release_grasp(state, c, i);
+            if (g.obj[i])
+                release_grasp(state, c, i);
     }
 
-    bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::creature_id& hit, hit_part& part) {
+    bool trace(sys::game_state const& state, dcon::room_id room, vec2 from, vec2 to, float rad, dcon::creature_id thrown_by, dcon::creature_id& hit, hit_part& part) {
         auto const& w = state.world;
+        // Weapon.HitThisObject: not its thrower, and a slugcat's weapon
+        // passes through the slugcats (no friendly fire in story mode)
+        bool const by_slugcat = thrown_by && w.creature_is_valid(thrown_by) && is_slugcat(w, thrown_by);
         // the closest of every creature's chunks along the segment, then
         // the appendages (a daddy's tentacles) when they are closer still
         float best = 2.f;
         vec2 const dv = to - from;
         float const len2 = rw::sqr_magnitude(dv);
         rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+            if (c == thrown_by || (by_slugcat && is_slugcat(w, c)) || w.creature_get_away(c) != 0)
+                return;
             uint32_t const n = chunk_count(state, c);
             for (uint32_t i = 0; i < n; ++i) {
                 auto const k = chunk(state, c, i);
@@ -733,6 +743,7 @@ namespace creature {
         uint32_t const k = part.chunk >= 0 ? uint32_t(part.chunk) : 0u;
         bool const explosion = type == damage_type::explosion;
         switch (state.world.creature_get_type(c)) {
+        case type::slugcat: player::violence(state, player_of(state, c), k, momentum, damage, stun_bonus); return;
         case type::centipede: centipede::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::dropbug: dropbug::violence(state, c, k, momentum, damage, stun_bonus); return;
         case type::cicada: cicada::violence(state, c, k, momentum, damage, stun_bonus); return;
@@ -743,9 +754,20 @@ namespace creature {
         }
     }
 
-    void blast(sys::game_state& state, dcon::room_id room, vec2 at, float rad, float force, float damage, float stun) {
+    void blast(sys::game_state& state, dcon::room_id room, vec2 at, float rad, float force, float damage, float stun, float kill_rad, dcon::physical_object_id source) {
         auto const& w = state.world;
         rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+            if (is_slugcat(w, c)) {
+                // a slugcat close to it dies, further out it is stunned
+                if (kill_rad <= 0.f || body(state, c) == source || w.creature_get_away(c) != 0 || w.creature_get_dead(c))
+                    return;
+                vec2 const cp = w.body_chunk_get_pos(chunk(state, c, 0));
+                if (custom::dist_less(cp, at, kill_rad))
+                    die(state, c);
+                else if (custom::dist_less(cp, at, rad))
+                    creature::stun(state, c, int32_t(stun * (1.f - rw::distance(cp, at) / rad)));
+                return;
+            }
             uint32_t const n = chunk_count(state, c);
             for (uint32_t i = 0; i < n; ++i) {
                 vec2 const cp = w.body_chunk_get_pos(chunk(state, c, i));
@@ -762,8 +784,8 @@ namespace creature {
     void flash(sys::game_state& state, world::room_view const& room, vec2 at, float rad) {
         auto const& w = state.world;
         rooms::for_each_creature(state, room.id, [&](dcon::creature_id c) {
-            // a daddy long legs is blind
-            if (w.creature_get_type(c) == type::daddy)
+            // a daddy long legs is blind; the slugcat only sees white
+            if (w.creature_get_type(c) == type::daddy || is_slugcat(w, c))
                 return;
             uint32_t const m = main_chunk(state, c);
             vec2 const cp = w.body_chunk_get_pos(chunk(state, c, m));
@@ -772,8 +794,9 @@ namespace creature {
         });
     }
 
-    void release(sys::game_state& state, dcon::creature_id c, target t) {
+    void release(sys::game_state& state, dcon::creature_id c, dcon::creature_id t) {
         switch (state.world.creature_get_type(c)) {
+        case type::slugcat: break;
         case type::centipede: centipede::release(state, c, t); break;
         case type::dropbug: dropbug::release(state, c, t); break;
         case type::cicada: cicada::release(state, c, t); break;
@@ -784,25 +807,23 @@ namespace creature {
         }
         // the generic grasps on it
         auto const& g = state.world.creature_get_grasps(c);
+        auto const o = state.world.creature_get_body_from_creature_body(t);
         for (uint32_t i = 0; i < 2; ++i)
-            if (g.who[i] == t)
+            if (o && g.obj[i] == o)
                 release_grasp(state, c, i);
     }
 
-    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p) {
-        release(state, c, of(p));
-    }
-
-    void release_target(sys::game_state& state, target t, dcon::room_id room) {
+    void release_target(sys::game_state& state, dcon::creature_id t, dcon::room_id room) {
         // whatever holds it is in its room
         rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
-            if (of(c) != t)
+            if (c != t)
                 release(state, c, t);
         });
     }
 
-    void release_player(sys::game_state& state, dcon::player_id p) {
-        release_target(state, of(p), rooms::room_of(state, p));
+    void release_target(sys::game_state& state, dcon::creature_id t) {
+        auto const& w = state.world;
+        release_target(state, t, w.creature_get_away(t) != 0 ? w.creature_get_away_room(t) : room_of(state, t));
     }
 
     void flying_weapon(sys::game_state& state, dcon::room_id room, vec2 pos, vec2 vel, vec2 thrown_pos) {

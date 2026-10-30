@@ -14,7 +14,7 @@ namespace rooms {
         return state.world.physical_object_get_room_from_object_location(o);
     }
     inline dcon::room_id room_of(sys::game_state const& state, dcon::player_id p) noexcept {
-        return room_of(state, state.world.player_get_body_from_player_body(p));
+        return room_of(state, state.world.creature_get_body_from_creature_body(state.world.player_get_creature(p)));
     }
     inline dcon::room_id room_of(sys::game_state const& state, dcon::creature_id c) noexcept {
         return room_of(state, state.world.creature_get_body_from_creature_body(c));
@@ -29,14 +29,15 @@ namespace rooms {
     // the room whose update runs on this thread, while the rooms update in
     // parallel (simulation.cpp)
     inline thread_local dcon::room_id updating;
-    // Whether a room's update may look at the player: only one in that room.
-    // Creatures keep the slugcat they track, chase or hold by its index; one
-    // that went through a pipe is now another room's, updated by another
-    // thread at the same time, so it is out of reach (no longer seen)
+    // Whether a room's update may look at the player: only one in that room
     inline bool reachable(sys::game_state const& state, dcon::player_id p) noexcept {
         return !state.parallel || room_of(state, p) == updating;
     }
-    // the same for a creature: in the updating room, or in its pipes or dens
+    // the same for a creature (a slugcat included): in the updating room, or
+    // in its pipes or dens. Creatures keep the ones they track, chase or
+    // hold by id; one that went through a pipe is now another room's,
+    // updated by another thread at the same time, so it is out of reach (no
+    // longer seen)
     inline bool reachable(sys::game_state const& state, dcon::creature_id c) noexcept {
         if (!state.parallel)
             return true;
@@ -81,8 +82,8 @@ namespace rooms {
                 f(c);
         });
     }
-    // every creature of the room, kind by kind (in creature::type order),
-    // like one loop per kind
+    // every creature of the room, kind by kind (in creature::type order: the
+    // slugcats first), like one loop per kind
     template<typename F>
     void for_each_creature(sys::game_state const& state, dcon::room_id room, F&& f) {
         if (state.index.valid) {

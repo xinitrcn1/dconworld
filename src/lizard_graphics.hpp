@@ -48,7 +48,7 @@ namespace lizard_graphics {
     // LizardGraphics.Stun / WhiteFlicker / CreatureSpotted
     void stun(sys::game_state& state, dcon::creature_id l, int32_t st);
     void white_flicker(sys::game_state& state, dcon::creature_id l, int32_t fl);
-    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, creature::target t);
+    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, dcon::creature_id t);
     // LizardGraphics.HeadRotation
     float head_rotation(sys::game_state const& state, dcon::creature_id l, float alpha);
 

@@ -778,7 +778,7 @@ namespace daddy::detail {
         //
         // DaddyTentacle
         //
-        dcon::body_chunk_id target_chunk(ctx& x, creature::target t, uint8_t chunk) {
+        dcon::body_chunk_id target_chunk(ctx& x, dcon::creature_id t, uint8_t chunk) {
             if (!creature::live(x.state, t) || chunk >= creature::chunk_count_of(x.state, t))
                 return dcon::body_chunk_id{};
             return creature::chunk_of(x.state, t, chunk);
@@ -787,11 +787,11 @@ namespace daddy::detail {
         void release_grab(ctx& x, tentacle_work& tw) {
             if (auto const c = target_chunk(x, tw.t.grab, tw.t.grab_chunk))
                 x.state.play_sound(sound::sound_id::daddy_and_bro_tentacle_release_creature, x.room.id, x.state.world.body_chunk_get_pos(c));
-            tw.t.grab = creature::target{};
+            tw.t.grab = dcon::creature_id{};
         }
 
         // DaddyTentacle.IsCreatureCaughtEnough
-        bool is_creature_caught_enough(ctx& x, creature::target t) {
+        bool is_creature_caught_enough(ctx& x, dcon::creature_id t) {
             int32_t num = 0;
             for (auto const& o : x.tents)
                 if (o.t.grab == t)
@@ -824,7 +824,7 @@ namespace daddy::detail {
             auto& t = tw.t;
             bool flag = false;
             bool done = false;
-            auto const feel = [&](creature::target ref) {
+            auto const feel = [&](dcon::creature_id ref) {
                 if (done || !target_here(x.state, ref, x.room.id))
                     return;
                 uint32_t const n = creature::chunk_count_of(x.state, ref);
@@ -877,10 +877,9 @@ namespace daddy::detail {
                     }
                 }
             };
-            rooms::for_each_player(x.state, x.room.id, [&](dcon::player_id p) { feel(creature::of(p)); });
             rooms::for_each_creature(x.state, x.room.id, [&](dcon::creature_id o) {
                 if (o != x.d)
-                    feel(creature::of(o));
+                    feel(o);
             });
             if (done)
                 return;
@@ -896,7 +895,7 @@ namespace daddy::detail {
                 return;
             // GetTrackedPrey(Random.Range(0, TotalTrackedPrey))
             x.rng.range(0, 1);
-            creature::target const ref = x.seen;
+            dcon::creature_id const ref = x.seen;
             for (auto const& o : x.tents)
                 if (o.t.hunt == ref)
                     return;
@@ -1147,13 +1146,13 @@ namespace daddy::detail {
                 if (num2 > -1) {
                     x.tents[size_t(num2)].t.hunt = t.hunt;
                     x.tents[size_t(num2)].t.current = task::hunt;
-                    t.hunt = creature::target{};
+                    t.hunt = dcon::creature_id{};
                     update_climb_grab_pos(x, tw);
                     return;
                 }
             }
             if (rw::distance(room_view::middle_of_tile(best_guess(x)), float_base(x, tw)) > t.ideal_length * 1.5f) {
-                t.hunt = creature::target{};
+                t.hunt = dcon::creature_id{};
                 update_climb_grab_pos(x, tw);
                 return;
             }
@@ -1355,7 +1354,7 @@ namespace daddy::detail {
     void switch_task(ctx& x, tentacle_work& tw, task nt) {
         auto& t = tw.t;
         if (nt != task::hunt)
-            t.hunt = creature::target{};
+            t.hunt = dcon::creature_id{};
         if (nt != task::examine_sound) {
             t.check_sound = 0;
             t.examine_sound_pos.reset();
@@ -1394,16 +1393,16 @@ namespace daddy::detail {
         base_update(x, tw);
         if (bool(t.grab) && (!target_here(x.state, t.grab, x.room.id) || !target_chunk(x, t.grab, t.grab_chunk))) {
             stun = 10;
-            t.grab = creature::target{};
+            t.grab = dcon::creature_id{};
         }
         if (x.dead()) {
             t.needed_for_locomotion = 1;
-            t.grab = creature::target{};
+            t.grab = dcon::creature_id{};
             t.limp = 1;
         }
         if (stun > 0) {
             --stun;
-            t.grab = creature::target{};
+            t.grab = dcon::creature_id{};
         }
         float const health = w.creature_part_get_health(tw.part);
         if (mathf::pow(x.rng.value(), 0.35f) > health) {
@@ -1463,7 +1462,7 @@ namespace daddy::detail {
         if (t.current == task::hunt && (!t.hunt || x.seen != t.hunt))
             switch_task(x, tw, task::locomotion);
         else if (t.current != task::hunt && bool(t.hunt))
-            t.hunt = creature::target{};
+            t.hunt = dcon::creature_id{};
         if (t.current == task::examine_sound) {
             auto const* s = source(x.a, t.check_sound);
             if (!s || s->slated_for_deletion)

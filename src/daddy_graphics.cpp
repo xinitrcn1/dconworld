@@ -366,7 +366,7 @@ namespace daddy_graphics {
                     else
                         look = room_view::middle_of_tile(room_view::get_tile_position(ai.last_seen_pos));
                 } else {
-                    e.creature_seen = creature::target{};
+                    e.creature_seen = dcon::creature_id{};
                 }
             }
             float num = 0.f;
@@ -806,7 +806,7 @@ namespace daddy_graphics {
         }
     }
 
-    void feel_something(sys::game_state& state, dcon::creature_id d, creature::target felt, vec2 feel_pos) {
+    void feel_something(sys::game_state& state, dcon::creature_id d, dcon::creature_id felt, vec2 feel_pos) {
         auto& w = state.world;
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         if (g.feel_something_reaction_delay > 0)
@@ -832,12 +832,12 @@ namespace daddy_graphics {
         uint32_t const idx = pick_eye(state, d, noise_pos);
         auto& e = g.eyes[idx];
         // Eye.ReactToSound
-        e.creature_seen = creature::target{};
+        e.creature_seen = dcon::creature_id{};
         e.sound_source = source;
         e.light = 1.f;
         e.flash = 1.f;
         auto const* s = daddy::detail::source(ai, source);
-        creature::target const rep = s != nullptr ? s->who : creature::target{};
+        dcon::creature_id const rep = s != nullptr ? s->who : dcon::creature_id{};
         float num4 = 0.5f;
         if (daddy::behavior(w.creature_get_behavior(d)) == daddy::behavior::hunt && ai.seen)
             num4 = ai.seen == rep ? 1.f : 0.2f;

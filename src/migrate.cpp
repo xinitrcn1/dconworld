@@ -5,6 +5,8 @@
 
 #include "migrate.hpp"
 #include "dens.hpp"
+#include "gates.hpp"
+#include "warps.hpp"
 #include "pathing.hpp"
 #include "rooms.hpp"
 
@@ -14,6 +16,7 @@ namespace migrate {
     using rw::ivec2;
     using rw::vec2;
     using world::room_view;
+    namespace custom = rw::custom;
     namespace mathf = rw::mathf;
 
     namespace {
@@ -97,15 +100,27 @@ namespace migrate {
             return false;
         }
 
-        // the exits of `room` a trip can take: the target room and the exit node
+        // the exits of `room` a trip can take: the target room and the exit
+        // node; with `cross`, through gates and Watcher warps too (a warp:
+        // `warp_hop` + its number in the room)
         template<typename F>
-        void for_each_exit(sys::game_state const& state, dcon::room_id room, bool gates, F&& f) {
+        void for_each_exit(sys::game_state const& state, dcon::room_id room, bool cross, F&& f) {
             auto const& w = state.world;
             w.room_for_each_exit_location(room, [&](dcon::exit_location_id el) {
                 auto const e = w.exit_location_get_exit(el);
-                auto const to = dens::exit_target(state, e, room, gates);
+                auto const to = dens::exit_target(state, e, room, cross);
                 if (to && dens::exit_entrance(state, room, w.room_exit_get_index(e)))
                     f(to, uint8_t(w.room_exit_get_index(e)));
+            });
+            if (!cross)
+                return;
+            uint8_t k = 0;
+            w.room_for_each_warp_point_location(room, [&](dcon::warp_point_location_id l) {
+                auto const wp = w.warp_point_location_get_point(l);
+                auto const to = warps::leads_away(state, wp) ? warps::where_to(state, wp).room : dcon::room_id{};
+                if (to && to != room && k < 0x0F)
+                    f(to, uint8_t(warp_hop + k));
+                ++k;
             });
         }
 
@@ -149,12 +164,25 @@ namespace migrate {
                 ++t.hops;
             }
             state.world.creature_set_trip(c, t);
+            ++dens::stats().trips;
+            for (uint32_t i = 0; i < t.hops; ++i)
+                if (t.exit[i] >= warp_hop) {
+                    ++dens::stats().warp_trips;
+                    break;
+                }
+            if (t.hops > 0) {
+                auto const& w = state.world;
+                auto const last = dcon::room_id{dcon::room_id::value_base_t(t.room[t.hops - 1])};
+                auto const here = creature::room_of(state, c);
+                if (here && w.room_get_region_from_region_membership(last) != w.room_get_region_from_region_membership(here))
+                    ++dens::stats().cross_trips;
+            }
         }
 
         // the exit node the creature is at or closest to (DefineNodeOfLocalCoordinate)
         int32_t node_of(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) {
             auto const& w = state.world;
-            vec2 const at = creature::main_pos(state, creature::of(c));
+            vec2 const at = creature::main_pos(state, c);
             int32_t best = -1;
             float best_d = 1e30f;
             w.room_for_each_exit_location(room, [&](dcon::exit_location_id el) {
@@ -352,6 +380,56 @@ namespace migrate {
         }
     }
 
+    bool plan_trip(sys::game_state& state, dcon::creature_id c, dcon::room_id from, dcon::room_id to) {
+        // a breadth first search over the exits, gates and warps included
+        auto const& w = state.world;
+        size_t const n = size_t(w.room_size());
+        std::vector<int32_t> prev(n, -1);
+        std::vector<uint8_t> via(n, 0);
+        std::vector<dcon::room_id> queue{from};
+        prev[size_t(from.index())] = int32_t(from.index());
+        for (size_t qi = 0; qi < queue.size() && prev[size_t(to.index())] < 0; ++qi) {
+            auto const r = queue[qi];
+            for_each_exit(state, r, true, [&](dcon::room_id next, uint8_t exit) {
+                if (prev[size_t(next.index())] >= 0 || w.room_get_is_shelter(next))
+                    return;
+                prev[size_t(next.index())] = int32_t(r.index());
+                via[size_t(next.index())] = exit;
+                queue.push_back(next);
+            });
+        }
+        if (to == from || prev[size_t(to.index())] < 0)
+            return false;
+        std::vector<std::pair<dcon::room_id, uint8_t>> list;
+        for (auto r = to; r != from; r = dcon::room_id{dcon::room_id::value_base_t(prev[size_t(r.index())])})
+            list.emplace_back(r, via[size_t(r.index())]);
+        if (list.size() > creature::trip::max_hops)
+            return false;
+        std::reverse(list.begin(), list.end());
+        set_trip(state, c, list);
+        return true;
+    }
+
+    bool cross_region(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+        // the rooms of other regions a few hops away, through a gate or a
+        // warp: one of them at random
+        auto& w = state.world;
+        auto& rng = w.creature_get_random(c);
+        auto const here = w.room_get_region_from_region_membership(room.id);
+        std::vector<dcon::room_id> seen{room.id}, options;
+        for (size_t qi = 0; qi < seen.size() && seen.size() < 64; ++qi)
+            for_each_exit(state, seen[qi], true, [&](dcon::room_id next, uint8_t) {
+                if (std::find(seen.begin(), seen.end(), next) != seen.end() || w.room_get_is_shelter(next))
+                    return;
+                seen.push_back(next);
+                if (!w.room_get_is_gate(next) && w.room_get_region_from_region_membership(next) != here && can_roam_through(state, c, next))
+                    options.push_back(next);
+            });
+        if (options.empty())
+            return false;
+        return plan_trip(state, c, room.id, options[size_t(rng.range(0, int32_t(options.size())))]);
+    }
+
     void abstract_behavior(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         if (want_to(state, c))
@@ -367,6 +445,9 @@ namespace migrate {
             if (!(rng.value() < roam * mathf::lerp(2.f, 0.1f, attraction(state, c, room.id))))
                 return;
         }
+        // now and then a trip to another region, through a gate or a warp
+        if (rng.value() < cross_region_chance && cross_region(state, c, room))
+            return;
         if (rng.value() < 0.5f)
             random_move(state, c, room, int32_t(250.f * mathf::pow(rng.value(), 0.25f)));
         else
@@ -385,11 +466,35 @@ namespace migrate {
         auto& t = w.creature_get_trip(c);
         if (t.next >= t.hops)
             return std::nullopt;
-        auto const tile = dens::exit_entrance(state, room.id, t.exit[t.next]);
+        uint8_t const exit = t.exit[t.next];
+        if (exit >= warp_hop) {
+            // a warp: into its middle (warps.hpp carries it once there)
+            auto const wp = warps::point(state, room.id, exit - warp_hop);
+            if (!wp) {
+                cancel(state, c);
+                return std::nullopt;
+            }
+            w.creature_set_going_home(c, 0);
+            // the tear hangs in the air: what walks heads for the ground
+            // below it, and is pulled in once close and in sight of it (the
+            // pull reaches further than that: WarpPoint's PullRadius)
+            vec2 const at = warps::position(state, wp);
+            ivec2 tile = room_view::get_tile_position(at);
+            for (int32_t i = 0; i < 20 && tile.y > 0 && !room.get_tile(tile + ivec2{0, -1}).solid(); ++i)
+                --tile.y;
+            vec2 const me = creature::main_pos(state, c);
+            if ((custom::dist_less(me, at, warps::pull_radius) && room.visual_contact(me, at)) || custom::dist_less(me, room_view::middle_of_tile(tile), 40.f))
+                warps::carry(state, c, wp);
+            return tile;
+        }
+        auto const tile = dens::exit_entrance(state, room.id, exit);
         if (!tile) {
             cancel(state, c);
             return std::nullopt;
         }
+        // a gate shut between it and the exit: wait at the middle door
+        if (auto const g = gates::wait_tile(state, room.id, creature::main_pos(state, c), *tile))
+            return *g;
         w.creature_set_going_home(c, 1);
         w.creature_set_travel_tile(c, *tile);
         return *tile + room.shortcut_entrance_hole_direction(*tile);

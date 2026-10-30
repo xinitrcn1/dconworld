@@ -68,9 +68,10 @@ namespace rooms {
         });
         fill(x.items, n, [&](auto&& f) { w.for_each_item(f); }, of);
         fill(x.spits, n, [&](auto&& f) { w.for_each_lizard_spit(f); }, of);
-        // the creatures in a room's pipes and dens (their bodies in no room)
+        // the creatures in a room's pipes and dens (their bodies in no room;
+        // a slugcat's vessel travels on its own, shortcuts.hpp)
         fill(x.away, n, [&](auto&& f) { w.for_each_creature(f); }, [&](dcon::creature_id c) {
-            auto const r = w.creature_get_away(c) != 0 ? w.creature_get_away_room(c) : dcon::room_id{};
+            auto const r = w.creature_get_away(c) != 0 && w.creature_get_type(c) != creature::type::slugcat ? w.creature_get_away_room(c) : dcon::room_id{};
             return r && size_t(r.index()) < n ? size_t(r.index()) : n;
         });
     }
@@ -254,7 +255,7 @@ namespace simulation {
         std::vector<driven> out;
         for (size_t i = 0; i < players.size(); ++i) {
             auto const p = players[i];
-            if (w.player_get_in_shortcut(p))
+            if (player::in_shortcut(state, p))
                 shortcuts::update_vessel(state, p);
             else
                 out.push_back(driven{p, i < inputs.size() ? inputs[i] : ::player::input_package{}});

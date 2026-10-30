@@ -81,7 +81,7 @@ namespace leech_graphics {
         bool const on_ground = sub == 0.f && w.body_chunk_get_contact_point(m).y == -1;
         bool const dead = w.creature_get_dead(c) != 0;
         bool const awake = leech::consious(state, c);
-        bool const attached = w.creature_get_grasp_player(c)[0] != 0;
+        bool const attached = bool(creature::grasped(w, c, 0));
         bool const attacking = x.charge_counter > 15;
         bool const charging = x.charge_counter > 0 && x.charge_counter < 15;
         constexpr float seg = 4.f;
@@ -166,7 +166,7 @@ namespace leech_graphics {
         float prev_rad = g.radiuses[0];
         // latched on: the mouth on the slugcat's skin
         if (auto const p = leech::attached_to(state, c)) {
-            auto const k = player::body_chunk(state, p, w.creature_get_grasp_chunk(c)[0]);
+            auto const k = creature::chunk_of(state, p, creature::grasp_chunk(w, c, 0));
             vec2 const kp = w.body_chunk_get_pos(k);
             at = kp + custom::dir_vec(kp, w.body_chunk_get_pos(main(state, c))) * w.body_chunk_get_rad(k) * 0.6f;
             prev_rad = 0.f;

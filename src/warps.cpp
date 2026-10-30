@@ -11,6 +11,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "dens.hpp"
 
 namespace warps {
     using rw::vec2;
@@ -39,8 +40,8 @@ namespace warps {
 
         bool player_usable(sys::game_state const& state, dcon::player_id p, dcon::room_id room) {
             auto const& w = state.world;
-            return w.physical_object_get_room_from_object_location(player::body(state, p)) == room && !w.player_get_in_shortcut(p)
-                && !w.player_get_dead(p) && !w.player_get_eaten(p);
+            return w.physical_object_get_room_from_object_location(player::body(state, p)) == room && !player::in_shortcut(state, p)
+                && !player::dead(state, p) && !w.player_get_eaten(p);
         }
         vec2 main_chunk(sys::game_state const& state, dcon::player_id p) {
             return state.world.body_chunk_get_pos(player::body_chunk(state, p, 0));
@@ -146,7 +147,7 @@ namespace warps {
             w.for_each_player([&](dcon::player_id p) {
                 if (!player_usable(state, p, room) || !custom::dist_less(pos, main_chunk(state, p), suck_radius))
                     return;
-                creature::release_player(state, p);
+                creature::release_target(state, player::creature_of(state, p));
                 w.player_set_warp_point_cooldown(p, 80);
                 if (rw::distance(pos, main_chunk(state, p)) >= pull_radius && p != w.warp_point_get_triggered_by(wp))
                     return;
@@ -263,9 +264,15 @@ namespace warps {
                     continue;
                 // in a loose ring around the exit, the Watcher in the middle
                 float const ang = float(i) * 2.3999632f;
-                bool const is_player = bool(w.physical_object_get_player_from_player_body(o));
+                auto const oc = creature::of_body(w, o);
+                bool const is_player = oc && creature::is_slugcat(w, oc);
                 vec2 const at = is_player ? out : out + vec2{std::sin(ang), std::cos(ang)} * (20.f + 6.f * float(i));
                 place_object(state, o, dest.room, at);
+                // a creature pulled along: in its new room (its AI, its trip)
+                if (oc && !is_player && w.creature_get_away(oc) == 0) {
+                    dens::changed_rooms(state, oc, src, dest.room, true);
+                    creature::placed_in_room(state, oc, dest.room, at);
+                }
             }
             // whatever the travellers hold comes along
             w.for_each_player([&](dcon::player_id p) {
@@ -553,6 +560,53 @@ namespace warps {
                 break;
             }
         }
+    }
+
+    target where_to(sys::game_state const& state, dcon::warp_point_id wp) noexcept {
+        auto const d = destination_of(state, wp);
+        return target{d.room, d.pos};
+    }
+
+    bool leads_away(sys::game_state const& state, dcon::warp_point_id wp) noexcept {
+        auto const placed = placed_of(state, wp);
+        return state.world.warp_point_get_state(wp) != warp_state::closed && !one_way_exit(state, placed);
+    }
+
+    dcon::warp_point_id point(sys::game_state const& state, dcon::room_id room, uint32_t k) noexcept {
+        dcon::warp_point_id found;
+        uint32_t i = 0;
+        state.world.room_for_each_warp_point_location(room, [&](dcon::warp_point_location_id l) {
+            if (i++ == k)
+                found = state.world.warp_point_location_get_point(l);
+        });
+        return found;
+    }
+
+    vec2 position(sys::game_state const& state, dcon::warp_point_id wp) noexcept {
+        return pos_of(state, wp);
+    }
+
+    void carry(sys::game_state& state, dcon::creature_id c, dcon::warp_point_id wp) {
+        auto const room = room_of(state, wp);
+        state.defer(room, [c, wp, room](sys::game_state& st) {
+            auto& w = st.world;
+            if (!w.creature_is_valid(c) || w.creature_get_away(c) != 0 || creature::room_of(st, c) != room)
+                return;
+            auto const d = destination_of(st, wp);
+            if (!d.room || d.room == room)
+                return;
+            // what it holds comes along, a little behind it
+            for (uint32_t g = 0; g < 2; ++g)
+                if (auto const o = creature::grasped_object(w, c, g); o && w.physical_object_get_room_from_object_location(o) == room)
+                    place_object(st, o, d.room, d.pos + vec2{0.f, -10.f});
+            place_object(st, creature::body(st, c), d.room, d.pos);
+            for (uint32_t g = 0; g < 2; ++g)
+                if (auto const h = creature::grasped(w, c, g))
+                    creature::placed_in_room(st, h, d.room, d.pos);
+            ++dens::stats().warp_carried;
+            dens::changed_rooms(st, c, room, d.room, true);
+            creature::placed_in_room(st, c, d.room, d.pos);
+        });
     }
 
     bool is_watcher(sys::game_state const& state, dcon::player_id p) noexcept {

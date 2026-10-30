@@ -32,6 +32,7 @@
 #include "item_graphics.hpp"
 #include "outposts.hpp"
 #include "physics.hpp"
+#include "player.hpp"
 #include "player_graphics.hpp"
 #include "rot.hpp"
 #include "warps.hpp"
@@ -818,8 +819,8 @@ void main() {
             if (white_it != r.slugcat_frames.end())
                 white_uv = vec2{(white_it->second.x + white_it->second.w * 0.5f) / tw, (white_it->second.y + white_it->second.h * 0.5f) / th};
             world.for_each_player([&](dcon::player_id pid) {
-                auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid) || world.player_get_eaten(pid))
+                auto const o = player::body(s, pid);
+                if (world.physical_object_get_room_from_object_location(o) != room.id || player::in_shortcut(s, pid) || world.player_get_eaten(pid))
                     return;
                 cmds.clear();
                 player_graphics::build(s, pid, alpha, cmds);
@@ -843,14 +844,14 @@ void main() {
             auto const& world = s.world;
             painter p{r.batch};
             world.for_each_player([&](dcon::player_id pid) {
-                auto const o = world.player_get_body_from_player_body(pid);
-                if (world.physical_object_get_room_from_object_location(o) != room.id || world.player_get_in_shortcut(pid) || world.player_get_eaten(pid))
+                auto const o = player::body(s, pid);
+                if (world.physical_object_get_room_from_object_location(o) != room.id || player::in_shortcut(s, pid) || world.player_get_eaten(pid))
                     return;
                 auto const c0 = physics::chunk(s, o, 0);
                 auto const c1 = physics::chunk(s, o, 1);
                 vec2 const b0 = rw::lerp(world.body_chunk_get_last_pos(c0), world.body_chunk_get_pos(c0), alpha);
                 vec2 const b1 = rw::lerp(world.body_chunk_get_last_pos(c1), world.body_chunk_get_pos(c1), alpha);
-                uint32_t const body = world.player_get_dead(pid) ? col_body_dead : to_rgba(world.player_get_stats(pid).body_color);
+                uint32_t const body = player::dead(s, pid) ? col_body_dead : to_rgba(world.player_get_stats(pid).body_color);
                 p.line(b0, b1, 2.f, body);
                 p.circle(b1, world.body_chunk_get_rad(c1), body);
                 p.circle(b0, world.body_chunk_get_rad(c0), body);
@@ -985,7 +986,7 @@ void main() {
                 if (world.physical_object_get_room_from_object_location(o) != room.id)
                     return;
                 auto const g = items::grabber(s, it);
-                if (g && world.player_get_in_shortcut(g))
+                if (g && player::in_shortcut(s, g))
                     return;
                 if ((world.item_get_mode(it) == world::weapon_mode::on_back) != behind)
                     return;
@@ -2208,6 +2209,9 @@ void main() {
         void build_creatures(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, bool atlas) {
             for (auto const t : creature::all_types) {
                 switch (t) {
+                // (the slugcats are drawn with the players)
+                case creature::type::slugcat:
+                    break;
                 case creature::type::centipede:
                     atlas ? build_centipede_sprites(r, s, room, alpha) : build_centipedes(r, s, room, alpha);
                     break;
@@ -2947,12 +2951,12 @@ void main() {
             auto const& world = s.world;
             painter p{r.batch};
             world.for_each_player([&](dcon::player_id pid) {
-                if (!world.player_get_in_shortcut(pid) || world.physical_object_get_room_from_object_location(world.player_get_body_from_player_body(pid)) != room.id)
+                if (!player::in_shortcut(s, pid) || world.physical_object_get_room_from_object_location(player::body(s, pid)) != room.id)
                     return;
                 rw::vec3 const col = world.player_get_stats(pid).body_color;
                 auto const shade = [&](float a) { return to_rgba(rw::vec3{0.5f, 0.5f, 0.5f} + col * 0.5f, a); };
                 vec2 const pos = shortcuts::vessel_position(s, pid, alpha);
-                auto const path = world.shortcut_get_path(world.player_get_vessel_shortcut(pid));
+                auto const path = world.shortcut_get_path(world.creature_get_vessel_shortcut(player::creature_of(s, pid)));
                 for (uint32_t i = 0; i < path.size(); ++i) {
                     vec2 const m = world::room_view::middle_of_tile(path[i]);
                     float const d = rw::distance(m, pos);

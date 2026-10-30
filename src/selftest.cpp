@@ -9,6 +9,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <tuple>
 
 #include <tbb/global_control.h>
 
@@ -34,6 +35,7 @@
 #include "terrain.hpp"
 #include "simulation.hpp"
 #include "dens.hpp"
+#include "migrate.hpp"
 #include "rain.hpp"
 #include "spawns.hpp"
 #include "world.hpp"
@@ -164,8 +166,8 @@ namespace selftest {
             rw::ivec2 contact(int i) const { return gs.world.body_chunk_get_contact_point(chunk(i)); }
             player::body_mode_index body_mode() const { return gs.world.player_get_body_mode(p); }
             player::animation_index animation() const { return gs.world.player_get_animation(p); }
-            int32_t stun() const { return gs.world.player_get_stun(p); }
-            bool dead() const { return gs.world.player_get_dead(p) != 0; }
+            int32_t stun() const { return player::stun_of(gs, p); }
+            bool dead() const { return player::dead(gs, p); }
             void step(int32_t x = 0, int32_t y = 0, bool jmp = false, bool thrw = false, bool pckp = false) {
                 auto const in = player::make_input(float(x), float(y), jmp, thrw, pckp);
                 simulation::tick(gs, std::span{&p, 1}, std::span{&in, 1});
@@ -770,7 +772,7 @@ namespace selftest {
                     s.step();
                     uint32_t on = 0;
                     for (auto const l : ls)
-                        on += leech::attached_to(gs, l) == creature::of(s.p) ? 1 : 0;
+                        on += leech::attached_to(gs, l) == player::creature_of(gs, s.p) ? 1 : 0;
                     most = std::max(most, on);
                     schooled = schooled || (!ls.empty() && leech::school_size(gs, ls[0]) > 1);
                     air = std::min(air, gs.world.player_get_air_in_lungs(s.p));
@@ -801,7 +803,7 @@ namespace selftest {
             bool dropped = false;
             bool const hurt = s.until(1500, [&] {
                 dropped = dropped || gs.world.creature_get_payload(d).dropbug.from_ceiling_jump;
-                return s.stun() > 0 || s.dead() || dropbug::grasped(gs, d) == creature::of(s.p);
+                return s.stun() > 0 || s.dead() || dropbug::grasped(gs, d) == player::creature_of(gs, s.p);
             }, 1); // walking right, under it and on to the wall
             char d_[96];
             std::snprintf(d_, sizeof(d_), " waits=%d dropped=%d hurt=%d behavior=%d", int(waits), int(dropped), int(hurt), int(::dropbug::behavior(gs.world.creature_get_behavior(d))));
@@ -887,10 +889,10 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(40, 1), lizard::breed::green);
             bool spotted = false, hunted = false, bit = false;
             bool const killed = s.until(4000, [&] {
-                if (auto const* r = tracker::find(gs, l, creature::of(s.p)))
+                if (auto const* r = tracker::find(gs, l, player::creature_of(gs, s.p)))
                     spotted = spotted || r->visual;
                 hunted = hunted || lizard::behavior(gs.world.creature_get_behavior(l)) == lizard::behavior::hunt;
-                bit = bit || lizard::grasped(gs, l) == creature::of(s.p);
+                bit = bit || lizard::grasped(gs, l) == player::creature_of(gs, s.p);
                 return s.dead();
             });
             char d[96];
@@ -910,7 +912,7 @@ namespace selftest {
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(29, 13), lizard::breed::pink);
             bool bit = false, climbed = false;
             bool const killed = s.until(5000, [&] {
-                bit = bit || lizard::grasped(gs, l) == creature::of(s.p);
+                bit = bit || lizard::grasped(gs, l) == player::creature_of(gs, s.p);
                 climbed = climbed || pathing::tile_access(s.room, world::room_view::get_tile_position(gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)))) == pathing::access::climb;
                 return s.dead();
             });
@@ -933,7 +935,7 @@ namespace selftest {
             bool const caught = s.until(3000, [&] {
                 auto const& t = gs.world.lizard_data_get_tongue(creature::lizard_data(gs.world, l));
                 shot = shot || t.state == lizard::tongue_state::lashing_out;
-                return t.state == lizard::tongue_state::attatched && t.attached == creature::of(s.p);
+                return t.state == lizard::tongue_state::attatched && t.attached == player::creature_of(gs, s.p);
             });
             char d[64];
             std::snprintf(d, sizeof(d), " shot=%d caught=%d", int(shot), int(caught));
@@ -1002,8 +1004,8 @@ namespace selftest {
             bool const eaten = s.until(4000, [&] {
                 gripped = gripped || daddy::legs_gripping(gs, d) > 0;
                 hunted = hunted || daddy::behavior(gs.world.creature_get_behavior(d)) == daddy::behavior::hunt;
-                held = held || daddy::holds(gs, d, creature::of(s.p));
-                eating = eating || daddy::eating(gs, d, creature::of(s.p));
+                held = held || daddy::holds(gs, d, player::creature_of(gs, s.p));
+                eating = eating || daddy::eating(gs, d, player::creature_of(gs, s.p));
                 return gs.world.player_get_eaten(s.p) != 0;
             });
             char dd[128];
@@ -1077,7 +1079,7 @@ namespace selftest {
                         float const sd = c.x > mid.x ? 1.f : -1.f;
                         dcon::creature_id hd;
                         creature::hit_part hp;
-                        if (std::fabs(c.x - mid.x) > 60.f && c.y > 50.f && creature::trace(gs, hall, c + vec2{sd * 30.f, 0.f}, c - vec2{sd * 30.f, 0.f}, 5.f, hd, hp) && hp.tentacle >= 0) {
+                        if (std::fabs(c.x - mid.x) > 60.f && c.y > 50.f && creature::trace(gs, hall, c + vec2{sd * 30.f, 0.f}, c - vec2{sd * 30.f, 0.f}, 5.f, dcon::creature_id{}, hd, hp) && hp.tentacle >= 0) {
                             at = c;
                             side = sd;
                             found = true;
@@ -1731,10 +1733,10 @@ namespace selftest {
                 st.sounds.clear();
                 st.music.clear();
                 pushed = pushed || rw::magnitude(w.body_chunk_get_vel(player::body_chunk(st, ps[0], 0)) - before) > 3.f;
-                death = std::max(death, w.player_get_rain_death(ps[0]));
+                death = std::max(death, w.creature_get_rain_death(player::creature_of(st, ps[0])));
             }
-            bool const exposed_dead = w.player_get_dead(ps[0]) != 0;
-            bool const sheltered = !w.player_get_dead(ps[1]) && w.player_get_rain_death(ps[1]) == 0.f;
+            bool const exposed_dead = player::dead(st, ps[0]) != 0;
+            bool const sheltered = !player::dead(st, ps[1]) && w.creature_get_rain_death(player::creature_of(st, ps[1])) == 0.f;
             char d[160];
             std::snprintf(d, sizeof(d), " exposed dead=%d pushed=%d rainDeath %.2f; sheltered alive=%d", int(exposed_dead), int(pushed), death, int(sheltered));
             r.check("deadly rain, shelter", exposed_dead && pushed && sheltered, d);
@@ -1819,6 +1821,348 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " built=%d piped=%d in_b=%d home=%d moves=%u", int(built), int(piped), int(crossed), int(home), dens::stats().room_changes.load());
             r.check("through a pipe to its den", built && piped && crossed && home, d);
         }
+        // Creatures fighting each other, each in a world of its own without
+        // the rain
+        auto const fight_world = [](char const* name) {
+            auto st_ptr = sys::make_game_state();
+            auto& w = st_ptr->world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st_ptr->add_text(name));
+            w.region_set_never_rains(rgn, true);
+            st_ptr->spawn_dens = false;
+            return std::pair{std::move(st_ptr), rgn};
+        };
+        auto const spawn = [](sys::game_state& st, dcon::room_id room, int32_t tx, int32_t ty, creature::type t, uint8_t variety = 0, float size = -1.f) {
+            return creature::create(st, room, world::room_view::middle_of_tile(tx, ty), creature::spawn_desc{t, size, false, variety});
+        };
+        {
+            // a pink lizard catches a baby centipede, kills it and carries
+            // it into its den, where it is eaten
+            auto [st_ptr, rgn] = fight_world("lizard_prey");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            // (a low tunnel: nowhere to climb away)
+            auto const room = make_room(st, rgn, pipe_room(34, 0, [](int32_t, int32_t y) { return y > 5 ? '#' : ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const l = spawn(st, room, 30, 2, creature::type::lizard, uint8_t(lizard::breed::pink));
+            dens::set_home(st, l, room, 0);
+            auto const c = spawn(st, room, 8, 2, creature::type::centipede, uint8_t(centipede::variant::small));
+            bool hunted = false, bit = false, killed = false, carried = false, home = false;
+            for (uint32_t t = 0; t < 4000 && !home; ++t) {
+                tick_world(st, 1);
+                if (w.creature_is_valid(c)) {
+                    hunted = hunted || (tracker::prey(tracker::of(st, l)) && tracker::prey(tracker::of(st, l))->who == c);
+                    bit = bit || lizard::grasped(st, l) == c;
+                    killed = killed || (w.creature_get_dead(c) && w.creature_get_killed_by(c) == uint8_t(uint32_t(creature::tmpl::pink_lizard) + 1));
+                    carried = carried || (bit && lizard::behavior(w.creature_get_behavior(l)) == lizard::behavior::return_prey);
+                }
+                home = !w.creature_is_valid(c) && dens::where_is(st, l) != dens::where::room;
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " hunted=%d bit=%d killed=%d carried=%d in_den=%d eaten=%d", int(hunted), int(bit), int(killed), int(carried),
+                int(home), int(!w.creature_is_valid(c)));
+            r.check("lizard kills, takes prey home", hunted && bit && killed && carried && home, d);
+        }
+        {
+            // two pink lizards in one room: rivals (AgressiveRival), they
+            // fight when they meet: bites that hurt
+            auto [st_ptr, rgn] = fight_world("lizard_fight");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(40, 16, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const a = spawn(st, room, 12, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            auto const b = spawn(st, room, 26, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            bool fighting = false, bit = false;
+            float hurt = 1.f;
+            for (uint32_t t = 0; t < 6000 && !(bit && hurt < 1.f); ++t) {
+                tick_world(st, 1);
+                for (auto const x : {a, b})
+                    fighting = fighting || lizard::behavior(w.creature_get_behavior(x)) == lizard::behavior::fighting;
+                bit = bit || lizard::grasped(st, a) == b || lizard::grasped(st, b) == a;
+                hurt = std::min({hurt, w.creature_get_health(a), w.creature_get_health(b)});
+            }
+            char d[128];
+            std::snprintf(d, sizeof(d), " fighting=%d bit=%d lowest health %.2f", int(fighting), int(bit), hurt);
+            r.check("two lizards fight", bit && hurt < 1.f, d);
+        }
+        {
+            // a white squidcada keeps away from a blue lizard
+            auto [st_ptr, rgn] = fight_world("cicada_flee");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(50, 30, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const l = spawn(st, room, 20, 1, creature::type::lizard, uint8_t(lizard::breed::blue));
+            auto const c = spawn(st, room, 24, 4, creature::type::cicada, 0, 1.f);
+            bool fled = false;
+            float closest = 1e9f, end = 0.f;
+            for (uint32_t t = 0; t < 1500; ++t) {
+                tick_world(st, 1);
+                fled = fled || cicada::behavior(w.creature_get_behavior(c)) == cicada::behavior::flee;
+                float const dd = rw::distance(creature::main_pos(st, c), creature::main_pos(st, l));
+                closest = std::min(closest, dd);
+                end = dd;
+            }
+            char d[128];
+            std::snprintf(d, sizeof(d), " fled=%d closest %.0f, at the end %.0f", int(fled), closest, end);
+            r.check("squidcada flees a lizard", fled && end > 150.f, d);
+        }
+        {
+            // a daddy long legs feels a lizard walking by and grabs it
+            auto [st_ptr, rgn] = fight_world("daddy_lizard");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const dd = spawn(st, room, 20, 6, creature::type::daddy, uint8_t(daddy::variant::daddy));
+            auto const l = spawn(st, room, 14, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            bool held = false, eating = false;
+            for (uint32_t t = 0; t < 4000 && !eating; ++t) {
+                tick_world(st, 1);
+                if (!w.creature_is_valid(l))
+                    break;
+                held = held || daddy::holds(st, dd, l);
+                eating = eating || daddy::eating(st, dd, l);
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " held=%d eating=%d", int(held), int(eating));
+            r.check("daddy long legs grabs a lizard", held, d);
+        }
+        {
+            // a big centipede gets a lizard with both ends and shocks it
+            auto [st_ptr, rgn] = fight_world("centipede_shock");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(40, 16, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const c = spawn(st, room, 10, 1, creature::type::centipede, uint8_t(centipede::variant::centipede), 1.f);
+            auto const l = spawn(st, room, 18, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            bool grabbed = false, shocked = false;
+            for (uint32_t t = 0; t < 4000 && !shocked; ++t) {
+                // (the lizard dozes: awake, it would eat the centipede)
+                if (w.creature_get_stun(l) < 30)
+                    w.creature_set_stun(l, 30);
+                tick_world(st, 1);
+                grabbed = grabbed || creature::holds(w, c, l);
+                shocked = grabbed && (w.creature_get_stun(l) > 40 || w.creature_get_dead(l));
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " grabbed=%d shocked=%d", int(grabbed), int(shocked));
+            r.check("centipede shocks a lizard", grabbed && shocked, d);
+        }
+        {
+            // a red centipede kills a pink lizard (a green one outweighs it:
+            // it would be afraid of it)
+            auto [st_ptr, rgn] = fight_world("red_centipede");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(40, 16, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const c = spawn(st, room, 8, 1, creature::type::centipede, uint8_t(centipede::variant::red));
+            auto const l = spawn(st, room, 22, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            bool killed = false, grabbed = false;
+            for (uint32_t t = 0; t < 6000 && !killed; ++t) {
+                // (the lizard dozes: awake, it runs away from it)
+                if (w.creature_get_stun(l) < 30)
+                    w.creature_set_stun(l, 30);
+                tick_world(st, 1);
+                grabbed = grabbed || creature::holds(w, c, l);
+                killed = w.creature_get_dead(l) && w.creature_get_killed_by(l) == uint8_t(uint32_t(creature::tmpl::red_centipede) + 1);
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " grabbed=%d killed=%d", int(grabbed), int(killed));
+            (void)c;
+            r.check("red centipede kills a lizard", killed, d);
+        }
+        {
+            // a school of leeches latches on to a lizard in the water
+            auto [st_ptr, rgn] = fight_world("leech_lizard");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(40, 20, [](int32_t, int32_t) { return ' '; }), 12);
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const l = spawn(st, room, 20, 4, creature::type::lizard, uint8_t(lizard::breed::green));
+            std::vector<dcon::creature_id> ls;
+            for (int i = 0; i < 3; ++i)
+                ls.push_back(spawn(st, room, 12 + i, 6, creature::type::leech));
+            bool latched = false;
+            for (uint32_t t = 0; t < 3000 && !latched; ++t) {
+                tick_world(st, 1);
+                for (auto const x : ls)
+                    latched = latched || (w.creature_is_valid(x) && leech::attached_to(st, x) == l);
+            }
+            r.check("leeches latch on to a lizard", latched, latched ? " latched=1" : " latched=0");
+        }
+        {
+            // a spear thrown past two stunned creatures hits the closer one
+            auto [st_ptr, rgn] = fight_world("spear_trace");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, box(50, 16, [](int32_t, int32_t) { return ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            auto const near_l = spawn(st, room, 20, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            auto const far_l = spawn(st, room, 34, 1, creature::type::lizard, uint8_t(lizard::breed::pink));
+            auto const p = player::create(st, room, feet_at(8, 1));
+            auto const spear = items::create_spear(st, room, feet_at(8, 1));
+            std::vector<player::input_package> in(1);
+            bool held = false, hit_near = false, hit_far = false;
+            for (uint32_t t = 0; t < 200; ++t) {
+                for (auto const x : {near_l, far_l})
+                    w.creature_set_stun(x, std::max(w.creature_get_stun(x), 100));
+                // pick it up, face right, throw
+                in[0] = player::make_input(t > 40 ? 1.f : 0.f, 0.f, false, t == 60, t < 20 && t % 4 == 0);
+                if (t > 61)
+                    in[0] = player::input_package{};
+                simulation::tick(st, std::span{&p, 1}, in);
+                st.sounds.clear();
+                st.music.clear();
+                held = held || items::grabber(st, spear) == p;
+                hit_near = hit_near || w.creature_get_health(near_l) < 1.f;
+                hit_far = hit_far || w.creature_get_health(far_l) < 1.f;
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " held=%d near hit=%d far hit=%d", int(held), int(hit_near), int(hit_far));
+            r.check("spear hits the closest creature", held && hit_near && !hit_far, d);
+            player::destroy(st, p);
+        }
+        {
+            // a lizard goes on a trip to the next room through the exit pipe,
+            // and comes back home to its den before the rain
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn = w.create_region();
+            w.region_set_name(rgn, st.add_text("trips"));
+            auto const a = make_room(st, rgn, pipe_room(34, 5));
+            auto const b = make_room(st, rgn, pipe_room(0, 34));
+            auto const ea = exits_of(st, a), eb = exits_of(st, b);
+            bool const built = ea.size() == 2 && eb.size() == 1;
+            if (built) {
+                w.room_exit_set_target_from_exit_connection(ea[0], b);
+                w.room_exit_set_target_from_exit_connection(eb[0], a);
+            }
+            st.spawn_dens = false;
+            simulation::populate(st);
+            auto const c = spawn(st, a, 30, 2, creature::type::lizard, uint8_t(lizard::breed::pink));
+            dens::set_home(st, c, a, 1);
+            rain::rain_in(st, rgn, 6000);
+            bool const planned = migrate::plan_trip(st, c, a, b);
+            bool visited = false, home = false, before_rain = false;
+            for (uint32_t t = 0; t < 6000 && !home; ++t) {
+                tick_world(st, 1);
+                visited = visited || creature::room_of(st, c) == b;
+                home = visited && dens::where_is(st, c) == dens::where::den && w.creature_get_away_room(c) == a;
+                before_rain = home && !rain::deadly(w.region_get_rain(rgn));
+            }
+            char d[128];
+            std::snprintf(d, sizeof(d), " built=%d planned=%d visited=%d home=%d before_rain=%d", int(built), int(planned), int(visited), int(home), int(before_rain));
+            r.check("trip out and home before rain", built && planned && visited && home && before_rain, d);
+        }
+        {
+            // a lizard crosses a region gate: it waits at the middle door,
+            // the gate cycles for it, and it goes on into the next region
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const r1 = w.create_region();
+            w.region_set_name(r1, st.add_text("ga"));
+            w.region_set_never_rains(r1, true);
+            auto const r2 = w.create_region();
+            w.region_set_name(r2, st.add_text("gb"));
+            w.region_set_never_rains(r2, true);
+            auto const a = make_room(st, r1, pipe_room(0, 34));
+            // the gate: a floor below y 8, the doors at x 14, 23, 32 (the middle
+            // one closed), a room exit pipe at each end
+            auto const gate_room = make_room(st, r1, box(48, 25, [](int32_t x, int32_t y) {
+                for (auto const& [px, side] : {std::pair{3, -1}, std::pair{44, 1}}) {
+                    if (x == px && y == 8)
+                        return 'S';
+                    if (x == px && y == 7)
+                        return '.';
+                    if (x == px + side && y == 7)
+                        return 'E';
+                    if ((x == px + side && y == 8) || (x == px && y == 9))
+                        return '#';
+                }
+                if (y < 8)
+                    return '#';
+                if ((x == 23 || x == 24) && y <= 16)
+                    return '#';
+                return ' ';
+            }));
+            auto const b = make_room(st, r2, pipe_room(0, 5));
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.gate_set_door_closed(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_door_goal(g, rw::vec3{0.f, 1.f, 0.f});
+            w.gate_set_last_closed(g, 0b010);
+            w.try_create_gate_location(g, gate_room);
+            auto const ea = exits_of(st, a), eg = exits_of(st, gate_room), eb = exits_of(st, b);
+            bool const built = ea.size() == 1 && eg.size() == 2 && eb.size() == 1;
+            if (built) {
+                w.room_exit_set_target_from_exit_connection(ea[0], gate_room);
+                w.room_exit_set_target_from_exit_connection(eg[0], a);
+                w.room_exit_set_target_from_exit_connection(eg[1], b);
+                w.room_exit_set_target_from_exit_connection(eb[0], gate_room);
+            }
+            st.spawn_dens = false;
+            simulation::populate(st);
+            rain::new_cycle(st, r1);
+            rain::new_cycle(st, r2);
+            auto const c = spawn(st, a, 10, 2, creature::type::lizard, uint8_t(lizard::breed::pink));
+            bool const planned = migrate::plan_trip(st, c, a, b);
+            bool in_gate = false, cycled = false, across = false;
+            for (uint32_t t = 0; t < 8000 && !across; ++t) {
+                tick_world(st, 1);
+                in_gate = in_gate || creature::room_of(st, c) == gate_room;
+                cycled = cycled || w.gate_get_mode(g) == world::gate_mode::middle_open;
+                across = creature::room_of(st, c) == b;
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " built=%d planned=%d in_gate=%d cycled=%d across=%d regions_changed=%u", int(built), int(planned), int(in_gate), int(cycled),
+                int(across), uint32_t(w.creature_get_regions_changed(c)));
+            r.check("creature through a region gate", built && planned && in_gate && cycled && across && w.creature_get_regions_changed(c) > 0, d);
+        }
+        {
+            // a centipede walks into a Watcher warp on its way and comes out
+            // in the room of another region it leads to
+            auto const st_ptr = sys::make_game_state();
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const r1 = w.create_region();
+            w.region_set_name(r1, st.add_text("wa"));
+            w.region_set_never_rains(r1, true);
+            auto const r2 = w.create_region();
+            w.region_set_name(r2, st.add_text("wb"));
+            w.region_set_never_rains(r2, true);
+            auto const a = make_room(st, r1, box(30, 16, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(st, r2, box(30, 16, [](int32_t, int32_t) { return ' '; }));
+            add_warp(st, a, {feet_at(22, 1) + vec2{0.f, 20.f}, b, feet_at(8, 1) + vec2{0.f, 20.f}});
+            st.spawn_dens = false;
+            simulation::populate(st);
+            rain::new_cycle(st, r1);
+            rain::new_cycle(st, r2);
+            auto const c = spawn(st, a, 5, 1, creature::type::centipede, uint8_t(centipede::variant::centipede), 0.5f);
+            bool const planned = migrate::plan_trip(st, c, a, b);
+            bool across = false;
+            for (uint32_t t = 0; t < 4000 && !across; ++t) {
+                tick_world(st, 1);
+                across = creature::room_of(st, c) == b;
+            }
+            char d[128];
+            std::snprintf(d, sizeof(d), " planned=%d across=%d regions_changed=%u", int(planned), int(across), uint32_t(w.creature_get_regions_changed(c)));
+            r.check("creature carried by a warp", planned && across && w.creature_get_regions_changed(c) > 0, d);
+        }
         {
             // a world file's creatures: den spawns, counts, lineages,
             // campaign filters, spawn data
@@ -1893,6 +2237,7 @@ namespace selftest {
 
     dcon::creature_id& world_creatures::of(creature::type t) noexcept {
         switch (t) {
+        case creature::type::slugcat: break;
         case creature::type::centipede: return centipede;
         case creature::type::dropbug: return dropbug;
         case creature::type::cicada: return cicada;
@@ -1915,9 +2260,12 @@ namespace selftest {
         out.centipede_variant = centipede::variant(uint32_t(rid.index()) % centipede::variant_count);
         out.leech_variant = leech::variant(uint32_t(rid.index()) % leech::variant_count);
         for (auto const t : creature::all_types) {
+            if (t == creature::type::slugcat)
+                continue;
             // each kind rolls its spot from its own seed
             uint32_t salt = 0;
             switch (t) {
+            case creature::type::slugcat: break;
             case creature::type::centipede: salt = 0xCE7712EDu; break;
             case creature::type::dropbug: salt = 0x51ED27u; break;
             case creature::type::cicada: salt = 0xC1CADAu; break;
@@ -1933,6 +2281,8 @@ namespace selftest {
                 creature::spawn_desc d{t};
                 bool ok = false;
                 switch (t) {
+                case creature::type::slugcat:
+                    break;
                 case creature::type::centipede:
                     // somewhere it can stand (an aquapede in the water if
                     // there is any), any size
@@ -2108,7 +2458,7 @@ namespace selftest {
                             finite = finite && finite_chunks(gs, centipede::body(gs, cc));
                             auto const& cp = w.creature_get_payload(cc).centipede;
                             x.wing_flew = x.wing_flew || (cp.variant == centipede::variant::wing && cp.flying);
-                            x.baby_held = x.baby_held || (cp.variant == centipede::variant::small && w.centipede_data_get_held_by(creature::centipede_data(w, cc)) == x.p.index() + 1);
+                            x.baby_held = x.baby_held || (cp.variant == centipede::variant::small && creature::holds(w, player::creature_of(gs, x.p), cc));
                             x.aqua_swam = x.aqua_swam || (cp.variant == centipede::variant::aqua
                                 && physics::object_submersion(gs, world::get_room_view(gs, x.room), centipede::body(gs, cc)) > 0.5f);
                         } else {
@@ -2118,7 +2468,7 @@ namespace selftest {
                     for (auto const l : c.leeches)
                         if (l && creature::is(w, l, creature::type::leech)) {
                             finite = finite && finite_chunks(gs, leech::body(gs, l));
-                            x.leech_latched = x.leech_latched || leech::attached_to(gs, l) == creature::of(x.p);
+                            x.leech_latched = x.leech_latched || leech::attached_to(gs, l) == player::creature_of(gs, x.p);
                         }
                     if (c.dropbug) {
                         finite = finite && finite_chunks(gs, dropbug::body(gs, c.dropbug));
@@ -2134,7 +2484,7 @@ namespace selftest {
                         finite = finite && finite_chunks(gs, lizard::body(gs, c.lizard));
                         auto const l = c.lizard;
                         x.lizard_hunted = x.lizard_hunted || lizard::behavior(w.creature_get_behavior(l)) == lizard::behavior::hunt;
-                        x.lizard_bit = x.lizard_bit || lizard::grasped(gs, l) == creature::of(x.p);
+                        x.lizard_bit = x.lizard_bit || lizard::grasped(gs, l) == player::creature_of(gs, x.p);
                         x.lizard_tongued = x.lizard_tongued || w.lizard_data_get_tongue(creature::lizard_data(w, l)).state == lizard::tongue_state::lashing_out;
                         x.lizard_jumped = x.lizard_jumped || w.lizard_data_get_core(creature::lizard_data(w, l)).anim == lizard::animation::jumping;
                         x.lizard_spat = x.lizard_spat || w.lizard_data_get_core(creature::lizard_data(w, l)).anim == lizard::animation::spit;
@@ -2148,8 +2498,8 @@ namespace selftest {
                                 finite = finite && std::isfinite(tc.pos.x) && std::isfinite(tc.pos.y);
                         x.daddy_gripped = x.daddy_gripped || daddy::legs_gripping(gs, dll) > 0;
                         x.daddy_hunted = x.daddy_hunted || daddy::behavior(w.creature_get_behavior(dll)) == daddy::behavior::hunt;
-                        x.daddy_held = x.daddy_held || daddy::holds(gs, dll, creature::of(x.p));
-                        x.daddy_ate = x.daddy_ate || daddy::eating(gs, dll, creature::of(x.p));
+                        x.daddy_held = x.daddy_held || daddy::holds(gs, dll, player::creature_of(gs, x.p));
+                        x.daddy_ate = x.daddy_ate || daddy::eating(gs, dll, player::creature_of(gs, x.p));
                     }
                     if (!finite) {
                         std::printf("room %s: non finite position at tick %u\n", std::string{gs.to_string_view(w.room_get_name(x.room))}.c_str(), t);
@@ -2209,7 +2559,7 @@ namespace selftest {
                 babies_eaten += x.baby_eaten ? 1 : 0;
                 aquapedes_swam += x.aqua_swam ? 1 : 0;
                 leeches_latched += x.leech_latched ? 1 : 0;
-                if (x.leech_latched && w.player_get_dead(x.p))
+                if (x.leech_latched && player::dead(gs, x.p))
                     ++leeches_drowned_slugcat;
                 for (auto const l : c.leeches)
                     if (l && creature::is(w, l, creature::type::leech) && in_room(leech::body(gs, l))) {
@@ -2219,7 +2569,7 @@ namespace selftest {
                     }
                 if (w.player_get_eaten(x.p))
                     ++eaten;
-                else if (w.player_get_dead(x.p))
+                else if (player::dead(gs, x.p))
                     ++deaths;
             }
         }
@@ -2287,8 +2637,28 @@ namespace selftest {
             auto const& rs = rain::stats();
             std::printf("rain: due after %u ticks in every region, %u death rains came and went (once per group of regions), %u slugcats and %u creatures killed by it\n",
                 rain_at, rs.cycles_finished.load(), rs.players_killed.load(), rs.creatures_killed.load());
-            std::printf("dens: %u creatures from the world files (at the end %u out, %u in pipes, %u in dens, %u dead); %u went into pipes, %u into dens, %u came out of dens, %u changed rooms, %u slugcats carried off\n",
-                natural, out, in_pipes, in_dens, dead, ds.into_pipes.load(), ds.into_dens.load(), ds.out_of_dens.load(), ds.room_changes.load(), ds.prey_taken.load());
+            std::printf("dens: %u creatures from the world files (at the end %u out, %u in pipes, %u in dens, %u dead); %u went into pipes, %u into dens, %u came out of dens, %u changed rooms, %u prey taken into a pipe (%u creatures eaten there)\n",
+                natural, out, in_pipes, in_dens, dead, ds.into_pipes.load(), ds.into_dens.load(), ds.out_of_dens.load(), ds.room_changes.load(), ds.prey_taken.load(),
+                ds.creatures_eaten.load());
+            // the fights: kills by killer and victim template, the most
+            // frequent pairs
+            auto const& k = creature::kills();
+            uint32_t total = 0, slugcats = 0;
+            std::vector<std::tuple<uint32_t, creature::tmpl, creature::tmpl>> pairs;
+            for (uint32_t a = 0; a < creature::tmpl_count; ++a)
+                for (uint32_t b = 0; b < creature::tmpl_count; ++b)
+                    if (uint32_t const n = k.n[a][b].load()) {
+                        total += n;
+                        slugcats += b == uint32_t(creature::tmpl::slugcat) ? n : 0;
+                        pairs.emplace_back(n, creature::tmpl(a), creature::tmpl(b));
+                    }
+            std::sort(pairs.begin(), pairs.end(), [](auto const& x, auto const& y) { return std::get<0>(x) > std::get<0>(y); });
+            std::string top;
+            for (size_t i = 0; i < pairs.size() && i < 10; ++i)
+                top += std::string{i ? ", " : ""} + creature::to_string(std::get<1>(pairs[i])) + " killed " + creature::to_string(std::get<2>(pairs[i])) + " x"
+                    + std::to_string(std::get<0>(pairs[i]));
+            std::printf("fights: %u kills by creatures (%u slugcats, %u creatures; %zu killer/victim pairs): %s\n", total, slugcats, total - slugcats, pairs.size(),
+                top.empty() ? "none" : top.c_str());
         }
         uint32_t legs = 0, tendrils = 0, vines = 0, eyes = 0, max_bulbs = 0;
         w.for_each_rot_tube([&](dcon::rot_tube_id t) {
@@ -2342,7 +2712,7 @@ namespace selftest {
                 gs.music.clear();
                 gs.sounds.clear();
                 for (size_t i = 0; i < n; ++i)
-                    if (!done[i] && simulation::player_room(gs, players[i]) == pipes[b0 + i].target && !w.player_get_in_shortcut(players[i])) {
+                    if (!done[i] && simulation::player_room(gs, players[i]) == pipes[b0 + i].target && !player::in_shortcut(gs, players[i])) {
                         done[i] = true;
                         inputs[i] = player::input_package{};
                         --left;
@@ -2355,6 +2725,23 @@ namespace selftest {
                         + std::to_string(pipes[b0 + i].start.y) + ")");
         }
         std::printf("pipes: %u of %zu connected room exits delivered the slugcat\n", arrived, pipes.size());
+        {
+            auto const& ds = dens::stats();
+            // the trips, to the end (the pipes' ticks included): rooms and
+            // regions changed
+            uint32_t rooms_changed = 0, travellers = 0, elsewhere = 0;
+            w.for_each_creature([&](dcon::creature_id c) {
+                rooms_changed += w.creature_get_rooms_changed(c);
+                travellers += w.creature_get_rooms_changed(c) > 0 ? 1 : 0;
+                auto const home = w.creature_get_home_room(c);
+                auto const at = dens::where_is(gs, c) == dens::where::room ? creature::room_of(gs, c) : w.creature_get_away_room(c);
+                if (home && at && w.room_get_region_from_region_membership(home) != w.room_get_region_from_region_membership(at))
+                    ++elsewhere;
+            });
+            std::printf("travel: %u trips planned (%u to another region, %u through a warp), %u rooms entered by %u creatures still alive, %u carried by a warp, %u region changes through gates, %u through warps; "
+                        "%u creatures in another region than their den at the end\n",
+                ds.trips.load(), ds.cross_trips.load(), ds.warp_trips.load(), rooms_changed, travellers, ds.warp_carried.load(), ds.gated_regions.load(), ds.warped_regions.load(), elsewhere);
+        }
         for (auto const& f : failed_pipes)
             std::printf("  pipe stuck: %s\n", f.c_str());
         for (auto const p : players)
@@ -2424,6 +2811,8 @@ namespace selftest {
             w.for_each_body_chunk([&](dcon::body_chunk_id) { ++chunks; });
             uint32_t out = 0, in_pipes = 0, in_dens = 0;
             w.for_each_creature([&](dcon::creature_id c) {
+                if (creature::is_slugcat(w, c))
+                    return;
                 auto const where = dens::where_is(gs, c);
                 (where == dens::where::room ? out : where == dens::where::shortcut ? in_pipes : in_dens) += 1;
             });

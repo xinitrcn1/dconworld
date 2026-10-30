@@ -321,58 +321,39 @@ namespace rot {
             return best;
         }
 
-        dcon::player_id prey_player(rot_prey p) { return dcon::player_id{dcon::player_id::value_base_t(p.id)}; }
         dcon::creature_id prey_creature(rot_prey p) { return dcon::creature_id{dcon::creature_id::value_base_t(p.id)}; }
 
         dcon::physical_object_id prey_body(sys::game_state const& state, rot_prey p) {
-            auto const& w = state.world;
-            if (p.kind == prey_kind::player && w.player_is_valid(prey_player(p)) && rooms::reachable(state, prey_player(p)))
-                return player::body(state, prey_player(p));
-            if (p.kind == prey_kind::creature && w.creature_is_valid(prey_creature(p)))
-                return creature::body(state, prey_creature(p));
-            return dcon::physical_object_id{};
+            return p.kind == prey_kind::creature ? creature::body_of(state, prey_creature(p)) : dcon::physical_object_id{};
         }
         dcon::body_chunk_id prey_chunk(sys::game_state const& state, rot_prey p) {
             auto const o = prey_body(state, p);
             return o ? physics::chunk(state, o, p.chunk) : dcon::body_chunk_id{};
         }
-        // the creature still exists and is out in `room` (not travelling a pipe, not eaten)
+        // the creature still exists and is out in `room` (not travelling a
+        // pipe, not eaten)
         bool prey_in_room(sys::game_state const& state, rot_prey p, dcon::room_id room) {
-            auto const& w = state.world;
-            auto const o = prey_body(state, p);
-            if (!o || w.physical_object_get_room_from_object_location(o) != room)
+            if (p.kind != prey_kind::creature || !creature::here(state, prey_creature(p), room))
                 return false;
-            if (p.kind == prey_kind::player)
-                return !w.player_get_in_shortcut(prey_player(p)) && !w.player_get_eaten(prey_player(p));
-            return true;
+            auto const pl = creature::player_of(state, prey_creature(p));
+            return !pl || !state.world.player_get_eaten(pl);
         }
 
-        // every chunk of every creature in the room (Room.abstractRoom.creatures)
+        // every chunk of every creature in the room (Room.abstractRoom.creatures),
+        // the slugcats first; a long legs is rot itself
         template<typename F>
         void for_each_creature_chunk(sys::game_state const& state, dcon::room_id room, F&& f) {
             bool stop = false;
-            rooms::for_each_player(state, room, [&](dcon::player_id p) {
-                if (stop)
+            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+                if (stop || creature::type_of(state.world, c) == creature::type::daddy)
                     return;
-                rot_prey const base{prey_kind::player, 0, uint16_t(p.index())};
+                rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
                 if (!prey_in_room(state, base, room))
                     return;
-                for (uint8_t i = 0; i < 2 && !stop; ++i)
-                    stop = f(rot_prey{prey_kind::player, i, base.id}, player::body_chunk(state, p, i));
+                uint32_t const n = creature::chunk_count(state, c);
+                for (uint32_t i = 0; i < n && !stop; ++i)
+                    stop = f(rot_prey{prey_kind::creature, uint8_t(i), base.id}, creature::chunk(state, c, i));
             });
-            // (of the creatures only the centipedes and the leeches for now:
-            // the rot came before the other kinds were ported)
-            for (auto const t : {creature::type::centipede, creature::type::leech})
-                rooms::for_each_creature(state, room, t, [&](dcon::creature_id c) {
-                    if (stop)
-                        return;
-                    rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
-                    if (!prey_in_room(state, base, room))
-                        return;
-                    uint32_t const n = creature::chunk_count(state, c);
-                    for (uint32_t i = 0; i < n && !stop; ++i)
-                        stop = f(rot_prey{prey_kind::creature, uint8_t(i), base.id}, creature::chunk(state, c, i));
-                });
         }
 
         //
@@ -1000,16 +981,19 @@ namespace rot {
             if (prog < 1.f)
                 return false;
             // Creature.Die, then Destroy
-            if (p.kind == prey_kind::player) {
-                auto const pl = prey_player(p);
+            auto const c = prey_creature(p);
+            if (auto const pl = creature::player_of(state, c)) {
+                // a slugcat stays, dead and gone
                 items::release_all(state, pl);
-                creature::release_player(state, pl);
-                release_player(state, pl);
-                player::die(state, pl);
+                creature::release_target(state, c);
+                release(state, c);
+                creature::die(state, c);
                 w.player_set_eaten(pl, 1);
             } else {
                 // Destroy: gone at the end of the tick
-                auto const c = prey_creature(p);
+                if (!w.creature_get_dead(c))
+                    w.creature_set_killed_by(c, creature::killed_by_other);
+                creature::die(state, c);
                 state.defer(room_of(state, s), [c](sys::game_state& st) {
                     if (st.world.creature_is_valid(c))
                         creature::destroy(st, c);
@@ -1279,11 +1263,11 @@ namespace rot {
         });
     }
 
-    void release_player(sys::game_state& state, dcon::player_id p) {
+    void release(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto const is_p = [&](rot_prey const& q) { return q.kind == prey_kind::player && q.id == uint16_t(p.index()); };
-        // the rot that has hold of the slugcat is its room's
-        auto const room = rooms::room_of(state, p);
+        auto const is_p = [&](rot_prey const& q) { return q.kind == prey_kind::creature && q.id == uint16_t(c.index()); };
+        // the rot that has hold of it is its room's
+        auto const room = creature::room_of(state, c);
         auto const s = system_of(state, room);
         if (!s)
             return;

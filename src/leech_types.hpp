@@ -7,7 +7,7 @@
 
 #include "math.hpp"
 #include "player_types.hpp"
-#include "target_types.hpp"
+#include "dcon_generated_ids.hpp"
 
 namespace leech {
     // CreatureTemplate.Type of the templates running Leech.cs: Leech, SeaLeech
@@ -21,7 +21,7 @@ namespace leech {
 
     // LeechSchool.LeechPrey: a creature or slugcat the school hunts
     struct school_prey {
-        creature::target who;
+        dcon::creature_id who;
         // Creature.leechedOut, as far as this school is concerned
         uint8_t leeched_out = 0;
         int32_t forget_counter = 0;

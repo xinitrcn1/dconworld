@@ -172,13 +172,9 @@ namespace player {
         // Every player field, see the player object in dcon_generated.txt
 #define PLAYER_FIELDS \
     X(stats) \
-    X(random) \
     X(input) \
     X(body_mode) \
     X(animation) \
-    X(stun) \
-    X(dead) \
-    X(shortcut_delay) \
     X(flip_direction) \
     X(last_flip_direction) \
     X(standing) \
@@ -247,13 +243,6 @@ namespace player {
     X(submerged) \
     X(lungs_exhausted) \
     X(drown) \
-    X(entering_shortcut) \
-    X(shortcut_rad_add) \
-    X(in_shortcut) \
-    X(vessel_reverse) \
-    X(vessel_progress) \
-    X(vessel_last_progress) \
-    X(rain_death) \
     X(want_to_pick_up) \
     X(want_to_throw) \
     X(dont_grab_stuff) \
@@ -290,13 +279,32 @@ namespace player {
     X(ability_loop_sound) \
     X(ability_loop_volume)
 
-        // Reference accessors into the data container for one player, so the
-        // port reads like the C# ("this.canJump" -> p.can_jump())
+        // What the slugcat shares with every creature (its `creature`), see
+        // the creature object in dcon_generated.txt
+#define SLUGCAT_CREATURE_FIELDS \
+    X(random) \
+    X(stun) \
+    X(dead) \
+    X(shortcut_delay) \
+    X(shortcut_rad_add) \
+    X(vessel_reverse) \
+    X(vessel_progress) \
+    X(vessel_last_progress) \
+    X(rain_death)
+
+        // Reference accessors into the data container for one player and its
+        // creature, so the port reads like the C# ("this.canJump" ->
+        // p.can_jump(), "this.stun" -> p.stun())
         struct pref {
             sys::game_state& state;
             dcon::player_id id;
+            dcon::creature_id cr;
+            pref(sys::game_state& s, dcon::player_id i) : state{s}, id{i}, cr{s.world.player_get_creature(i)} {}
 #define X(name) decltype(auto) name() { return state.world.player_get_##name(id); }
             PLAYER_FIELDS
+#undef X
+#define X(name) decltype(auto) name() { return state.world.creature_get_##name(cr); }
+            SLUGCAT_CREATURE_FIELDS
 #undef X
         };
 
@@ -491,10 +499,18 @@ namespace player {
 #define X(name) p.name() = std::remove_reference_t<decltype(p.name())>{};
             PLAYER_FIELDS
 #undef X
+            // the creature's share of it (its generator kept)
+#define X(name) p.name() = std::remove_reference_t<decltype(p.name())>{};
+            SLUGCAT_CREATURE_FIELDS
+#undef X
             p.stats() = stats;
             p.random() = random;
+            auto& w = p.state.world;
+            w.creature_set_away(p.cr, 0);
+            w.creature_set_away_room(p.cr, dcon::room_id{});
+            w.creature_set_entering_shortcut(p.cr, ivec2{-1, -1});
             // id properties come back as fat ids (not references)
-            p.state.world.player_set_vessel_shortcut(p.id, dcon::shortcut_id{});
+            w.creature_set_vessel_shortcut(p.cr, dcon::shortcut_id{});
             p.state.world.player_set_vine(p.id, dcon::rot_tube_id{});
             p.air_in_lungs() = 1.f;
             p.levitation_gravity() = 0.9f;
@@ -516,8 +532,24 @@ namespace player {
         die_impl(p);
     }
 
+    void violence(sys::game_state& state, dcon::player_id id, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
+        // Player.Violence through Creature.Violence as a creature deals it:
+        // a stun, death from a full point of damage; a slugcat stunned hard
+        // drops what it holds (not while held in jaws: Player.dangerGrasp)
+        auto& w = state.world;
+        pref p{state, id};
+        auto const c = body_chunk(state, id, k);
+        w.body_chunk_get_vel(c) += momentum / w.body_chunk_get_mass(c);
+        int32_t const st = int32_t(damage * 30.f + stun_bonus);
+        stun_impl(p, st);
+        if (!creature::held(state, p.cr) && st > p.random().range(5, 12))
+            items::release_all(state, id);
+        if (damage >= 1.f)
+            die_impl(p);
+    }
+
     dcon::physical_object_id body(sys::game_state const& state, dcon::player_id p) noexcept {
-        return state.world.player_get_body_from_player_body(p);
+        return state.world.creature_get_body_from_creature_body(state.world.player_get_creature(p));
     }
 
     dcon::body_chunk_id body_chunk(sys::game_state const& state, dcon::player_id p, uint32_t i) noexcept {
@@ -526,6 +558,11 @@ namespace player {
 
     dcon::player_id create(sys::game_state& state, dcon::room_id room, vec2 pos, slugcat_name name) {
         auto const id = state.world.create_player();
+        // the slugcat creature it drives
+        auto const cr = creature::make(state, creature::type::slugcat);
+        state.world.creature_get_payload(cr).slugcat.player = uint16_t(id.index());
+        state.world.player_set_creature(id, cr);
+        state.world.creature_set_health(cr, 1.f);
         pref p{state, id};
         p.stats() = make_stats(name);
         p.random() = rw::rng{0x9E3779B9u ^ (uint32_t(id.index()) * 0x85EBCA6Bu)};
@@ -542,30 +579,27 @@ namespace player {
         auto const c0 = physics::add_chunk(state, o, pos + vec2{0.f, 17.f}, 9.f, mass / 2.f);
         auto const c1 = physics::add_chunk(state, o, pos, 8.f, mass / 2.f);
         physics::add_connection(state, o, c0, c1, 17.f, physics::connection_type::normal, 1.f, 0.5f);
-        state.world.try_create_player_body(id, o);
+        state.world.try_create_creature_body(cr, o);
         // erasable slots are reused: drop any graphics state left by a previous player
         state.world.player_set_graphics(id, ::player::graphics_state{});
-        state.world.player_set_grasp0(id, dcon::item_id{});
-        state.world.player_set_grasp1(id, dcon::item_id{});
         p.flip_direction() = p.random().value() < 0.5f ? -1 : 1;
         return id;
     }
 
     void destroy(sys::game_state& state, dcon::player_id id) {
         items::release_all(state, id);
-        rot::release_player(state, id);
-        creature::release_player(state, id);
-        auto const o = body(state, id);
+        rot::release(state, state.world.player_get_creature(id));
+        auto const cr = state.world.player_get_creature(id);
+        creature::release_target(state, cr);
         state.world.delete_player(id);
-        if (o)
-            physics::delete_object(state, o);
+        creature::erase(state, cr);
     }
 
     void reset(sys::game_state& state, dcon::player_id id, dcon::room_id room, vec2 pos) {
         items::release_all(state, id);
-        creature::release_player(state, id);
+        creature::release_target(state, state.world.player_get_creature(id));
         // (they all look in the room the slugcat is leaving)
-        rot::release_player(state, id);
+        rot::release(state, state.world.player_get_creature(id));
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -749,9 +783,8 @@ namespace player {
         if (x.tile_pos(x.pos(0)).y <= x.tile_pos(x.pos(1)).y && x.solid(0, 0, 1))
             p.standing() = false;
 
-        // Creature.Update
-        if (p.stun() > 0)
-            --p.stun();
+        // Creature.Update (the stun countdown every kind shares)
+        creature::stun_countdown(state, p.cr);
         if (p.shortcut_delay() > 0)
             --p.shortcut_delay();
         // being sucked into a shortcut replaces the physics and movement

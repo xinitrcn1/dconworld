@@ -13,16 +13,15 @@
 //   room nodes 3393           -> 16384 (+ ~460k connectivity entries
 //     pooled, a few million with Watcher)
 //   players: co-op up to 4    -> 255 (the fuzz and the bench drive
-//     a slugcat in hundreds of rooms at once; creatures keep a player as
-//     its index + 1 in a byte)
+//     a slugcat in hundreds of rooms at once; each is a creature too)
 //   physical objects / body chunks: players + items + creatures ->
 //     65536 / 262144 (`--bench` puts one creature of each kind in every
 //     one of the 2074 Watcher rooms: ~40 chunks a room)
 //   Every room is simulated all the time, so the creature bounds are for the
 //   whole world, not the realised rooms; the bench's one of each per room
 //   needs ~2100 of each:
-//   creatures -> 16384 (the five kinds' ~10500 for the Watcher bench, and
-//     the leech schools of the rooms with water), and each kind's data
+//   creatures -> 16384 (the six kinds' ~10500 for the Watcher bench, the
+//     leech schools of the rooms with water, and the slugcats), and each kind's data
 //     object -> 4096:
 //   centipedes: 18 chunks (red), 153 push connections each at most
 //   dropbugs: 3 chunks, 3 connections each
@@ -586,7 +585,10 @@ relationship{
 }
 
 //
-// Players (Player.cs movement state), one per co-op slot
+// Players: the slugcat kind's own state (Player.cs movement, PlayerGraphics,
+// the abilities, food) and its controller's input, one per slugcat. What
+// the slugcat shares with every creature (body, stun, death, pipes, rain,
+// grasps) is its `creature` (type slugcat), whose payload points back here
 //
 
 object{
@@ -595,15 +597,9 @@ object{
 	size{255}
 	tag{save}
 	property{ name{stats} type{::player::slugcat_stats} }
-	property{ name{random} type{rw::rng} }
 	property{ name{input} type{::player::input_history} }
 	property{ name{body_mode} type{::player::body_mode_index} }
 	property{ name{animation} type{::player::animation_index} }
-
-	// Creature
-	property{ name{stun} type{int32_t} }
-	property{ name{dead} type{uint8_t} }
-	property{ name{shortcut_delay} type{int32_t} }
 
 	property{ name{flip_direction} type{int32_t} }
 	property{ name{last_flip_direction} type{int32_t} }
@@ -690,18 +686,6 @@ object{
 	// PlayerGraphics: head, legs and tail body parts, draw positions, blink
 	property{ name{graphics} type{::player::graphics_state} }
 
-	// shortcuts: Creature.enteringShortCut, then the ShortCutVessel travelling
-	// the path (smooth: progress in tiles, a third of a tile per tick)
-	property{ name{entering_shortcut} type{std::optional<rw::ivec2>} }
-	property{ name{shortcut_rad_add} type{float} }
-	property{ name{in_shortcut} type{uint8_t} }
-	property{ name{vessel_shortcut} type{shortcut_id} }
-	property{ name{vessel_reverse} type{uint8_t} }
-	property{ name{vessel_progress} type{float} }
-	property{ name{vessel_last_progress} type{float} }
-	// Creature.rainDeath
-	property{ name{rain_death} type{float} }
-
 	// grabbing (Player.GrabUpdate)
 	property{ name{want_to_pick_up} type{int32_t} }
 	property{ name{want_to_throw} type{int32_t} }
@@ -765,20 +749,9 @@ object{
 	property{ name{camo_direction_sound} type{uint8_t} }
 	property{ name{ability_loop_sound} type{uint8_t} }
 	property{ name{ability_loop_volume} type{float} }
-	// Creature.grasps[0] and [1]: the items in its hands (plain properties
-	// rather than a relationship, so grabbing and letting go are writes to
-	// the player and the item that a room's update can do while every other
-	// room updates too)
-	property{ name{grasp0} type{item_id} }
-	property{ name{grasp1} type{item_id} }
-}
-// the physical body a player controls
-relationship{
-	name{player_body}
-	tag{save}
-	link{ object{player} name{player} type{unique} }
-	link{ object{physical_object} name{body} type{unique} }
-	primary_key{player}
+	// the slugcat creature this Player.cs state drives (its payload points
+	// back here)
+	property{ name{creature} type{creature_id} }
 }
 
 //
@@ -802,11 +775,11 @@ object{
 	property{ name{forbidden_to_player} type{int32_t} }
 	property{ name{override_exit_thrown_speed} type{float} }
 	property{ name{throw_mode_frames} type{int32_t} }
-	// Creature.Grasp on it: the player holding it and the hand
-	property{ name{grabbed_by} type{player_id} }
+	// Creature.Grasp on it: the creature holding it and the grasp
+	property{ name{grabbed_by} type{creature_id} }
 	property{ name{grabbed_hand} type{uint8_t} }
-	// Weapon.thrownBy (invalid when not thrown by a player)
-	property{ name{thrown_by} type{player_id} }
+	// Weapon.thrownBy (invalid when not thrown by a creature)
+	property{ name{thrown_by} type{creature_id} }
 	property{ name{vibrate} type{int32_t} }
 	// Spear: stuckInWall (has_stuck = HasValue), AbstractSpear.stuckInWallCycles
 	// (negative: stuck vertically), the beams it lends to its tiles
@@ -941,24 +914,27 @@ relationship{
 }
 
 //
-// Creatures: every ported kind is a `creature` (creature_types.hpp). What
-// most kinds have is a property of its own; what only one kind has is its
-// `payload` (a union of a struct per kind, at most 64 bytes) and its kind's
-// data object below, whose index the payload keeps. The body is a
-// physical_object (creature_body) with the kind's chunks.
+// Creatures: every ported kind is a `creature` (creature_types.hpp), the
+// slugcat included. What most kinds have is a property of its own; what
+// only one kind has is its `payload` (a union of a struct per kind, at most
+// 64 bytes) and its kind's data object below (the slugcat's: its `player`),
+// whose index the payload keeps. The body is a physical_object
+// (creature_body) with the kind's chunks.
 //
-// Shared because most kinds (at least three of the five) have it:
-//   random, stun, dead, health: every kind (Creature, HealthState)
-//   behavior, destination: every AI (the kind's Behavior enum, the
-//     pathfinder's destination)
+// Shared because at least half of the seven kinds (slugcat, centipede,
+// dropwig, squidcada, lizard, daddy long legs, leech) have it:
+//   random, stun, dead, rain_death, grasps: all seven (Creature; a
+//     daddy's grasps stay empty, its tentacles hold)
+//   health: all but the slugcat (HealthState; Player dies outright)
+//   the pipes (entering_shortcut, the vessel, away): all seven
+//   home den, remain_in_den, going home, spawn flags, trips to other
+//     rooms: every creature but the slugcat (AbstractCreature)
+//   behavior, destination, tracker: every AI (not the slugcat, not the
+//     leech)
 //   current_utility: centipede, dropwig, squidcada, lizard (UtilityComparer)
-//   seen_player, ticks_since_seen, last_seen_pos: every kind's tracker of the
-//     slugcat; sees_player (visual contact): all but the centipede
-//   grasp_player/grasp_chunk: the creatures holding a slugcat in their
-//     grasps (centipede both ends, dropwig, lizard)
-//   forbidden_idle_pos: centipede, squidcada (forbiddenIdleSitSpot), lizard
-//     (forbiddenIdleSpot)
 //   graphics_random: every kind's graphics module's UnityEngine.Random
+// No longer shared with the slugcat counted: forbiddenIdlePos (3 of 7,
+// now in the centipede's, squidcada's and lizard's own state)
 //
 object{
 	name{creature}
@@ -976,25 +952,15 @@ object{
 	property{ name{current_utility} type{float} }
 	// the pathfinder's destination
 	property{ name{destination} type{rw::ivec2} }
-	property{ name{forbidden_idle_pos} type{rw::ivec2} }
-	// tracker: the player it last saw (index + 1, 0 none), whether it sees
-	// it now, for how long it hasn't, and where it saw it last
-	property{ name{seen_player} type{uint8_t} }
-	property{ name{sees_player} type{uint8_t} }
-	property{ name{ticks_since_seen} type{int32_t} }
-	property{ name{last_seen_pos} type{rw::vec2} }
-	// grasps[0] and [1] on a slugcat (players only for now): index + 1 and
-	// the chunk
-	property{ name{grasp_player} type{world::byte_pair} }
-	property{ name{grasp_chunk} type{world::byte_pair} }
 	// the graphics module's UnityEngine.Random (it rolls only where a
 	// camera looks)
 	property{ name{graphics_random} type{rw::rng} }
 	property{ name{payload} type{::creature::payload} }
-	// Dens and shortcut travel (dens.hpp). The den it lives in
-	// (AbstractCreature.spawnDen: a room and its exitAndDenIndex node, 0xFF
-	// none); whether it is out in a room (0), in a pipe (1) or in a den (2),
-	// and the room whose pipe or den holds it (its body is in no room then);
+	// Dens and shortcut travel (dens.hpp, shortcuts.hpp). The den it lives
+	// in (AbstractCreature.spawnDen: a room and its exitAndDenIndex node,
+	// 0xFF none); whether it is out in a room (0), in a pipe (1) or in a
+	// den (2), and the room whose pipe or den holds it (a creature's body is
+	// in no room then; the slugcat's stays in the room it travels from);
 	// the entrance it is squeezing into (Creature.enteringShortCut, x < 0
 	// none), the vessel, AbstractCreature.remainInDenCounter
 	property{ name{home_room} type{room_id} }
@@ -1003,10 +969,11 @@ object{
 	property{ name{away_room} type{room_id} }
 	property{ name{entering_shortcut} type{rw::ivec2} }
 	property{ name{shortcut_rad_add} type{float} }
-	property{ name{shortcut_delay} type{int16_t} }
+	property{ name{shortcut_delay} type{int32_t} }
 	property{ name{vessel_shortcut} type{shortcut_id} }
 	property{ name{vessel_reverse} type{uint8_t} }
 	property{ name{vessel_progress} type{float} }
+	property{ name{vessel_last_progress} type{float} }
 	property{ name{remain_in_den} type{int32_t} }
 	// the AI wants to go home this tick (EscapeRain, ReturnPrey...): the
 	// pipe entrance it heads for, its den's or a room exit's on the way
@@ -1017,10 +984,11 @@ object{
 	// the spawn data's flags (dens.hpp's spawn_flag)
 	property{ name{spawn_flags} type{uint8_t} }
 	// Tracker, RelationshipTracker, PreyTracker, ThreatTracker and
-	// AgressionTracker of every AI (tracker.hpp): the creatures and slugcats
-	// it knows of in its room
+	// AgressionTracker of every AI (tracker.hpp): the creatures (slugcats
+	// included) it knows of in its room
 	property{ name{tracker} type{::creature::tracker_state} }
-	// grasps[0] and [1]: a creature or a slugcat, and the chunk
+	// grasps[0] and [1]: what each holds (a creature's body or an item's)
+	// and the chunk; a slugcat's hands
 	property{ name{grasps} type{::creature::grasp_pair} }
 	// migrating (migrate.hpp): the rooms ahead (AbstractCreatureAI.path),
 	// AbstractWorldEntity.timeSpentHere
@@ -1067,11 +1035,11 @@ object{
 	// CentipedeState.shells, a bit per chunk, and shellJustFellOff
 	property{ name{shells} type{uint32_t} }
 	property{ name{shell_just_fell_off} type{int8_t} }
-	// the small one: bites left, the slugcat holding it (index + 1, 0 none)
-	// and in which hand
+	// the small one: bites left (the slugcat holding it holds it in its
+	// grasps)
 	property{ name{bites} type{uint8_t} }
-	property{ name{held_by} type{uint8_t} }
-	property{ name{held_hand} type{uint8_t} }
+	// CentipedeAI's forbiddenIdleSitSpot
+	property{ name{forbidden_idle_pos} type{rw::ivec2} }
 	// the aquapede's Glower (its LightSource's alpha, 0..0.5)
 	property{ name{glow} type{float} }
 	// the aquapede's UnderwaterShock: its frame (-1 none) and where
@@ -1101,7 +1069,7 @@ object{
 	// DropBugAI
 	property{ name{noise_reaction_delay} type{int32_t} }
 	// targetCreature
-	property{ name{target} type{::creature::target} }
+	property{ name{target} type{creature_id} }
 	property{ name{attack_counter} type{int32_t} }
 	property{ name{idle_pos_counter} type{int32_t} }
 	property{ name{temp_idle_pos} type{rw::ivec2} }
@@ -1139,9 +1107,11 @@ object{
 	property{ name{swoosh_to_pos} type{std::optional<rw::vec2>} }
 	property{ name{antagonize_method} type{uint8_t} }
 	property{ name{antagonize_method_counter} type{int32_t} }
-	// panicFleeCrit: player index + 1, 0 none; focusCreature
-	property{ name{panic_flee_player} type{uint8_t} }
-	property{ name{focus} type{::creature::target} }
+	// forbiddenIdleSitSpot
+	property{ name{forbidden_idle_pos} type{rw::ivec2} }
+	// panicFleeCrit; focusCreature
+	property{ name{panic_flee} type{creature_id} }
+	property{ name{focus} type{creature_id} }
 	property{ name{stuck} type{::cicada::stuck_tracker} }
 	// CicadaGraphics: wings, tentacles, the body's turn and the eyes
 	property{ name{graphics} type{::cicada::graphics_state} }
@@ -1158,6 +1128,8 @@ object{
 	property{ name{core} type{::lizard::body_state} }
 	// LizardAI and its modules
 	property{ name{ai} type{::lizard::ai_state} }
+	// LizardAI.forbiddenIdleSpot
+	property{ name{forbidden_idle_pos} type{rw::ivec2} }
 	property{ name{tongue} type{::lizard::tongue} }
 	property{ name{jump} type{::lizard::jump_module} }
 	// LizardGraphics: limbs, tail, head, tongue, colours (the legs' grip
@@ -1391,10 +1363,12 @@ relationship{
 }
 
 // DaddyCorruption.EatenCreature: a creature being pulled into the rot
+// (every kind is its prey: the fuzz's one of each in the Watcher's 159 rot
+// rooms feeds it hundreds at once)
 object{
 	name{rot_meal}
 	storage_type{erasable}
-	size{64}
+	size{2048}
 	tag{save}
 	property{ name{prey} type{world::rot_prey} }
 	property{ name{goal_pos} type{rw::vec2} }

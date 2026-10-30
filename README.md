@@ -26,10 +26,11 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --room sl_a02      # any room by name
 ./build/rwcpp --root <StreamingAssets> [--root <more>...]
 ./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
-./build/rwcpp --selftest         # scripted movement/item/gate tests (no game data needed)
+./build/rwcpp --selftest         # scripted movement/item/gate/fight/travel tests (no game data needed)
 ./build/rwcpp --fuzz 600         # a creature of each kind in every room on top of the world files' creatures,
                                  # the rain half way, slugcats with random input in 128 rooms at a time
-                                 # (the whole world ticking), then every room exit pipe
+                                 # (the whole world ticking), then every room exit pipe; the fights
+                                 # (who killed whom) and the trips (rooms, gates, warps) are counted
 ./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread: no creatures,
                                  # one of each kind per room, the world files' den population
 ./build/rwcpp --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
@@ -82,32 +83,52 @@ player...) is modelled with relationships. Flags written while the rooms
 update in parallel are bytes, not bitfields (a bitfield shares its byte with
 seven other objects).
 
-Every creature, whatever its kind, is one `creature` object with a `type`
-tag (`src/creature_types.hpp`). What at least half of the six kinds have is
-a property of its own, stored SoA like everything else: the generator,
-stun, death and health (every kind), the AI's behaviour and destination
-(every kind with an AI: not the leech), the current utility (four), the
-tracked slugcat, whether it is seen, for how long it hasn't been and where it
-was last (every AI; the centipede has no visual contact flag), the grasps on
-a slugcat (centipede, dropwig, lizard, leech), the forbidden idle spot
-(centipede, squidcada, lizard), the graphics module's generator, and the
-den it lives in, its trip through a pipe or its wait in a den, its
-`rainDeath` and spawn flags (every kind, dens.hpp); the body is a
-`physical_object` (`creature_body`), in no room while the creature is in a
-pipe or a den. What only one kind
-has is its `payload`, a union of one struct per kind of at most 64 bytes (one
-cache line, `static_assert`ed: centipede 64, dropwig 60, squidcada 56,
-lizard 52, leech 48, daddy 40 bytes): its hottest state and the index of its
-kind's data object (`centipede_data`, `dropbug_data`, `cicada_data`,
-`lizard_data`, `daddy_data`, `leech_data`), which holds the rest SoA: AI
-modules, Lizard.cs' movement, the tongue, the centiwing's flight and the
-shells, a leech school's prey, the graphics modules with the lizard
-cosmetics. A kind's variants (the templates one vanilla class runs: the
-centipede's baby, centiwing, red and aquapede, the lizard breeds, the daddy
-long legs, the sea and jungle leeches) are a tag in its payload and
-branches in its code, like vanilla's `if (Centiwing)`. An index in the payload rather than a
-relationship: one load, no link arrays, and the data object is made and
-deleted with its creature anyway.
+Every creature, whatever its kind and the slugcat included, is one
+`creature` object with a `type` tag (`src/creature_types.hpp`). What at
+least half of the seven kinds (slugcat, centipede, dropwig, squidcada,
+lizard, daddy long legs, leech) have is a property of its own, stored SoA
+like everything else: the generator, stun, death, `rainDeath` and the two
+grasps (all seven: a grasp holds a creature's body or, in a slugcat's hands,
+an item), the pipes (entering one, the vessel travelling it, being away in
+a pipe or a den: all seven), health (all but the slugcat), the den it lives
+in, its wait in it, going home, its spawn flags and its trips to other rooms
+(every creature but the slugcat, dens.hpp and migrate.hpp), the AI's
+behaviour, destination and tracker of the room's creatures (every kind with
+an AI: not the slugcat, not the leech), the current utility (four), the
+graphics module's generator, and the fuzz's counters (who killed it, the
+rooms and regions it went to). The forbidden idle spot fell below half with
+the slugcat counted (three of seven) and went to the centipede's,
+squidcada's and lizard's own state. The body is a `physical_object`
+(`creature_body`), in no room while the creature is in a pipe or a den (a
+slugcat's stays in the room it travels from). What only one kind has is its
+`payload`, a union of one struct per kind of at most 64 bytes (one cache
+line, `static_assert`ed: centipede 64, dropwig 64, squidcada 56, lizard 56,
+leech 48, daddy 40, slugcat 2 bytes): its hottest state and the index of
+its kind's data object (`centipede_data`, `dropbug_data`, `cicada_data`,
+`lizard_data`, `daddy_data`, `leech_data`, and the slugcat's `player`), which
+holds the rest SoA: AI modules, Lizard.cs' movement, the tongue, the
+centiwing's flight and the shells, a leech school's prey, the graphics
+modules with the lizard cosmetics, and Player.cs. A kind's variants (the
+templates one vanilla class runs: the centipede's baby, centiwing, red and
+aquapede, the lizard breeds, the daddy long legs, the sea and jungle
+leeches) are a tag in its payload and branches in its code, like vanilla's
+`if (Centiwing)`. An index in the payload rather than a relationship: one
+load, no link arrays, and the data object is made and deleted with its
+creature anyway.
+
+The `player` object stays: it is the slugcat kind's data object (Player.cs'
+hundred odd movement fields, PlayerGraphics, the Watcher's and
+Spearmaster's abilities, food) and the controller's input, pointing back at
+its creature. Kept apart from the creature because only the slugcat has any
+of it, because its id is the co-op slot the input, camera and HUD use, and
+because a slugcat without a controller (an NPC slugcat) would be the same
+creature with another driver. Whatever one creature keeps of another (a
+tracked prey or threat, a grasp, a bite, a long legs' meal, a leech's
+latch, a squidcada's clinging, a weapon's thrower, the rot's prey) is that
+creature's `dcon::creature_id`, slugcats included: no creature-or-player
+union, no "if a player ... else if a creature" (where vanilla treats the
+slugcat apart, Player.dangerGrasp, Player.Violence, being eaten, the code
+asks `creature::player_of`).
 
 Repeated parts of a creature with a state of their own are `creature_part`s
 (owned through `part_ownership`, in the order they were made): a daddy long
@@ -145,27 +166,31 @@ tick, viewed or not, with full physics and AI for every creature in it.
   `game_state::camera_rooms`), creatures in a room that just came into view
   get their graphics modules reset (`reset_positions`: the parts back on the
   body, the look kept), and `rooms::build_index` buckets every player,
-  creature, item and spit by room, and the creatures in pipes and dens by the
-  room holding them (their bodies are in no room).
+  creature (the slugcats first), item and spit by room, and the creatures in
+  pipes and dens by the room holding them (their bodies are in no room).
 - **Parallel**: one TBB task per room runs its players, the vessels in its
   pipes and the creatures in its dens (`dens::update_room`), its creatures
   (kind by kind: every creature's Update and graphics module, then its
-  collisions with the slugcats and its kin, `creature::update_room`),
+  collisions with every other creature of the room, the slugcats included,
+  `creature::update_room`),
   outposts, items, rot, water, sand and mud, its RoomRain (`rain::update_room`),
   ambient particles and gate, in that order. A room's update reads and writes only its own
   objects: every loop over creatures is `rooms::for_each_*` over the room's
-  bucket, and what holds a slugcat is looked for in the slugcat's room. Each
+  bucket, and what holds a creature is looked for in its room (a creature
+  out of reach, gone to another room, is no longer seen or held). Each
   room has its own caches and buffers (`sys::room_runtime`): path fields,
   terrain proximity, ceiling tiles, water surface, sand, and this tick's
   noises, sounds, loop requests, music, particles and ripple rings.
 - **Transactions**: whatever would change the data container's structure
   (creating or deleting objects, a lizard's spit, Spearmaster's needle, a
-  rot meal, a bomb gone off, a centipede eaten by the rot, a creature
-  squeezing into a pipe, coming out of one or travelling on to another room)
+  rot meal, a bomb gone off, a creature eaten by the rot, a long legs or a
+  den, a creature squeezing into a pipe, coming out of one, travelling on
+  to another room or carried by a warp)
   is queued on the room with `game_state::defer` and applied after the parallel phase, room
   by room in order, each room's in the order queued; outside the parallel
-  phase `defer` runs at once. Grasps of items are plain properties of the
-  player and the item, so picking up and throwing need no transaction.
+  phase `defer` runs at once. Grasps are plain properties of the holding
+  creature (and the item), so grabbing, biting, picking up and throwing
+  need no transaction.
 - **Serial, after**: the rooms' sounds, loop requests, music, particles and
   rings are merged in room order; the Watcher's warps (which move everything they pull
   to another room and drive the screen wide sequence) update, every warp
@@ -197,9 +222,9 @@ of warm up first, by when every one that wants to is out). On a 6 core Xeon
 
 | world | creatures | 1 thread | 6 threads | ticks/s |
 | --- | --- | --- | --- | --- |
-| vanilla, 760 rooms | none | 3.8 ms | 1.04 ms | 966 |
-| vanilla, 760 rooms | 4413, one of each per room (every centipede variant in turn) and a leech school in the rooms with water | 64 ms | 10.3 ms | 97 |
-| vanilla, 760 rooms | 652, the world files' (all out) | 7.1 ms | 1.53 ms | 653 |
+| vanilla, 760 rooms | none | 3.8 ms | 0.90 ms | 1116 |
+| vanilla, 760 rooms | 4413, one of each per room (every centipede variant in turn) and a leech school in the rooms with water | 109 ms | 18.5 ms | 54 |
+| vanilla, 760 rooms | 652, the world files' (all out) | 7.1 ms | 1.62 ms | 618 |
 | + Watcher, 2074 rooms | none | 12.1 ms | 2.4 ms | 412 |
 | + Watcher, 2074 rooms | 12115, one of each per room | 166 ms | 30 ms | 33 |
 | + Watcher, 2074 rooms | 1577, the world files' (1565 out, 12 PreCycle ones in their dens) | 21.5 ms | 4.1 ms | 244 |
@@ -209,7 +234,14 @@ the daddy long legs' tentacles (`Tentacle`/`DaddyTentacle`: terrain
 collisions, grab path searches, ray traces), and a quarter to building path
 fields (~60 a tick, mostly squidcadas and daddies changing destination); the
 rest is the other creatures, the rot and the water. Rooms scale to about 6x
-on 6 cores; the serial phases take ~0.25 ms a tick.
+on 6 cores; the serial phases take ~0.25 ms a tick. With one of each kind
+in every room the creatures fight and hunt each other since they know of
+each other (vanilla's trackers over every creature): about 90 path fields
+are built a tick as hunters chase moving prey, and the long legs feel every
+creature with every tentacle, which took the vanilla `each` row from 10.3
+to 18.5 ms; the world files' population (spread out, mostly in dens) costs
+about the same as before (1.53 to 1.62 ms). The Watcher rows are from
+before the fights.
 
 ### Rain, dens and the world's creatures
 
@@ -223,7 +255,8 @@ ticks, `RainApproaching` over the last minute, and when the timer runs out
 the death rain hits. Regions linked by gates (the merged world connections'
 gate rooms) are grouped at world load; within a group every region runs the
 cycle of the first one in region order (`rain_leader`), copying it every
-tick. A region where under a fifth of its rooms have a RoomRain that rains or
+tick. A creature away from its home region goes by its home region's cycle
+(its RainTracker), and heads home over gates in time. A region where under a fifth of its rooms have a RoomRain that rains or
 floods never rains and links nothing (Five Pebbles: 8 of 74 rooms; the
 Watcher's WARA, WAUA, WBLA, WMPA, WORA, WPTA, WRSA, WSSR, WTDA, WTDB, WVWB).
 Vanilla: one group led by CC (every other region), SS dry; with the Watcher
@@ -301,25 +334,34 @@ Watcher's `modify` ROOMS merges aren't read).
 1. `src/creature_types.hpp`: an entry in `creature::type` (its place is its
    update order in a room) and a payload struct of at most 64 bytes in the
    `payload` union (`static_assert`ed), with a `data` index if it has a data
-   object.
+   object; its templates in `creature::tmpl`, their rows and columns in
+   `relationships.cpp` (StaticWorld's relationships with every other
+   template, the slugcat's included).
 2. `src/dcon_generated.txt`: optionally a `<kind>_data` object for what
    doesn't fit the payload, its accessor in `creature.hpp`, its making and
    deleting in `creature::make`/`erase`; `creature_part` kinds for repeated
    parts with a state of their own.
 3. The kind's code (`create` through `creature::make`, `destroy` through
-   `creature::erase`, `update`, `violence`, `release_player`, the collision
-   hooks) uses the shared properties and `creature::stun_countdown`,
-   `consious`, `body`, `chunk`, `player_of` where vanilla's Creature does.
+   `creature::erase`, `update`, `violence`, `release`, the collision hooks)
+   uses the shared properties and `creature::stun_countdown`, `consious`,
+   `body`, `chunk`, the grasps (`creature::grab`, `grasped`, `holder`) and
+   the other creatures by id (`live`, `here`, `chunk_of`, `violence_on`,
+   `kill`, `player_of` where vanilla treats the slugcat apart) where
+   vanilla's Creature does. Its AI keeps a `tracker.hpp` tracker of the
+   room's creatures with its own hooks (vision, UpdateDynamicRelationship,
+   ModuleToTrackRelationship).
 4. A case in the switches of `src/creature.cpp` (create, destroy, describe,
-   update, collides/collide_player/collide_kin, reset_graphics, violence,
-   release_player, placed_in_room for what keeps tiles of a room) and in
+   update, collides/collide/collide_kin, reset_graphics, violence, release,
+   placed_in_room for what keeps tiles of a room), `template_of` and
    render.cpp's `build_creatures`.
 5. Its AI weighs `dens::rain_utility` and heads for `dens::home_tile` when it
-   escapes the rain (dens.hpp does the rest), and its world file name goes in
-   `spawns::kind_of`.
+   escapes the rain (dens.hpp does the rest), rolls `migrate::idle_roll` or
+   `abstract_behavior` and heads for `migrate::travel_tile` on a trip, and
+   its world file name goes in `spawns::kind_of`.
 
-Weapon hits, explosions, flare bombs, warps, pipes, the rot's prey, the
-slugcat letting go, the fuzz and the bench then take it as they come.
+Weapon hits, explosions, flare bombs, gates, warps, pipes, the rot's prey,
+fights with the other kinds, the fuzz and the bench then take it as they
+come.
 
 ## Layout
 
@@ -432,8 +474,8 @@ and stun it like `Centipede.Violence`: a hard enough directed blow knocks a
 shell off (`CentipedeState.shells`, a bit per chunk; the `CentipedeShell`
 tumbles away, a cosmetic particle) and a chunk without its shell is hurt
 more (spears lodging isn't ported). The AI follows `CentipedeAI`: idle
-wandering by idle score (fall risk included), fleeing and hunting from a
-simplified tracker (sight and contact), a bigger centipede bumped into
+wandering by idle score (fall risk included), fleeing and hunting from the
+shared tracker of the room's creatures, a bigger centipede bumped into
 sending a smaller one elsewhere (`CheckRandomIdlePos`). Every template
 running Centipede.cs is a variant of it, with vanilla's branches and its own
 path field movement from its TileTypeResistances, and the sizes and colours
@@ -491,7 +533,8 @@ land, wanders between floor spots, latches on to a slugcat it bumps into and
 drains its food, then its strength. Rocks stun and spears kill them
 (instantDeathDamageLimit 1). Not ported: snails' clicks scaring them
 (`HeardSnailClick`), going through pipes other than into a den of its room
-when it flees the rain (`fleeFromRain`), prey other than slugcats, Remix's grasp wiggling (shaking one off), Safari
+when it flees the rain (`fleeFromRain`; its trips to other rooms are
+migrate.hpp's), Remix's grasp wiggling (shaking one off), Safari
 control. Leeches and centipedes are the rot's prey.
 
 The dropwig (`--dropbug x,y`, V) follows `DropBug`/`DropBugAI`: three
@@ -506,9 +549,8 @@ let go early), biting or grabbing on landing, then it hunts for a while,
 charging up and pouncing from the ground, before looking for another
 spot. A grabbed slugcat is worried and slashed loose, a dead one carried off
 to its den. Rocks, spears and explosions hurt it like `DropBug.Violence`; it
-goes home before the rain. Not ported: items it carries as bait, threats
-(nothing here scares it), migrating to other rooms (LeaveRoom heads for a
-room exit and stops there), being grabbed,
+goes home before the rain. Not ported: items it carries as bait, being
+grabbed,
 the AImap visibility terms, mud, Safari control.
 
 The squidcada (`--cicada x,y[,b]`, Q, Shift+Q for the dark one) follows
@@ -568,10 +610,8 @@ mesh (coloured towards the tip), the legs (`LizardArm_NN`, picked by
 reach and depth), the jaw, teeth, head and eyes in four angles (the
 Watcher's heads come from its mod atlas in the install), the tongue, the
 head's colour flashing with the blink, the lunge and the voice. Not
-ported: the `LizardCosmetics` (pass 2, see `lizard_graphics.cpp`), lizards
-fighting and signalling each other (aggression, submission), friendship
-and taming, migrating and following prey to other rooms, the threats a
-lizard would flee,
+ported: the `LizardCosmetics` (pass 2, see `lizard_graphics.cpp`),
+friendship and taming, following prey to other rooms,
 reach-over-gap paths, the voices' articulation (a sample plays once, and
 only Pink, Green and Blue have voices without Remix), the Blizzard's beam,
 the Basilisk's poison field, the Indigo's mud, burrowing in the Watcher's
@@ -601,14 +641,58 @@ draws the leg graphics, dead legs and danglers with their bumps and little
 eyes, the eye bulbs with their slits and the Hunter's slugcat dummy with
 the game's elements. It goes home before the rain like the others. Not
 ported: the BigCreatureShortCutSqueeze (it squeezes into a pipe like any
-creature), other creatures as prey or
-being touched (slugcats only), daddies eating each other, the timeline
+creature), the timeline
 rule that makes a Brother a Daddy before Artificer's time, `stuckPos`,
 Safari control, `DaddyBubble`s and `DaddyRipple`, the digestion sound loop
 (and the react sounds, which have no entry in `sounds.txt`), pulling the
 eaten slugcat's graphics in, the Tracker's ghosts (it guesses the slugcat
 is where it last felt it), the JaggedCircle and RippleBasic shaders (a
 jagged disc and plain triangles).
+
+### Fights and travel
+
+Creatures know of each other the way they know of the slugcat, which is
+one of them: every AI keeps vanilla's Tracker (one creature of the room
+noticed at random a tick, visual contact by the kind's vision, forgetting),
+RelationshipTracker, PreyTracker, ThreatTracker and AgressionTracker over
+the creatures of its room (`tracker.hpp`, ten representations like
+vanilla's maxTrackedCreatures). Relationships start from StaticWorld's for
+every pair of ported templates, slugcat included (`relationships.cpp`,
+transcribed by replaying StaticWorld.cs with Downpour and the Watcher on),
+and each AI's UpdateDynamicRelationship changes them as vanilla's does
+(the centipede afraid of what outweighs it, the lizard's like of the
+slugcat with the spawn data's `{Mean}`, the squidcada's fear of armed
+slugcats and its antagonizing, the long legs' Brothers). So lizards hunt
+centipedes, squidcadas and dropwigs, bite them (a killing bite at the
+breed's chance), carry them off to their den and eat them there; rival
+lizards grow angry at each other, signal, fight and bite; squidcadas and
+the smaller kinds flee what they fear (ThreatTracker.FleeTo within the
+room); centipedes grab with both ends and shock (the aquapede's
+UnderwaterShock through the water); the red centipede kills what it can;
+long legs feel every creature with their tentacles, grab, drag in and eat
+them; leech schools take any creature they eat as prey and latch on to it
+in the water; dropwigs drop on whatever walks under them; the rot eats any
+creature that touches it (long legs aside). Thrown weapons hit the closest
+creature on their way, not the thrower and, from a slugcat's hand, not
+the slugcats (no friendly fire in story mode). Bites, shocks and grasps are
+Creature.Violence and Creature.Grab on a creature id, the same code
+whether the victim is a slugcat or not; `creature::kills` counts who killed
+whom for the fuzz.
+
+Creatures travel on their own: vanilla's AbstractCreatureAI migration runs
+from the realized AIs (`migrate.hpp`: MigrationBehavior's roll by the room's
+attraction from the regions' properties.txt, roamBetweenRoomsChance and
+abstractedLaziness, RandomMoveToOtherRoom and
+MoveToMoreAttractiveNeighborRoom), every kind, leeches and long legs
+included, and a trip is a list of rooms the AI walks to the exits of. Now
+and then (`cross_region_chance`) a trip leads to another region: through a
+region gate, whose airlock any creature waiting at its middle door cycles
+like a slugcat would (`gates::wait_tile`, the zone and stand still checks
+over the room's creatures), or through a Watcher warp, which carries the
+creature and what it holds to its destination (a DynamicWarpTarget for a
+warp without one) in a transaction. A creature away from home goes back
+to its den by its home region's rain cycle (regions have their own
+timers), over a route through gates too.
 
 Paths aren't pre-baked like vanilla's AImaps and per creature A*: a
 creature asks `pathing::field_to(room, goal tile)` and gets a distance field
@@ -658,7 +742,11 @@ clears. Only the Watcher can warp. One way warps work from their entrance
 only, limited use warps close when used up, ripple warps only work from the
 ripple layer (camouflaged at ripple level 5) and show as faint ripples from
 the other layer; warps without a destination pick a DynamicWarpTarget of
-another region the ripple level allows. Holding the ability key toggles the
+another region the ripple level allows. Creatures use warps on their own
+too: a trip through a warp (migrate.hpp) walks into its middle and the warp
+carries the creature and what it holds to its destination, the way a
+creature pulled along with the Watcher arrives (a new room for its AI and
+its trip). Holding the ability key toggles the
 camouflage after a moment (drawn as a plain fade, not vanilla's mask), with
 a charge that runs out, and from ripple level 3 lifts the Watcher off the
 ground. The tears and the screen wide transition are GLSL shaders of our own
@@ -840,8 +928,11 @@ of vanilla's tile by tile blink. In-room pipes spit the slugcat out at the
 other end; room exits follow `world_<region>.txt` connections (merged across
 region files, gates included) to the destination's matching exit. Every one
 of the 1414 connected room exits is exercised by `--fuzz`. Creatures travel
-pipes the same way on their way home (dens.hpp, see Rain, dens and the
-world's creatures), shown only while they squeeze in and come out.
+pipes the same way on their way home and on their trips (dens.hpp,
+migrate.hpp, see Rain, dens and the world's creatures and Fights and
+travel), shown only while they squeeze in and come out. The slugcat shares
+the creatures' pipe state (entering a pipe, its vessel, being away), its
+vessel travelling serially before the rooms update.
 
 Rocks and spears spawn like `Room.Loaded` does on a room's first visit, for every room at startup: placed
 rocks at 75% and spears at 60%, then `RandomItemDensity` random items on
@@ -857,7 +948,10 @@ at an approximate hand position until hands are ported.
 
 Gates run the `RegionGate` modes (airlock closing, washing, middle door,
 side doors) with vanilla door speeds, and doors turn their tiles solid while
-closed. Karma locks aren't enforced (karma isn't tracked) and the doors are
+closed. Whatever creature is in the gate room works it like the slugcat
+(PlayersInZone, standing still and AllPlayersThroughToOtherSide over the
+room's creatures): a creature crossing to another region waits at the
+closed door in its way until the airlock lets it through. Karma locks aren't enforced (karma isn't tracked) and the doors are
 drawn as plain slabs.
 
 ### Rendering

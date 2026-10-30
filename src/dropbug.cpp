@@ -35,7 +35,7 @@ namespace dropbug {
         constexpr float float_max = std::numeric_limits<float>::max();
 
         using creature::relationship;
-        using creature::target;
+        using dcon::creature_id;
         using creature::room_of;
         using creature::total_mass;
 
@@ -456,7 +456,7 @@ namespace dropbug {
         }
 
         // DropBug.JumpFromCeiling: `p`'s chunk `k` as the target, or none
-        void jump_from_ceiling(sys::game_state& state, dcon::creature_id d, target p, uint32_t k, vec2 dir) {
+        void jump_from_ceiling(sys::game_state& state, dcon::creature_id d, dcon::creature_id p, uint32_t k, vec2 dir) {
             auto& w = state.world;
             w.creature_get_payload(d).dropbug.in_ceiling_mode = 0.f;
             w.creature_get_payload(d).dropbug.from_ceiling_jump = 1;
@@ -474,7 +474,7 @@ namespace dropbug {
         }
 
         // DropBug.InitiateJump at a creature's chunk
-        void initiate_jump(sys::game_state& state, dcon::creature_id d, target p, uint32_t k) {
+        void initiate_jump(sys::game_state& state, dcon::creature_id d, dcon::creature_id p, uint32_t k) {
             auto& w = state.world;
             if (w.creature_get_payload(d).dropbug.charging > 0.f || w.creature_get_payload(d).dropbug.jumping || grasped(state, d) || w.creature_get_payload(d).dropbug.after_drop_attack_delay > 0)
                 return;
@@ -523,11 +523,11 @@ namespace dropbug {
             c.random_attractor = random_tile(rng, room);
             c.win_streak = 0;
             w.dropbug_data_get_utilities(creature::dropbug_data(w, d)).ceiling = 0.f;
-            jump_from_ceiling(state, d, target{}, 0, vec2{0.f, -1.f});
+            jump_from_ceiling(state, d, dcon::creature_id{}, 0, vec2{0.f, -1.f});
         }
 
         // CeilingSitModule.JumpFromCeiling
-        void module_jump_from_ceiling(sys::game_state& state, dcon::creature_id d, room_view const& room, target p, uint32_t k, vec2 dir) {
+        void module_jump_from_ceiling(sys::game_state& state, dcon::creature_id d, room_view const& room, dcon::creature_id p, uint32_t k, vec2 dir) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
             jump_from_ceiling(state, d, p, k, dir);
@@ -573,7 +573,7 @@ namespace dropbug {
                 if (!r.visual || !creature::here(state, p, room.id))
                     continue;
                 vec2 const main = creature::main_pos(state, p);
-                if (auto const pp = creature::as_player(state, p); pp && std::fabs(head.x - main.x) < 200.f && std::fabs(head.y - main.y) < 30.f && holds_spear(state, pp))
+                if (auto const pp = creature::player_of(state, p); pp && std::fabs(head.x - main.x) < 200.f && std::fabs(head.y - main.y) < 30.f && holds_spear(state, pp))
                     spear = true;
                 if (r.rel.type == creature::rel::eats && std::fabs(head.x - main.x) < 100.f && head.y > main.y) {
                     uint32_t const k = uint32_t(rng.range(0, int32_t(creature::chunk_count_of(state, p))));
@@ -602,7 +602,7 @@ namespace dropbug {
             if (c.drop_delay > 0.f) {
                 c.drop_delay += 0.05f;
                 if (c.drop_delay >= 1.f) {
-                    module_jump_from_ceiling(state, d, room, target{}, 0, vec2{0.f, -1.f});
+                    module_jump_from_ceiling(state, d, room, dcon::creature_id{}, 0, vec2{0.f, -1.f});
                     return;
                 }
             }
@@ -720,7 +720,7 @@ namespace dropbug {
             if (attack > 0)
                 --attack;
             else
-                w.dropbug_data_set_target(creature::dropbug_data(w, d), target{});
+                w.dropbug_data_set_target(creature::dropbug_data(w, d), dcon::creature_id{});
             if (utility < 0.05f)
                 b = behavior::idle;
             if (utility < 0.6f && !anywhere_to_sit_in_room(state, d, room)) {
@@ -735,7 +735,7 @@ namespace dropbug {
             if (b != behavior::idle)
                 w.dropbug_data_set_temp_idle_pos(creature::dropbug_data(w, d), at);
             auto const* prey_rep = tracker::prey(ts);
-            auto const prey = prey_rep ? prey_rep->who : target{};
+            auto const prey = prey_rep ? prey_rep->who : dcon::creature_id{};
             if (b == behavior::injured && prey_utility > 0.4f && prey_rep && float_dist(at, tracker::best_guess(*prey_rep)) < 6.f) {
                 b = behavior::hunt;
                 u.prey_weight = 1.f;
@@ -860,9 +860,9 @@ namespace dropbug {
         // Creature.Violence on what it bites (a slugcat: the push, the stun,
         // death from a full point of damage), the push clamped like
         // vanilla's for the slugcat
-        void hurt(sys::game_state& state, dcon::creature_id d, target p, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
+        void hurt(sys::game_state& state, dcon::creature_id d, dcon::creature_id p, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
             auto& w = state.world;
-            if (p.is_player()) {
+            if (creature::is_slugcat(w, p)) {
                 auto const c = creature::chunk_of(state, p, k);
                 momentum = rw::clamp_magnitude(momentum / w.body_chunk_get_mass(c), 10.f) * w.body_chunk_get_mass(c);
             }
@@ -878,7 +878,7 @@ namespace dropbug {
         }
 
         // DropBug.Slash: `k` the chunk it hit, -1 the closest one
-        void slash(sys::game_state& state, dcon::creature_id d, target p, int32_t k) {
+        void slash(sys::game_state& state, dcon::creature_id d, dcon::creature_id p, int32_t k) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
             vec2 const main = pos(state, d, 0);
@@ -916,7 +916,7 @@ namespace dropbug {
                 || !room.visual_contact(main, w.body_chunk_get_pos(*target)));
             if (grasped(state, d) || (!target && w.dropbug_data_get_jump_at_pos(creature::dropbug_data(w, d)) == vec2{0.f, 0.f}) || lost) {
                 w.creature_get_payload(d).dropbug.charging = 0.f;
-                w.creature_get_payload(d).dropbug.jump_at = creature::target{};
+                w.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
                 return;
             }
             vec2 v = target ? w.body_chunk_get_pos(*target) : w.dropbug_data_get_jump_at_pos(creature::dropbug_data(w, d));
@@ -926,7 +926,7 @@ namespace dropbug {
             vec2 dir = custom::dir_vec(main, v);
             if (!custom::dist_less(main, p, custom::lerp_map(rw::dot(dir, custom::dir_vec(pos(state, d, 1), main)), -0.1f, 0.8f, 0.f, 300.f, 0.4f))) {
                 w.creature_get_payload(d).dropbug.charging = 0.f;
-                w.creature_get_payload(d).dropbug.jump_at = creature::target{};
+                w.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
                 return;
             }
             if (!room.get_tile(main + vec2{0.f, 20.f}).solid() && !room.get_tile(pos(state, d, 1) + vec2{0.f, 20.f}).solid())
@@ -1127,7 +1127,7 @@ namespace dropbug {
                 }
                 if (footing(state, d)) {
                     w.creature_get_payload(d).dropbug.jumping = 0;
-                    w.creature_get_payload(d).dropbug.jump_at = creature::target{};
+                    w.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
                 }
                 return;
             }
@@ -1256,7 +1256,7 @@ namespace dropbug {
         }
 
         // DropBug.Collide with a creature or slugcat: myChunk `i`, their chunk `j`
-        void collide_with(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, target p, uint32_t j) {
+        void collide_with(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, dcon::creature_id p, uint32_t j) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(d);
             hook_ctx hx{state, d, room};
@@ -1400,7 +1400,7 @@ namespace dropbug {
                     w.creature_get_payload(d).dropbug.from_ceiling_jump = 0;
                     w.creature_get_payload(d).dropbug.attempt_bite = 0.f;
                     w.creature_get_payload(d).dropbug.jumping = 0;
-                    w.creature_get_payload(d).dropbug.jump_at = creature::target{};
+                    w.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
                     w.creature_get_payload(d).dropbug.charging = 0.f;
                     break;
                 }
@@ -1473,7 +1473,7 @@ namespace dropbug {
         return is_sitting_in_ceiling(state, d, world::get_room_view(state, room_of(state, d)));
     }
 
-    creature::target grasped(sys::game_state const& state, dcon::creature_id d) noexcept {
+    dcon::creature_id grasped(sys::game_state const& state, dcon::creature_id d) noexcept {
         return creature::grasped(state.world, d, 0);
     }
 
@@ -1522,7 +1522,7 @@ namespace dropbug {
         w.creature_get_payload(d).dropbug.swimming = 0;
         w.creature_get_payload(d).dropbug.travel_dir = vec2{0.f, 0.f};
         w.creature_get_payload(d).dropbug.charging = 0.f;
-        w.creature_get_payload(d).dropbug.jump_at = creature::target{};
+        w.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
         w.creature_get_payload(d).dropbug.jump_at_chunk = 0;
         w.dropbug_data_set_jump_at_pos(creature::dropbug_data(w, d), vec2{0.f, 0.f});
         w.creature_get_payload(d).dropbug.attempt_bite = 0.f;
@@ -1542,7 +1542,7 @@ namespace dropbug {
         w.creature_set_behavior(d, uint8_t(behavior::idle));
         w.creature_set_current_utility(d, 0.f);
         w.dropbug_data_set_noise_reaction_delay(creature::dropbug_data(w, d), 0);
-        w.dropbug_data_set_target(creature::dropbug_data(w, d), target{});
+        w.dropbug_data_set_target(creature::dropbug_data(w, d), dcon::creature_id{});
         w.dropbug_data_set_attack_counter(creature::dropbug_data(w, d), 0);
         w.dropbug_data_set_idle_pos_counter(creature::dropbug_data(w, d), 0);
         w.dropbug_data_set_walk_with_bug(creature::dropbug_data(w, d), std::nullopt);
@@ -1596,12 +1596,12 @@ namespace dropbug {
         creature::erase(state, d);
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t) {
+    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t) {
         // what it holds is kept out of it by CarryObject
         return grasped(state, d) != t;
     }
 
-    void collide(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, creature::target t, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id d, room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j) {
         if (consious(state, d))
             collide_with(state, d, room, i, t, j);
     }
@@ -1664,10 +1664,10 @@ namespace dropbug {
         }
     }
 
-    void release(sys::game_state& state, dcon::creature_id d, creature::target p) {
+    void release(sys::game_state& state, dcon::creature_id d, dcon::creature_id p) {
         if (grasped(state, d) == p)
             lose_all_grasps(state, d);
         if (state.world.creature_get_payload(d).dropbug.jump_at == p)
-            state.world.creature_get_payload(d).dropbug.jump_at = target{};
+            state.world.creature_get_payload(d).dropbug.jump_at = dcon::creature_id{};
     }
 }

@@ -49,8 +49,8 @@ namespace daddy {
     // slugcat (not one in a pipe or being eaten), DaddyLongLegs.Collide
     // starting to eat what a tentacle holds (its chunk `i` touched the
     // other's `j`)
-    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t, dcon::room_id room);
-    void collide(sys::game_state& state, dcon::creature_id d, uint32_t i, creature::target t, uint32_t j);
+    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t, dcon::room_id room);
+    void collide(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id t, uint32_t j);
 
     // SharedPhysics.TraceProjectileAgainstBodyChunks' appendages: the
     // tentacle of the room's daddies the segment crosses first
@@ -83,11 +83,11 @@ namespace daddy {
     // DaddyLongLegs.MiddleOfBody
     rw::vec2 middle_of_body(sys::game_state const& state, dcon::creature_id d) noexcept;
     // `t` held by one of its tentacles / being eaten
-    bool holds(sys::game_state const& state, dcon::creature_id d, creature::target t) noexcept;
-    bool eating(sys::game_state const& state, dcon::creature_id d, creature::target t) noexcept;
+    bool holds(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t) noexcept;
+    bool eating(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t) noexcept;
     // tentacles gripping the terrain (atGrabDest)
     uint32_t legs_gripping(sys::game_state const& state, dcon::creature_id d) noexcept;
 
     // lets go of `t` (respawned, destroyed, eaten by something else)
-    void release(sys::game_state& state, dcon::creature_id d, creature::target t);
+    void release(sys::game_state& state, dcon::creature_id d, dcon::creature_id t);
 }

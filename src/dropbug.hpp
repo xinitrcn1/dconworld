@@ -36,8 +36,8 @@ namespace dropbug {
     // slugcat (not with what it holds), DropBug.Collide biting and grabbing
     // (its chunk `i` touched the other's `j`), climbing over another
     // dropbug and following the dominant ones (CollideWithKin)
-    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t);
-    void collide(sys::game_state& state, dcon::creature_id d, world::room_view const& room, uint32_t i, creature::target t, uint32_t j);
+    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t);
+    void collide(sys::game_state& state, dcon::creature_id d, world::room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j);
     void collide_kin(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id other, uint32_t j);
     void touched_kin(sys::game_state& state, dcon::creature_id d, dcon::creature_id other);
     // DropBug.Violence (+ Creature.Violence)
@@ -51,7 +51,7 @@ namespace dropbug {
     // CeilingSitModule.SittingInCeiling
     bool sitting_in_ceiling(sys::game_state const& state, dcon::creature_id d) noexcept;
     // what it holds (grasps[0]), if any
-    creature::target grasped(sys::game_state const& state, dcon::creature_id d) noexcept;
+    dcon::creature_id grasped(sys::game_state const& state, dcon::creature_id d) noexcept;
     // lets go of `t` if it holds it
-    void release(sys::game_state& state, dcon::creature_id d, creature::target t);
+    void release(sys::game_state& state, dcon::creature_id d, dcon::creature_id t);
 }

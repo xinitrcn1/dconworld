@@ -29,14 +29,14 @@ namespace tracker {
         return m == track_module::aggression ? track_module::none : m;
     }
 
-    tracked* find(tracker_state& s, target t) noexcept {
+    tracked* find(tracker_state& s, dcon::creature_id t) noexcept {
         for (uint32_t i = 0; i < s.count; ++i)
             if (s.reps[i].who == t)
                 return &s.reps[i];
         return nullptr;
     }
 
-    tracked const* find(tracker_state const& s, target t) noexcept {
+    tracked const* find(tracker_state const& s, dcon::creature_id t) noexcept {
         for (uint32_t i = 0; i < s.count; ++i)
             if (s.reps[i].who == t)
                 return &s.reps[i];
@@ -54,7 +54,7 @@ namespace tracker {
         return 1.f / (num - 7.f) * 30.f;
     }
 
-    relationship dynamic_relationship(sys::game_state const& state, dcon::creature_id c, target t) noexcept {
+    relationship dynamic_relationship(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) noexcept {
         if (auto const* r = find(of(state, c), t))
             return r->rel;
         return creature::static_relationship(state, c, t);
@@ -78,7 +78,7 @@ namespace tracker {
                 : state(st), c(cr), room(rm), at(a), p(pp), h(hh), s(st.world.creature_get_tracker(cr)), rng(st.world.creature_get_random(cr)) {}
 
             bool sees(dcon::body_chunk_id k) const { return h.sees && h.sees(h.user, k); }
-            bool sees_any_chunk(target t) const {
+            bool sees_any_chunk(dcon::creature_id t) const {
                 uint32_t const n = creature::chunk_count_of(state, t);
                 for (uint32_t i = 0; i < n; ++i)
                     if (sees(creature::chunk_of(state, t, i)))
@@ -101,11 +101,11 @@ namespace tracker {
                 s.count = uint8_t(n);
                 doomed = 0;
                 if (s.prey && !find(s, s.prey))
-                    s.prey = target{};
+                    s.prey = dcon::creature_id{};
                 if (s.threat && !find(s, s.threat))
-                    s.threat = target{};
+                    s.threat = dcon::creature_id{};
                 if (s.aggression && !find(s, s.aggression))
-                    s.aggression = target{};
+                    s.aggression = dcon::creature_id{};
             }
         };
 
@@ -215,13 +215,12 @@ namespace tracker {
         }
 
         // Tracker.CreatureNoticed
-        tracked* notice(ctx& x, target t) {
+        tracked* notice(ctx& x, dcon::creature_id t) {
             auto& w = x.state.world;
             relationship const st = creature::static_relationship(x.state, x.c, t);
             if (creature::dead(x.state, t) && (x.p.discard_dead_always || st.type != rel::eats))
                 return nullptr;
-            auto const& g = w.creature_get_grasps(x.c);
-            bool const holding = g.who[0] == t || g.who[1] == t;
+            bool const holding = creature::holds(w, x.c, t);
             tracked r;
             r.who = t;
             r.visual = 1;
@@ -254,7 +253,7 @@ namespace tracker {
             // EstablishDynamicRelationship: sorted with the static relationship
             sort_into_module(x, i, st);
             bool const kept = !x.is_doomed(i);
-            target const who = r.who;
+            dcon::creature_id const who = r.who;
             x.compact();
             return kept ? find(x.s, who) : nullptr;
         }
@@ -289,26 +288,19 @@ namespace tracker {
             r.forget_counter = 0;
         }
 
-        // the room's `n`th creature or slugcat (Room.creatures: the
-        // slugcats, then the creatures kind by kind)
+        // the room's `n`th creature (Room.creatures: the slugcats, then the
+        // creatures kind by kind)
         uint32_t room_population(sys::game_state const& state, dcon::room_id room) {
             uint32_t n = 0;
-            rooms::for_each_player(state, room, [&](dcon::player_id) { ++n; });
             rooms::for_each_creature(state, room, [&](dcon::creature_id) { ++n; });
             return n;
         }
-        target room_member(sys::game_state const& state, dcon::room_id room, uint32_t n) {
-            target t;
+        dcon::creature_id room_member(sys::game_state const& state, dcon::room_id room, uint32_t n) {
+            dcon::creature_id t;
             uint32_t i = 0;
-            rooms::for_each_player(state, room, [&](dcon::player_id p) {
-                if (i++ == n)
-                    t = creature::of(p);
-            });
-            if (t)
-                return t;
             rooms::for_each_creature(state, room, [&](dcon::creature_id o) {
                 if (i++ == n)
-                    t = creature::of(o);
+                    t = o;
             });
             return t;
         }
@@ -332,8 +324,8 @@ namespace tracker {
                 x.compact();
                 return;
             }
-            target const t = room_member(x.state, x.room.id, uint32_t(x.rng.range(0, int32_t(pop))));
-            bool notice_it = t && t != creature::of(x.c);
+            dcon::creature_id const t = room_member(x.state, x.room.id, uint32_t(x.rng.range(0, int32_t(pop))));
+            bool notice_it = t && t != x.c;
             for (int32_t i = int32_t(x.s.count) - 1; i >= 0; --i) {
                 rep_update(x, uint32_t(i));
                 if (x.s.reps[i].who == t)
@@ -378,7 +370,7 @@ namespace tracker {
         // PreyTracker.Update
         void prey_update(ctx& x) {
             float best = std::numeric_limits<float>::lowest();
-            target cur;
+            dcon::creature_id cur;
             for (int32_t i = int32_t(x.s.count) - 1; i >= 0; --i) {
                 auto& r = x.s.reps[i];
                 if (r.module != track_module::prey)
@@ -416,7 +408,7 @@ namespace tracker {
                 any = any || s.reps[i].module == track_module::threat;
             if (s.threat_reset_counter < 200) {
                 float num = 0.f;
-                s.threat = target{};
+                s.threat = dcon::creature_id{};
                 for (int32_t i = int32_t(s.count) - 1; i >= 0; --i) {
                     auto& r = s.reps[i];
                     if (r.module != track_module::threat)
@@ -434,7 +426,7 @@ namespace tracker {
                     if (s.reps[i].module == track_module::threat)
                         x.doom(i);
                 x.compact();
-                s.threat = target{};
+                s.threat = dcon::creature_id{};
             }
         }
 
@@ -442,7 +434,7 @@ namespace tracker {
         void aggression_update(ctx& x) {
             auto& s = x.s;
             s.highest_anger = 0.f;
-            s.aggression = target{};
+            s.aggression = dcon::creature_id{};
             auto const* pr = prey(s);
             auto const tp = creature::template_of(x.state, x.c);
             float const attraction = creature::attraction_value(x.state.world.room_get_attraction(x.room.id).v[size_t(tp)]);
@@ -477,8 +469,8 @@ namespace tracker {
         aggression_update(x);
     }
 
-    void see(sys::game_state& state, dcon::creature_id c, room_view const& room, target t, hooks const& h) {
-        if (!t || t == creature::of(c))
+    void see(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id t, hooks const& h) {
+        if (!t || t == c)
             return;
         auto& s = of(state, c);
         if (auto* r = find(s, t)) {
@@ -490,11 +482,11 @@ namespace tracker {
         if (!creature::here(state, t, room.id))
             return;
         params const p;
-        ctx x{state, c, room, world::room_view::get_tile_position(creature::main_pos(state, creature::of(c))), p, h};
+        ctx x{state, c, room, world::room_view::get_tile_position(creature::main_pos(state, c)), p, h};
         notice(x, t);
     }
 
-    void forget(sys::game_state& state, dcon::creature_id c, target t) {
+    void forget(sys::game_state& state, dcon::creature_id c, dcon::creature_id t) {
         auto& s = of(state, c);
         for (uint32_t i = 0; i < s.count; ++i)
             if (s.reps[i].who == t) {
@@ -504,11 +496,11 @@ namespace tracker {
                 break;
             }
         if (s.prey == t)
-            s.prey = target{};
+            s.prey = dcon::creature_id{};
         if (s.threat == t)
-            s.threat = target{};
+            s.threat = dcon::creature_id{};
         if (s.aggression == t)
-            s.aggression = target{};
+            s.aggression = dcon::creature_id{};
     }
 
     void clear(sys::game_state& state, dcon::creature_id c) {
@@ -623,13 +615,13 @@ namespace tracker {
         return mathf::inverse_lerp(0.35f, 1.f, s.highest_anger);
     }
 
-    void increment_anger(sys::game_state& state, dcon::creature_id c, target t, float add) {
+    void increment_anger(sys::game_state& state, dcon::creature_id c, dcon::creature_id t, float add) {
         auto* r = find(of(state, c), t);
         if (r && r->module == track_module::aggression)
             r->anger = mathf::clamp(r->anger + add, 0.f, 1.f);
     }
 
-    void set_anger(sys::game_state& state, dcon::creature_id c, target t, float anger, float base) {
+    void set_anger(sys::game_state& state, dcon::creature_id c, dcon::creature_id t, float anger, float base) {
         auto* r = find(of(state, c), t);
         if (!r || r->module != track_module::aggression)
             return;

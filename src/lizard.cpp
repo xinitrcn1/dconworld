@@ -60,7 +60,7 @@ namespace lizard {
             float total_mass() { return mass(0) + mass(1) + mass(2); }
             bool consious() { return lizard::consious(state, id); }
             // grasps[0]: what is in its jaws and the chunk
-            creature::target grasp() { return creature::grasped(state.world, id, 0); }
+            dcon::creature_id grasp() { return creature::grasped(state.world, id, 0); }
             uint8_t grasp_chunk() { return creature::grasp_chunk(state.world, id, 0); }
             bool is(breed b) { return state.world.creature_get_payload(id).lizard.breed == b; }
             breed kind() { return state.world.creature_get_payload(id).lizard.breed; }
@@ -137,12 +137,12 @@ namespace lizard {
             auto const room = room_of(state, l);
             if (t.state == tongue_state::stuck_in_terrain)
                 state.play_sound(sound::sound_id::lizard_tongue_detatch_npc_or_terrain, room, t.pos);
-            else if (t.attached.is_player())
+            else if (t.attached && creature::is_slugcat(w, t.attached))
                 state.play_sound(sound::sound_id::lizard_tongue_detatch_player, room, t.pos);
             else if (t.attached)
                 state.play_sound(sound::sound_id::lizard_tongue_detatch_npc_or_terrain, room, t.pos);
             t.state = tongue_state::retracting;
-            t.attached = creature::target{};
+            t.attached = dcon::creature_id{};
         }
 
         // Lizard.Stun (+ Creature.Stun)
@@ -168,9 +168,9 @@ namespace lizard {
         }
 
         // Lizard.DamageAttack: a bite that hurts, stuns and lets go
-        void damage_attack(ctx& x, creature::target t, uint32_t k, float dmg_fac) {
+        void damage_attack(ctx& x, dcon::creature_id t, uint32_t k, float dmg_fac) {
             auto& w = x.state.world;
-            if (!t.is_creature() && !t.is_player())
+            if (!creature::live(x.state, t))
                 return;
             if (tracker::dynamic_relationship(x.state, x.id, t).type == creature::rel::agressive_rival)
                 dmg_fac = 0.f;
@@ -178,7 +178,7 @@ namespace lizard {
             vec2 const d = custom::dir_vec(x.pos(0), cp);
             creature::violence_on(x.state, t, k, d * 11.f, x.p.bite_damage * x.rng.value() * dmg_fac, 30.f, creature::damage_type::bite,
                 creature::template_of(x.state, x.id));
-            x.sound(t.is_player() ? sound::sound_id::lizard_jaws_grab_player : sound::sound_id::lizard_jaws_grab_npc);
+            x.sound(creature::is_slugcat(x.state.world, t) ? sound::sound_id::lizard_jaws_grab_player : sound::sound_id::lizard_jaws_grab_npc);
             x.z.jaw_open = 0.f;
             x.z.last_jaw_open = 0.f;
             x.vel(0) += d * 8.f;
@@ -195,7 +195,7 @@ namespace lizard {
 
         // Lizard.Bite on a chunk of a creature or slugcat (none: the jaws
         // shut on nothing)
-        void bite(ctx& x, creature::target t, uint32_t k) {
+        void bite(ctx& x, dcon::creature_id t, uint32_t k) {
             auto& w = x.state.world;
             if (x.is(breed::train))
                 for (int i = 0; i < 16; ++i) {
@@ -237,23 +237,20 @@ namespace lizard {
                 // (the Indigo's mud isn't ported)
                 if (x.is(breed::red)) {
                     // Creature.LoseAllGrasps of what it bit
-                    if (auto const p = creature::as_player(x.state, t))
-                        items::release_all(x.state, p);
-                    else if (auto const c = creature::as_creature(x.state, t))
-                        creature::release_all(x.state, c, x.room.id);
+                    creature::lose_all_grasps(x.state, t);
                 }
                 ai::bit_creature(x.state, x.id, x.room);
                 // no Remix: a killing bite at the breed's chance, a slugcat's
                 // 1.5 damage, a creature's biteDamage
                 if (x.rng.value() < x.p.bite_damage_chance) {
                     vec2 const d = custom::dir_vec(x.pos(0), w.body_chunk_get_pos(kc)) * 0.1f;
-                    float const dmg = t.is_player() ? 1.5f : x.p.bite_damage * mathf::lerp(0.8f, 1.2f, x.rng.value());
+                    float const dmg = creature::is_slugcat(x.state.world, t) ? 1.5f : x.p.bite_damage * mathf::lerp(0.8f, 1.2f, x.rng.value());
                     creature::violence_on(x.state, t, k, d, dmg, 0.f, creature::damage_type::bite, creature::template_of(x.state, x.id));
                 }
-                x.sound(t.is_player() ? sound::sound_id::lizard_jaws_grab_player : sound::sound_id::lizard_jaws_grab_npc);
+                x.sound(creature::is_slugcat(x.state.world, t) ? sound::sound_id::lizard_jaws_grab_player : sound::sound_id::lizard_jaws_grab_npc);
                 return;
             }
-            if (x.rng.value() < 0.5f && t.is_creature() && rel.type == creature::rel::attacks) {
+            if (x.rng.value() < 0.5f && !creature::is_slugcat(w, t) && rel.type == creature::rel::attacks) {
                 damage_attack(x, t, k, 0.5f);
                 return;
             }
@@ -309,13 +306,13 @@ namespace lizard {
         // holds after 30 ticks, and it is over for it at 60 (Player.Update,
         // RainWorldGame.GameOver)
         void danger_grasp(ctx& x) {
-            auto const p = creature::as_player(x.state, x.grasp());
+            auto const p = creature::player_of(x.state, x.grasp());
             if (!p)
                 return;
             ++x.z.danger_grasp_time;
             if (x.z.danger_grasp_time == 30)
                 items::release_all(x.state, p);
-            else if (x.z.danger_grasp_time == 60 && !x.state.world.player_get_dead(p))
+            else if (x.z.danger_grasp_time == 60 && !player::dead(x.state, p))
                 player::die(x.state, p);
         }
 
@@ -354,10 +351,10 @@ namespace lizard {
         // the first chunk of a slugcat or creature (but `self`) the segment
         // from `a` to `b` passes within `rad` of
         // (SharedPhysics.TraceProjectileAgainstBodyChunks)
-        bool trace_targets(sys::game_state const& state, dcon::room_id room, vec2 a, vec2 b, float rad, dcon::creature_id self, creature::target& hit, uint32_t& k, vec2& at) {
+        bool trace_targets(sys::game_state const& state, dcon::room_id room, vec2 a, vec2 b, float rad, dcon::creature_id self, dcon::creature_id& hit, uint32_t& k, vec2& at) {
             auto const& w = state.world;
             float best = 2.f;
-            auto const test = [&](creature::target p) {
+            auto const test = [&](dcon::creature_id p) {
                 if (!creature::here(state, p, room))
                     return;
                 uint32_t const n = creature::chunk_count_of(state, p);
@@ -376,10 +373,9 @@ namespace lizard {
                     }
                 }
             };
-            rooms::for_each_player(state, room, [&](dcon::player_id p) { test(creature::of(p)); });
             rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
                 if (c != self)
-                    test(creature::of(c));
+                    test(c);
             });
             return best <= 1.f;
         }
@@ -462,7 +458,7 @@ namespace lizard {
                     t.vel += custom::dir_vec(t.pos, x.pos(0)) * (t.dist - el) * tp.empty_elasticity;
                 }
                 vec2 const fwd = custom::dir_vec(x.pos(1), x.pos(0));
-                creature::target hit;
+                dcon::creature_id hit;
                 uint32_t k = 0;
                 vec2 at;
                 if (trace_targets(x.state, x.room.id, t.last_pos, t.pos, 3.f, x.id, hit, k, at)) {
@@ -475,7 +471,7 @@ namespace lizard {
                     t.state = tongue_state::attatched;
                     auto const c = creature::chunk_of(x.state, hit, k);
                     w.body_chunk_get_vel(c) += t.vel * (0.15f / w.body_chunk_get_mass(c));
-                    x.sound_at(hit.is_player() ? sound::sound_id::lizard_tongue_attatch_player : sound::sound_id::lizard_tongue_attatch_npc, t.pos);
+                    x.sound_at(creature::is_slugcat(w, hit) ? sound::sound_id::lizard_tongue_attatch_player : sound::sound_id::lizard_tongue_attatch_npc, t.pos);
                 } else if (x.room.get_tile(t.pos).t == world::terrain::solid) {
                     vec2 v = t.last_pos;
                     for (float f = 0.f; f < 1.f && x.room.get_tile(rw::lerp(t.last_pos, t.pos, f)).t != world::terrain::solid; f += 0.05f)
@@ -538,7 +534,7 @@ namespace lizard {
                 if (custom::dist_less(t.pos, x.pos(0), 10.f)) {
                     x.sound(sound::sound_id::lizard_tongue_go_back_in_mouth);
                     t.state = tongue_state::hidden;
-                    t.attached = creature::target{};
+                    t.attached = dcon::creature_id{};
                 }
                 return;
             }
@@ -1489,7 +1485,7 @@ namespace lizard {
                 w.body_chunk_get_vel(sc) -= a * (d - r) * (1.f - k);
                 --s.fall_off;
             } else {
-                s.stick = creature::target{};
+                s.stick = dcon::creature_id{};
                 // the terrain: bouncing off what it flew into (the tile
                 // collisions simplified to the tile it ended up in)
                 ivec2 const t = room_view::get_tile_position(s.pos);
@@ -1506,7 +1502,7 @@ namespace lizard {
                     }
                     hit = true;
                 }
-                creature::target p;
+                dcon::creature_id p;
                 uint32_t k = 0;
                 vec2 at;
                 if (trace_targets(state, room.id, s.last_pos, s.pos, rad, has_owner ? owner : dcon::creature_id{}, p, k, at)) {
@@ -1515,20 +1511,20 @@ namespace lizard {
                     s.stick_chunk = uint8_t(k);
                     s.vel *= 0.25f;
                     if (has_owner && s.my_aim == p) {
-                        s.my_aim = creature::target{};
+                        s.my_aim = dcon::creature_id{};
                         ai::spit_set_aim(state, owner, s.my_aim_up);
                     }
                     // Creature.Violence(Blunt, 0 damage, random * 7 stun)
                     auto const c = creature::chunk_of(state, p, k);
                     float const st = rng.value() * 7.f;
-                    if (p.is_player()) {
+                    if (creature::is_slugcat(w, p)) {
                         w.body_chunk_get_vel(c) += s.vel * 0.6f / w.body_chunk_get_mass(c);
-                        creature::stun_target(state, p, int32_t(st));
+                        creature::stun(state, p, int32_t(st));
                     } else {
                         creature::violence_on(state, p, k, s.vel * 0.6f, 0.f, st, creature::damage_type::blunt,
                             has_owner ? creature::template_of(state, owner) : creature::tmpl::red_lizard);
                     }
-                    state.play_sound(p.is_player() ? sound::sound_id::red_lizard_spit_hit_player : sound::sound_id::red_lizard_spit_hit_npc, room.id, s.pos);
+                    state.play_sound(creature::is_slugcat(w, p) ? sound::sound_id::red_lizard_spit_hit_player : sound::sound_id::red_lizard_spit_hit_npc, room.id, s.pos);
                     hit = true;
                 }
             }
@@ -1541,7 +1537,7 @@ namespace lizard {
                     else if (s.pos.y > aim_pos.y)
                         ai::spit_aim_a_bit_down(state, owner, s.my_aim_up);
                 }
-                s.my_aim = creature::target{};
+                s.my_aim = dcon::creature_id{};
                 if (s.mass_left == 1.f) {
                     s.mass_left = 0.99f;
                     if (!s.stick)
@@ -1555,7 +1551,7 @@ namespace lizard {
                     else if (s.pos.y > aim_pos.y)
                         ai::spit_aim_a_bit_down(state, owner, s.my_aim_up);
                 }
-                s.my_aim = creature::target{};
+                s.my_aim = dcon::creature_id{};
             }
             if (s.mass_left < 1.f)
                 s.mass_left -= mathf::lerp(0.5f, 1.5f, s.dissapear_speed) / (!s.stick ? 30.f : 120.f);
@@ -1961,13 +1957,13 @@ namespace lizard {
 
 
         // Lizard.Collide with a creature or slugcat: myChunk `i`, their chunk `j`
-        void collide_with(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, creature::target t, uint32_t j) {
+        void collide_with(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j) {
             auto& w = state.world;
             ai::collided(state, l, t);
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto const rel = tracker::dynamic_relationship(state, l, t);
             // SocialMemory: bumping into a slugcat it doesn't like much
-            if (t.is_player() && rel.type == creature::rel::eats && a.temp_like > -0.5f)
+            if (creature::is_slugcat(w, t) && rel.type == creature::rel::eats && a.temp_like > -0.5f)
                 a.temp_like = mathf::clamp(a.temp_like - 0.05f, -1.f, 1.f);
             if (!consious(state, l) || grasped(state, l) || !rel.go_for_kill())
                 return;
@@ -2138,7 +2134,7 @@ namespace lizard {
         return jaw_open(state, l) > 0.9f && state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).bite_delay == 0;
     }
 
-    void attempt_bite(sys::game_state& state, dcon::creature_id l, creature::target p) {
+    void attempt_bite(sys::game_state& state, dcon::creature_id l, dcon::creature_id p) {
         auto& w = state.world;
         if (grasped(state, l) || !consious(state, l))
             return;
@@ -2168,7 +2164,7 @@ namespace lizard {
                 }
             }
         } else if (!p) {
-            bite(x, creature::target{}, 0);
+            bite(x, dcon::creature_id{}, 0);
         }
         if (legs_gripping(state, l) > 0) {
             if (bit) {
@@ -2284,7 +2280,7 @@ namespace lizard {
     // Public
     //
 
-    creature::target grasped(sys::game_state const& state, dcon::creature_id l) noexcept {
+    dcon::creature_id grasped(sys::game_state const& state, dcon::creature_id l) noexcept {
         return creature::grasped(state.world, l, 0);
     }
 
@@ -2532,12 +2528,12 @@ namespace lizard {
         });
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id l, creature::target t, dcon::room_id room) {
+    bool collides(sys::game_state const& state, dcon::creature_id l, dcon::creature_id t, dcon::room_id room) {
         // what it holds is kept out of it by CarryObject
         return creature::here(state, t, room) && grasped(state, l) != t;
     }
 
-    void collide(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, creature::target t, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id l, room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j) {
         collide_with(state, l, room, i, t, j);
     }
 
@@ -2601,13 +2597,13 @@ namespace lizard {
         a.temp_like = mathf::clamp(a.temp_like - change * 1.5f, -1.f, 1.f);
     }
 
-    void release(sys::game_state& state, dcon::creature_id l, creature::target p) {
+    void release(sys::game_state& state, dcon::creature_id l, dcon::creature_id p) {
         auto& w = state.world;
         if (grasped(state, l) == p)
             lose_all_grasps(state, l);
         auto& t = w.lizard_data_get_tongue(creature::lizard_data(w, l));
         if (t.attached == p) {
-            t.attached = creature::target{};
+            t.attached = dcon::creature_id{};
             t.state = tongue_state::retracting;
         }
     }

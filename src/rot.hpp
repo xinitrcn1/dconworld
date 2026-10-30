@@ -28,8 +28,8 @@ namespace rot {
     dcon::rot_system_id system_of(sys::game_state const& state, dcon::room_id room) noexcept;
     // DaddyCorruption.Update, its noises and tubes, and the creatures it eats
     void update_room(sys::game_state& state, world::room_view const& room);
-    // lets go of the player (respawned, destroyed)
-    void release_player(sys::game_state& state, dcon::player_id p);
+    // lets go of a creature (a slugcat respawned, destroyed)
+    void release(sys::game_state& state, dcon::creature_id c);
 
     // ClimbableVinesSystem over the climbable rot tubes of a room
     namespace vines {

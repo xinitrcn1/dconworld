@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "math.hpp"
-#include "target_types.hpp"
+#include "dcon_generated_ids.hpp"
 #include "player_types.hpp"
 
 namespace cicada {
@@ -79,8 +79,8 @@ namespace cicada {
         // currentLoop: 0 none, 1 Cicada_Wings_LOOP, 2 the bump attack's
         // prepare loop, 3 its charge loop
         uint8_t current_loop = 0;
-        // CreatureLooker.lookCreature: a player index + 1, 0 none
-        creature::target look_creature;
+        // CreatureLooker.lookCreature
+        dcon::creature_id look_creature;
         // (its UnityEngine.Random is the creature's graphics_random)
     };
 }

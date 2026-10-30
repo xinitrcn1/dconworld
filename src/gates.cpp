@@ -1,5 +1,9 @@
+#include <optional>
+
 #include "gates.hpp"
+#include "creature.hpp"
 #include "player.hpp"
+#include "rooms.hpp"
 
 namespace gates {
     using rw::ivec2;
@@ -30,19 +34,20 @@ namespace gates {
                 }
         }
 
-        // abstract position of a player (tile of the main chunk), if in `room`
-        bool player_tile(sys::game_state const& state, dcon::player_id p, dcon::room_id room, ivec2& out) {
-            auto const& w = state.world;
-            if (w.player_get_in_shortcut(p) || w.physical_object_get_room_from_object_location(player::body(state, p)) != room)
+        // abstract position of a creature (the tile of its main chunk), if it
+        // is out in `room` and alive (a slugcat, or any creature passing
+        // through: the gate works for whatever is in it)
+        bool creature_tile(sys::game_state const& state, dcon::creature_id c, dcon::room_id room, ivec2& out) {
+            if (!creature::here(state, c, room) || state.world.creature_get_dead(c))
                 return false;
-            out = world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(state, p, 0)));
+            out = world::room_view::get_tile_position(creature::main_pos(state, c));
             return true;
         }
 
         // RegionGate.DetectZone
-        int32_t detect_zone(sys::game_state const& state, dcon::player_id p, dcon::room_id room) {
+        int32_t detect_zone(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) {
             ivec2 t;
-            if (!player_tile(state, p, room, t))
+            if (!creature_tile(state, c, room, t))
                 return -1;
             int32_t const half = state.world.room_get_width(room) / 2;
             if (t.x < half - 8)
@@ -54,15 +59,18 @@ namespace gates {
             return 3;
         }
 
-        // RegionGate.PlayersInZone
+        // RegionGate.PlayersInZone over the room's creatures, the slugcats
+        // included: the zone they all are in, -1 none or mixed
         int32_t players_in_zone(sys::game_state const& state, dcon::room_id room) {
             int32_t num = -1;
             bool any = false;
             bool mixed = false;
-            state.world.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
                 if (mixed)
                     return;
-                int32_t const z = detect_zone(state, p, room);
+                int32_t const z = detect_zone(state, c, room);
+                if (z < 0)
+                    return;
                 if (any && z != num) {
                     num = -1;
                     mixed = true;
@@ -74,11 +82,22 @@ namespace gates {
             return num;
         }
 
-        bool players_standing_still(sys::game_state const& state) {
+        // RegionGate.AllPlayersThroughToOtherSide's wait for the players to
+        // stand still (touchedNoInputCounter); a creature waits at the door
+        // by itself
+        bool players_standing_still(sys::game_state const& state, dcon::room_id room) {
+            auto const& w = state.world;
             bool still = true;
-            state.world.for_each_player([&](dcon::player_id p) {
-                if (state.world.player_get_touched_no_input_counter(p) < 20)
+            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+                ivec2 t;
+                if (!creature_tile(state, c, room, t))
+                    return;
+                if (auto const p = creature::player_of(state, c)) {
+                    if (w.player_get_touched_no_input_counter(p) < 20)
+                        still = false;
+                } else if (rw::magnitude(w.body_chunk_get_vel(creature::chunk(state, c, creature::main_chunk(state, c)))) > 2.f) {
                     still = false;
+                }
             });
             return still;
         }
@@ -86,9 +105,9 @@ namespace gates {
         bool all_players_through(sys::game_state const& state, dcon::room_id room, bool let_through_dir) {
             int32_t const half = state.world.room_get_width(room) / 2;
             bool through = true;
-            state.world.for_each_player([&](dcon::player_id p) {
+            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
                 ivec2 t;
-                if (!player_tile(state, p, room, t))
+                if (!creature_tile(state, c, room, t))
                     return;
                 if ((!let_through_dir || t.x < half + 3) && (let_through_dir || t.x > half - 4))
                     through = false;
@@ -105,6 +124,25 @@ namespace gates {
         return state.world.room_get_gate_from_gate_location(room);
     }
 
+    std::optional<ivec2> wait_tile(sys::game_state const& state, dcon::room_id room, vec2 from, ivec2 to) noexcept {
+        auto const g = gate_of(state, room);
+        if (!g)
+            return std::nullopt;
+        // the first closed door between it and where it goes: wait in front
+        // of it (in the middle zones the gate cycles)
+        int32_t const x = world::room_view::get_tile_position(from).x;
+        vec3 const closed = state.world.gate_get_door_closed(g);
+        bool const right = to.x > x;
+        for (int32_t i = 0; i < 3; ++i) {
+            int32_t const k = right ? i : 2 - i;
+            int32_t const dx = door_first_x + k * door_spacing;
+            bool const between = right ? (dx + 1 > x && dx < to.x) : (dx < x && dx + 1 > to.x);
+            if (between && closed[k] > 0.f)
+                return ivec2{right ? dx - 2 : dx + 3, door_bottom_y};
+        }
+        return std::nullopt;
+    }
+
     void update_room(sys::game_state& state, dcon::room_id room) {
         auto& w = state.world;
         auto const g = gate_of(state, room);
@@ -119,7 +157,7 @@ namespace gates {
             if (num > 0 && num < 3) {
                 bool const dir = num == 1;
                 w.gate_set_let_through_dir(g, dir);
-                if (!w.gate_get_dont_open(g) && players_standing_still(state)) {
+                if (!w.gate_get_dont_open(g) && players_standing_still(state, room)) {
                     if (++start_counter > 60) {
                         w.gate_set_mode(g, gate_mode::closing_air_lock);
                         goal[dir ? 0 : 2] = 1.f;

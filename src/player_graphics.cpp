@@ -7,6 +7,7 @@
 #include "cicada.hpp"
 #include "items.hpp"
 #include "physics.hpp"
+#include "creature.hpp"
 #include "player.hpp"
 #include "rot.hpp"
 
@@ -85,8 +86,8 @@ namespace player_graphics {
             push_out_of_terrain(t, room, tail_surface_friction);
         }
 
-        bool consious(dcon::data_container const& w, dcon::player_id p) {
-            return w.player_get_stun(p) <= 0 && !w.player_get_dead(p);
+        bool consious(sys::game_state const& state, dcon::player_id p) {
+            return player::stun_of(state, p) <= 0 && !player::dead(state, p);
         }
 
         // AxolotlGills constructor constants, per scale (scalesPositions[i * 2 + j])
@@ -326,7 +327,7 @@ namespace player_graphics {
             if (limb == 0 && carried)
                 flag = true;
             if (flag && carried) {
-                auto const gc = cicada::chunk(state, carried, w.creature_get_payload(carried).cicada.held_chunk);
+                auto const gc = cicada::chunk(state, carried, creature::grasp_chunk(w, player::creature_of(state, p), 0));
                 vec2 const gp = w.body_chunk_get_pos(gc);
                 h.mode = limb_mode::hunt_absolute_position;
                 h.absolute_hunt_pos = gp + custom::perpendicular_vector(c0 - gp) * w.body_chunk_get_rad(gc) * 0.8f * (limb == 0 ? -1.f : 1.f);
@@ -540,7 +541,7 @@ namespace player_graphics {
             g.airborne_counter = 0.f;
 
         // hands: following a throw, or reaching over the shoulder for the back spear
-        if (consious(w, p)) {
+        if (consious(state, p)) {
             dcon::item_id const thrown = g.thrown_item ? dcon::item_id{dcon::item_id::value_base_t(g.thrown_item - 1)} : dcon::item_id{};
             int32_t const back_counter = w.player_get_back_counter(p);
             if (g.throw_counter > 0 && thrown && w.item_is_valid(thrown)) {
@@ -613,7 +614,7 @@ namespace player_graphics {
         auto const anim = w.player_get_animation(p);
         int32_t const flip = w.player_get_flip_direction(p);
         int32_t const frame = w.player_get_animation_frame(p);
-        bool const awake = consious(w, p);
+        bool const awake = consious(state, p);
         auto const lerp_part = [&](player::body_part const& bp) { return rw::lerp(bp.last_pos, bp.pos, alpha); };
         vec2 const v = rw::lerp(g.last_draw_pos[0], g.draw_pos[0], alpha);  // upper body
         vec2 const v2 = rw::lerp(g.last_draw_pos[1], g.draw_pos[1], alpha); // lower body
@@ -709,7 +710,7 @@ namespace player_graphics {
         } else {
             look = vec2{0.f, 0.f};
             head_index = 0;
-            face_element = w.player_get_dead(p) ? "FaceDead" : "FaceStunned";
+            face_element = player::dead(state, p) ? "FaceDead" : "FaceStunned";
             face_rot = head_rot;
         }
         head_index = custom::int_clamp(head_index, 0, 17);

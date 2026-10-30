@@ -53,16 +53,16 @@ namespace lizard {
     // Room object collisions: whether it collides with a creature or
     // slugcat (not the one in its jaws), Lizard.Collide (its chunk `i`
     // touched the other's `j`: seen, a rival's anger, bites)
-    bool collides(sys::game_state const& state, dcon::creature_id l, creature::target t, dcon::room_id room);
-    void collide(sys::game_state& state, dcon::creature_id l, world::room_view const& room, uint32_t i, creature::target t, uint32_t j);
+    bool collides(sys::game_state const& state, dcon::creature_id l, dcon::creature_id t, dcon::room_id room);
+    void collide(sys::game_state& state, dcon::creature_id l, world::room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j);
     // Lizard.Violence: `dir` is the hit's direction (the head shield and the
     // mouth), `rock` a Rock turning it around, `explosion` the damage type
     void violence(sys::game_state& state, dcon::creature_id l, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus, bool rock = false, bool explosion = false);
 
     // what it holds in its jaws (grasps[0]), if any
-    creature::target grasped(sys::game_state const& state, dcon::creature_id l) noexcept;
+    dcon::creature_id grasped(sys::game_state const& state, dcon::creature_id l) noexcept;
     // releases `t` from its jaws and tongue
-    void release(sys::game_state& state, dcon::creature_id l, creature::target t);
+    void release(sys::game_state& state, dcon::creature_id l, dcon::creature_id t);
     // Lizard.JawOpen
     float jaw_open(sys::game_state const& state, dcon::creature_id l) noexcept;
 }

@@ -42,7 +42,7 @@ namespace lizard {
     // Lizard.JawReadyForBite
     bool jaw_ready_for_bite(sys::game_state const& state, dcon::creature_id l) noexcept;
     // Lizard.AttemptBite, at a creature or slugcat (none: Bite(null))
-    void attempt_bite(sys::game_state& state, dcon::creature_id l, creature::target t);
+    void attempt_bite(sys::game_state& state, dcon::creature_id l, dcon::creature_id t);
     // Lizard.JawsSnapShut
     void jaws_snap_shut(sys::game_state& state, dcon::creature_id l, rw::vec2 at);
     // Lizard.LegsGripping
@@ -67,22 +67,22 @@ namespace lizard {
         // the LizardAI constructor
         void reset(sys::game_state& state, dcon::creature_id l);
         // Tracker.SeeCreature
-        void see(sys::game_state& state, dcon::creature_id l, creature::target t);
+        void see(sys::game_state& state, dcon::creature_id l, dcon::creature_id t);
         // Lizard.Collide's AI side: seen, a rival's anger
-        void collided(sys::game_state& state, dcon::creature_id l, creature::target t);
+        void collided(sys::game_state& state, dcon::creature_id l, dcon::creature_id t);
         // LizardAI.BitCreature
         void bit_creature(sys::game_state& state, dcon::creature_id l, world::room_view const& room);
         // LizardAI.UnpleasantFallRisk
         bool unpleasant_fall_risk(sys::game_state& state, dcon::creature_id l, world::room_view const& room, rw::ivec2 tile);
         // LizardAI.DoIWantToHoldThisWithMyTongue, a chunk of `t`
-        bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, world::room_view const& room, creature::target t, uint32_t chunk);
+        bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, world::room_view const& room, dcon::creature_id t, uint32_t chunk);
         // UpdateDynamicRelationship: the slugcat by LikeOfPlayer, the rest
         // StaticWorld's (the tracked ones keep it: tracker::dynamic_relationship)
-        relationship relationship_to(sys::game_state const& state, dcon::creature_id l, creature::target t);
+        relationship relationship_to(sys::game_state const& state, dcon::creature_id l, dcon::creature_id t);
         // PreyTracker.MostAttractivePrey
-        creature::target tracked(sys::game_state const& state, dcon::creature_id l) noexcept;
+        dcon::creature_id tracked(sys::game_state const& state, dcon::creature_id l) noexcept;
         // focusCreature
-        creature::target focus(sys::game_state const& state, dcon::creature_id l) noexcept;
+        dcon::creature_id focus(sys::game_state const& state, dcon::creature_id l) noexcept;
         // LizardPather's field: the one to the destination, for the breed
         pathing::field_id field(sys::game_state& state, dcon::creature_id l, world::room_view const& room);
         // PathFinder.CoordinateReachableAndGetbackable, judged by the field to

@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "dens.hpp"
+#include "gates.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
 #include "creature.hpp"
@@ -48,14 +49,6 @@ namespace dens {
             return found;
         }
 
-        // a slugcat holds it (a squidcada, a baby centipede)
-        bool held(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) {
-            bool h = false;
-            rooms::for_each_player(state, room, [&](dcon::player_id p) {
-                h = h || cicada::held_by(state, p) == c || centipede::held_in_hand(state, p, 0) == c || centipede::held_in_hand(state, p, 1) == c;
-            });
-            return h;
-        }
 
         // what it carries into a pipe is done for (IsEnteringDen: the prey
         // dies; it is carried off, eaten): a slugcat is eaten, a creature
@@ -63,38 +56,27 @@ namespace dens {
         void take_prey(sys::game_state& state, dcon::creature_id c, dcon::room_id room) {
             auto& w = state.world;
             // carrying prey, it stays in the den a while (OpportunityToEnterDen)
-            if (creature::grasped(w, c, 0) || creature::grasped(w, c, 1) || w.creature_get_grasp_player(c)[0] || w.creature_get_grasp_player(c)[1])
+            if (creature::grasped(w, c, 0) || creature::grasped(w, c, 1))
                 w.creature_set_remain_in_den(c, std::max(w.creature_get_remain_in_den(c), 200));
             for (uint32_t g = 0; g < 2; ++g) {
                 auto const t = creature::grasped(w, c, g);
-                if (auto const p = creature::as_player(state, t); p && rooms::room_of(state, p) == room) {
-                    items::release_all(state, p);
-                    creature::release_target(state, t, room);
-                    if (!w.player_get_dead(p))
-                        player::die(state, p);
-                    w.player_set_eaten(p, 1);
-                    ++stats().prey_taken;
-                } else if (auto const o = creature::as_creature(state, t); o && rooms::room_of(state, o) == room) {
-                    creature::release_target(state, t, room);
-                    creature::kill(state, t, creature::template_of(state, c));
-                    ++stats().prey_taken;
-                    ++stats().creatures_eaten;
-                    state.defer(room, [o](sys::game_state& st) {
-                        if (st.world.creature_is_valid(o))
-                            creature::destroy(st, o);
-                    });
-                }
-            }
-            for (uint32_t g = 0; g < 2; ++g) {
-                auto const p = creature::player_of(state, w.creature_get_grasp_player(c)[g]);
-                if (!p || rooms::room_of(state, p) != room)
+                if (!creature::live(state, t) || creature::room_of(state, t) != room)
                     continue;
-                items::release_all(state, p);
-                rooms::for_each_creature(state, room, [&](dcon::creature_id o) { creature::release_player(state, o, p); });
-                if (!w.player_get_dead(p))
-                    player::die(state, p);
-                w.player_set_eaten(p, 1);
+                creature::release_target(state, t, room);
                 ++stats().prey_taken;
+                if (auto const p = creature::player_of(state, t)) {
+                    // the slugcat is eaten (it stays, dead and gone)
+                    items::release_all(state, p);
+                    creature::kill(state, t, creature::template_of(state, c));
+                    w.player_set_eaten(p, 1);
+                    continue;
+                }
+                creature::kill(state, t, creature::template_of(state, c));
+                ++stats().creatures_eaten;
+                state.defer(room, [t](sys::game_state& st) {
+                    if (st.world.creature_is_valid(t))
+                        creature::destroy(st, t);
+                });
             }
         }
 
@@ -205,9 +187,9 @@ namespace dens {
         std::vector<std::vector<std::pair<dcon::room_id, uint8_t>>> into(size_t(w.room_size()));
         w.for_each_room_exit([&](dcon::room_exit_id e) {
             auto const from = w.room_exit_get_room_from_exit_location(e);
-            if (!from || w.room_get_is_gate(from) || w.room_get_is_shelter(from))
+            if (!from || w.room_get_is_shelter(from))
                 return;
-            if (auto const to = exit_target(state, e, from); to && shortcut_to_node(state, from, shortcut_type::room_exit, w.room_exit_get_index(e)))
+            if (auto const to = exit_target(state, e, from, true); to && shortcut_to_node(state, from, shortcut_type::room_exit, w.room_exit_get_index(e)))
                 into[size_t(to.index())].emplace_back(from, w.room_exit_get_index(e));
         });
         std::deque<dcon::room_id> queue{home};
@@ -251,7 +233,17 @@ namespace dens {
     float rain_utility(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) noexcept {
         if (state.world.creature_get_spawn_flags(c) & (flag_night | flag_ignore_cycle))
             return 0.f;
-        return rain::tracker_utility(state, room);
+        // away from home it goes by its home region's cycle (they differ)
+        auto const home = state.world.creature_get_home_room(c);
+        return rain::tracker_utility(state, home ? home : room);
+    }
+
+    void changed_rooms(sys::game_state& state, dcon::creature_id c, dcon::room_id from, dcon::room_id to, bool warp) {
+        auto& w = state.world;
+        if (!from || !to || w.room_get_region_from_region_membership(from) == w.room_get_region_from_region_membership(to))
+            return;
+        ++w.creature_get_regions_changed(c);
+        ++(warp ? stats().warped_regions : stats().gated_regions);
     }
 
     bool want_to_stay(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) {
@@ -284,6 +276,9 @@ namespace dens {
         }
         if (!tile)
             return std::nullopt;
+        // a gate shut on the way home: wait at the middle door
+        if (auto const g = gates::wait_tile(state, room.id, creature::main_pos(state, c), *tile))
+            return *g;
         w.creature_set_going_home(c, 1);
         w.creature_set_travel_tile(c, *tile);
         // the AI heads for the open tile in front of the entrance (the
@@ -368,7 +363,7 @@ namespace dens {
         }
         if (!close)
             return;
-        if (held(state, c, room.id))
+        if (creature::held(state, c))
             return;
         take_prey(state, c, room.id);
         creature::release_all(state, c, room.id);
@@ -439,7 +434,7 @@ namespace dens {
             }
             if (type == shortcut_type::creature_hole) {
                 // AbstractCreature.OpportunityToEnterDen
-                bool const prey = w.creature_get_grasp_player(c)[0] != 0 || w.creature_get_grasp_player(c)[1] != 0;
+                bool const prey = creature::grasped(w, c, 0) || creature::grasped(w, c, 1);
                 if (want_to_stay(state, c, room.id) || rain::tracker_utility(state, room.id) > 0.01f) {
                     w.creature_set_remain_in_den(c, -1);
                 } else if (prey || w.creature_get_remain_in_den(c) > 0) {
@@ -449,7 +444,8 @@ namespace dens {
                     return;
                 }
                 w.creature_set_away(c, uint8_t(where::den));
-                w.creature_set_grasp_player(c, world::byte_pair{});
+                for (uint32_t g = 0; g < 2; ++g)
+                    creature::release_grasp(state, c, g);
                 ++stats().into_dens;
                 // it lives here now if it had no den
                 if (!w.creature_get_home_room(c) || w.creature_get_home_room(c) == room.id) {
@@ -466,8 +462,9 @@ namespace dens {
             }
             // a room exit: the connected room's pipe back here, travelled
             // backwards (moving rooms: a transaction)
+            // (through a gate only on purpose: its trip or its way home)
             auto const exit = w.shortcut_get_exit_from_shortcut_destination(s);
-            auto const target = exit ? exit_target(state, exit, room.id) : dcon::room_id{};
+            auto const target = exit ? exit_target(state, exit, room.id, true) : dcon::room_id{};
             dcon::shortcut_id arrival;
             if (target) {
                 dcon::room_exit_id back;
@@ -484,10 +481,11 @@ namespace dens {
                 return;
             }
             ++stats().room_changes;
-            state.defer(room.id, [c, target, arrival](sys::game_state& st) {
+            state.defer(room.id, [c, from = room.id, target, arrival](sys::game_state& st) {
                 auto& ww = st.world;
                 if (!ww.creature_is_valid(c))
                     return;
+                changed_rooms(st, c, from, target, false);
                 ww.creature_set_away_room(c, target);
                 ww.creature_set_vessel_shortcut(c, arrival);
                 ww.creature_set_vessel_reverse(c, 1);

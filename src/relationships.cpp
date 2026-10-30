@@ -129,6 +129,7 @@ namespace creature {
     tmpl template_of(sys::game_state const& state, dcon::creature_id c) noexcept {
         auto const& pl = state.world.creature_get_payload(c);
         switch (state.world.creature_get_type(c)) {
+        case type::slugcat: return tmpl::slugcat;
         case type::centipede: return tmpl(uint32_t(tmpl::centipede) + uint32_t(pl.centipede.variant));
         case type::dropbug: return tmpl::drop_bug;
         case type::cicada: return pl.cicada.gender ? tmpl::cicada_a : tmpl::cicada_b;
@@ -137,12 +138,6 @@ namespace creature {
         case type::leech: return tmpl(uint32_t(tmpl::leech) + uint32_t(pl.leech.variant));
         case type::count: break;
         }
-        return tmpl::slugcat;
-    }
-
-    tmpl template_of(sys::game_state const& state, target t) noexcept {
-        if (t.is_creature())
-            return template_of(state, creature_id_of(t));
         return tmpl::slugcat;
     }
 

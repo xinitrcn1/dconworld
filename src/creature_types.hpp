@@ -2,8 +2,9 @@
 
 // The creature object's type tag and its payload, and the creature parts'.
 //
-// Every creature is one `creature` object of the data container: what most
-// kinds have (stun, health, the tracked slugcat, the AI's destination...) is
+// Every creature, the slugcat included, is one `creature` object of the
+// data container: what most kinds have (stun, death, grasps, the AI's
+// tracker and destination...) is
 // a property of its own (SoA, see dcon_generated.txt), and what only its kind
 // has is the `payload`, a union of one small struct per kind (at most 64
 // bytes: one cache line per creature). A kind's bigger state (its AI
@@ -15,14 +16,15 @@
 // has is SoA, the rest a `part_payload` per kind, pointing at a per-kind data
 // object for the vector pools.
 //
-// The payloads are defined here, before the data container's id types: they
-// keep their data object as its plain index (`data`).
+// The payloads are defined here, before the data container's objects (the
+// id types come first, dcon_generated_ids.hpp): they keep their data object
+// as its plain index (`data`), the creatures they refer to as their ids.
 
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
 
-#include "target_types.hpp"
+#include "dcon_generated_ids.hpp"
 #include "centipede_types.hpp"
 #include "cicada_types.hpp"
 #include "daddy_types.hpp"
@@ -33,8 +35,10 @@
 
 namespace creature {
     // CreatureTemplate.Type of the ported creatures. The order is the update
-    // order of a room (and the order every per kind loop used to run in)
+    // order of a room: the slugcats first (player.cpp runs them, before the
+    // rest), then the kinds in the order every per kind loop used to run in
     enum class type : uint8_t {
+        slugcat,
         centipede,
         dropbug,
         cicada,
@@ -44,7 +48,7 @@ namespace creature {
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
-    inline constexpr type all_types[type_count] = {type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech};
+    inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech};
 
     // Creature.DamageType, as far as the ports tell them apart
     enum class damage_type : uint8_t {
@@ -94,10 +98,11 @@ namespace creature {
         constexpr bool go_for_kill() const noexcept { return (type == rel::eats || type == rel::attacks) && intensity > 0.f; }
     };
 
-    // A creature's grasps (Creature.grasps[0], [1]): what each holds and the
-    // chunk it holds it by
+    // A creature's grasps (Creature.grasps[0], [1]): what each holds (a
+    // PhysicalObject: a creature's body or an item's) and the chunk it holds
+    // it by
     struct grasp_pair {
-        target who[2];
+        dcon::physical_object_id obj[2];
         uint8_t chunk[2] = {0, 0};
     };
 
@@ -111,7 +116,7 @@ namespace creature {
     // AgressionTracker.AngerRelationship). Positions are in the tracker's
     // room: a creature in another room is out of sight
     struct tracked {
-        target who;
+        dcon::creature_id who;
         uint8_t visual = 0;
         track_module module = track_module::none;
         // a kind's TrackedCreatureState (LizardTrackState.spear,
@@ -141,9 +146,9 @@ namespace creature {
         uint8_t count = 0;
         // PreyTracker.currentPrey, ThreatTracker.mostThreateningCreature,
         // AgressionTracker.highestAgressionTarget
-        target prey;
-        target threat;
-        target aggression;
+        dcon::creature_id prey;
+        dcon::creature_id threat;
+        dcon::creature_id aggression;
         float frustration = 0.f;
         // ThreatTracker
         float current_threat = 0.f;
@@ -172,6 +177,11 @@ namespace creature {
 
     // the payload of a kind: what only that kind has, the hottest of it here
     // and its data object's index
+    struct slugcat_payload {
+        // its Player.cs state and controller (the `player` object)
+        uint16_t player;
+    };
+
     struct centipede_payload {
         float size;
         rw::vec2 move_to_pos;
@@ -214,9 +224,9 @@ namespace creature {
         uint8_t swimming;
         uint8_t jumping;
         uint8_t from_ceiling_jump;
-        // jumpAtChunk: a creature's or slugcat's chunk, else dropbug_data's
+        // jumpAtChunk: a creature's chunk, else dropbug_data's
         // jump_at_pos
-        target jump_at;
+        dcon::creature_id jump_at;
         uint8_t jump_at_chunk;
         // dropbug_data
         uint16_t data;
@@ -237,15 +247,11 @@ namespace creature {
         uint8_t gender;
         uint8_t flying;
         int8_t flip_h;
-        // stickyCling: a creature's or slugcat's chunk
-        target sticky;
+        // stickyCling: a creature's chunk
+        dcon::creature_id sticky;
         uint8_t sticky_chunk;
         uint8_t cant_pick_up_player;
         uint8_t currently_lifting_player;
-        // grabbedBy: the player holding it (index + 1, 0 none) in its
-        // grasps[0] (both hands: TwoHands), and the chunk it holds
-        uint8_t held_by;
-        uint8_t held_chunk;
         // cicada_data
         uint16_t data;
     };
@@ -300,7 +306,7 @@ namespace creature {
         int8_t land_walk_dir;
         leech::variant variant;
         // huntPrey
-        target hunt_prey;
+        dcon::creature_id hunt_prey;
         uint8_t has_goal;
         uint8_t flee_from_rain;
         // leech_data
@@ -309,6 +315,7 @@ namespace creature {
 
     // creature.payload: the struct of the creature's type
     union payload {
+        slugcat_payload slugcat;
         centipede_payload centipede;
         dropbug_payload dropbug;
         cicada_payload cicada;
@@ -319,6 +326,7 @@ namespace creature {
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
     };
+    static_assert(sizeof(slugcat_payload) <= 64);
     static_assert(sizeof(centipede_payload) <= 64);
     static_assert(sizeof(dropbug_payload) <= 64);
     static_assert(sizeof(cicada_payload) <= 64);

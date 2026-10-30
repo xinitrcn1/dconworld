@@ -29,6 +29,13 @@
 #include "world.hpp"
 
 namespace migrate {
+    // a trip's hop through a Watcher warp: its exit is `warp_hop` + the
+    // warp's number in the room
+    inline constexpr uint8_t warp_hop = 0xF0;
+    // MigrationBehavior's chance of a trip to another region (vanilla's
+    // creatures stay in their world: one in 25 trips here)
+    inline constexpr float cross_region_chance = 0.04f;
+
     // reads every region's Room_Attr lines into the rooms' `attraction`
     void load_attractions(sys::game_state& state);
 
@@ -56,10 +63,17 @@ namespace migrate {
     void move_to_more_attractive_neighbor(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
     // drops the trip
     void cancel(sys::game_state& state, dcon::creature_id c) noexcept;
+    // a trip from `from` to `to` over the shortest way, gates and warps
+    // included (false: no way there)
+    bool plan_trip(sys::game_state& state, dcon::creature_id c, dcon::room_id from, dcon::room_id to);
+    // a trip to a room of another region a few rooms away
+    bool cross_region(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
 
     // The tile to head for on the trip (the open tile before the next
-    // exit's pipe entrance), marking the creature as heading into it this
-    // tick; none without a trip, or when the way is lost (the trip ends)
+    // exit's pipe entrance, the middle door of a gate shut on the way, a
+    // warp), marking the creature as heading into the pipe this tick; none
+    // without a trip, or when the way is lost (the trip ends). In a warp's
+    // middle the warp carries it (a transaction)
     std::optional<rw::ivec2> travel_tile(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
     // out of a pipe in `room` (dens.hpp): AbstractCreatureAI.Moved
     void arrived(sys::game_state& state, dcon::creature_id c, dcon::room_id room);

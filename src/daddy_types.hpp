@@ -11,7 +11,7 @@
 
 #include "math.hpp"
 #include "player_types.hpp"
-#include "target_types.hpp"
+#include "dcon_generated_ids.hpp"
 #include "world_types.hpp"
 
 namespace daddy {
@@ -102,14 +102,14 @@ namespace daddy {
         rw::vec2 ideal_grab_pos{0.f, 0.f};
         uint8_t needed_for_locomotion = 0;
         // huntCreature: the creature or slugcat it tracks
-        creature::target hunt;
+        dcon::creature_id hunt;
         // checkSound: the noise source's id (0 none)
         uint16_t check_sound = 0;
         int32_t sound_check_counter = 0;
         int32_t sound_check_timer = 0;
         std::optional<rw::vec2> examine_sound_pos;
         // grabChunk: a creature's or slugcat's chunk
-        creature::target grab;
+        dcon::creature_id grab;
         uint8_t grab_chunk = 0;
         float sticky = 0.f;
         task current = task::none;
@@ -144,7 +144,7 @@ namespace daddy {
 
     // DaddyLongLegs.EatObject: a creature's or slugcat's chunk pulled into the body
     struct eat_object {
-        creature::target who;
+        dcon::creature_id who;
         uint8_t chunk = 0;
         float distance = 0.f;
         float progression = 0.f;
@@ -177,7 +177,7 @@ namespace daddy {
         rw::vec2 pos{0.f, 0.f};
         int32_t age = 0;
         uint16_t id = 0;
-        creature::target who; // creatureRep
+        dcon::creature_id who; // creatureRep
         uint8_t slated_for_deletion = 0;
     };
     struct noise_tracker {
@@ -196,7 +196,7 @@ namespace daddy {
     // tick, ticks since, where); the behavior and destination are the
     // creature's
     struct ai_state {
-        creature::target seen;
+        dcon::creature_id seen;
         uint8_t sees = 0;
         int32_t ticks_since_seen = 0;
         rw::vec2 last_seen_pos{0.f, 0.f};
@@ -225,7 +225,7 @@ namespace daddy {
         float last_closed = 0.f;
         int32_t eyes_closed_delay = 0;
         uint16_t sound_source = 0;
-        creature::target creature_seen;
+        dcon::creature_id creature_seen;
         float light = 0.f;
         float flash = 0.f;
         // the JaggedCircle's rim, rolled once (the shader's noise)

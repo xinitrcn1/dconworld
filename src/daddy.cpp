@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "daddy.hpp"
+#include "migrate.hpp"
 #include "dens.hpp"
 #include "rooms.hpp"
 #include "daddy_graphics.hpp"
@@ -70,7 +71,7 @@ namespace daddy {
                 m += mass(i);
             return m;
         }
-        creature::target ctx::tracked() const { return creature::live(state, seen) ? seen : creature::target{}; }
+        dcon::creature_id ctx::tracked() const { return creature::live(state, seen) ? seen : dcon::creature_id{}; }
 
         void load(ctx& x) {
             auto& w = x.state.world;
@@ -102,9 +103,7 @@ namespace daddy {
             }
         }
 
-        bool target_here(sys::game_state const& state, creature::target t, dcon::room_id room) noexcept {
-            if (auto const p = creature::as_player(state, t); p && state.world.player_get_eaten(p))
-                return false;
+        bool target_here(sys::game_state const& state, dcon::creature_id t, dcon::room_id room) noexcept {
             return creature::here(state, t, room);
         }
 
@@ -122,7 +121,7 @@ namespace daddy {
 
         // DaddyAI.UpdateDynamicRelationship: StaticWorld's (no Remix: a
         // big plain Daddy ignores the Brothers)
-        creature::relationship relationship_to(ctx const& x, creature::target t) {
+        creature::relationship relationship_to(ctx const& x, dcon::creature_id t) {
             auto const tt = creature::template_of(x.state, t);
             if (x.size_class && x.v == variant::daddy && tt == creature::tmpl::brother_long_legs)
                 return creature::relationship{};
@@ -132,8 +131,8 @@ namespace daddy {
         // Tracker.SeeCreature: what the tentacles feel is what it knows of;
         // with one representation, something new takes the place of what it
         // hasn't felt for a while (PreyTracker's pick of the most attractive)
-        void see(ctx& x, creature::target t) {
-            if (!t || t == creature::of(x.d) || relationship_to(x, t).type != creature::rel::eats)
+        void see(ctx& x, dcon::creature_id t) {
+            if (!t || t == x.d || relationship_to(x, t).type != creature::rel::eats)
                 return;
             if (x.seen && x.seen != t && creature::live(x.state, x.seen) && x.ticks_since_seen < 40)
                 return;
@@ -300,7 +299,7 @@ namespace daddy {
                     nt.mysterious_noise_counter = 200;
                 }
             } else {
-                creature::target rep;
+                dcon::creature_id rep;
                 if (bool(x.seen)) {
                     float const m = noise_match_player(x, noise.pos);
                     float const lim = custom::lerp_map(float(x.ticks_since_seen), 20.f, 600.f, 200.f, 1000.f);
@@ -366,7 +365,7 @@ namespace daddy {
                 }
                 ++s.age;
                 if (bool(s.who) && s.who != x.seen)
-                    s.who = creature::target{};
+                    s.who = dcon::creature_id{};
                 if (s.age > nt.forget_time)
                     s.slated_for_deletion = 1;
             }
@@ -431,7 +430,13 @@ namespace daddy {
             if (x.hd && x.current() == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
                 x.set_current(behavior::examine_sound);
             ivec2& dest = x.destination;
-            if (x.current() == behavior::idle) {
+            // (AbstractBehavior: now and then a trip to another room)
+            if (x.current() == behavior::idle)
+                migrate::idle_roll(x.state, x.d, x.room);
+            if (x.current() == behavior::idle && migrate::want_to(x.state, x.d)) {
+                if (auto const t = migrate::travel_tile(x.state, x.d, x.room))
+                    dest = *t;
+            } else if (x.current() == behavior::idle) {
                 --a.new_idle_pos_counter;
                 if (a.new_idle_pos_counter < 1 || !reachable_and_getbackable(x, dest)) {
                     int32_t const tx = x.rng.range(0, x.room.width);
@@ -489,8 +494,8 @@ namespace daddy {
             // a random representation, forgotten when its ghosts are too old
             if (bool(x.seen)) {
                 x.rng.range(0, 1);
-                if (generation(x) > 100.f || !creature::live(x.state, x.seen) || (x.seen.is_player() && x.state.world.player_get_eaten(creature::player_id_of(x.seen))))
-                    x.seen = creature::target{};
+                if (generation(x) > 100.f || !creature::live(x.state, x.seen) || creature::eaten(x.state, x.seen))
+                    x.seen = dcon::creature_id{};
             }
             // ArtificialIntelligence.Update: the modules
             if (!a.seen_this_tick) {
@@ -695,24 +700,23 @@ namespace daddy {
 
         // `p` is gone into the daddy (Player.PermaDie, Destroy): everything
         // else lets go of it; a creature is gone at the end of the tick
-        void finish(ctx& x, creature::target p) {
+        void finish(ctx& x, dcon::creature_id p) {
             for (auto& tw : x.tents) {
                 if (tw.t.grab == p)
-                    tw.t.grab = creature::target{};
+                    tw.t.grab = dcon::creature_id{};
                 if (tw.t.hunt == p)
-                    tw.t.hunt = creature::target{};
+                    tw.t.hunt = dcon::creature_id{};
             }
             if (x.seen == p)
-                x.seen = creature::target{};
-            if (auto const pl = creature::as_player(x.state, p))
-                items::release_all(x.state, pl);
-            // the other kinds let go of it (the daddies did above)
+                x.seen = dcon::creature_id{};
+            // it drops what it holds, the other kinds let go of it (the
+            // daddies did above), the rot too
+            creature::lose_all_grasps(x.state, p);
             rooms::for_each_creature(x.state, x.room.id, [&](dcon::creature_id o) {
-                if (x.state.world.creature_get_type(o) != creature::type::daddy && creature::of(o) != p)
+                if (x.state.world.creature_get_type(o) != creature::type::daddy && o != p)
                     creature::release(x.state, o, p);
             });
-            if (auto const pl = creature::as_player(x.state, p))
-                rot::release_player(x.state, pl);
+            rot::release(x.state, p);
             rooms::for_each_creature(x.state, x.room.id, ::creature::type::daddy, [&](dcon::creature_id o) {
                 if (o == x.d)
                     return;
@@ -724,18 +728,19 @@ namespace daddy {
                         ++i;
                 auto& oa = x.state.world.daddy_data_get_ai(creature::daddy_data(x.state.world, o));
                 if (oa.seen == p)
-                    oa.seen = creature::target{};
+                    oa.seen = dcon::creature_id{};
                 for (uint32_t i = 0; i < tentacle_count(x.state, o); ++i) {
                     auto& t = x.state.world.daddy_tentacle_get_t(tentacle_of(x.state, o, i));
                     if (t.grab == p)
-                        t.grab = creature::target{};
+                        t.grab = dcon::creature_id{};
                 }
             });
-            if (auto const pl = creature::as_player(x.state, p)) {
-                player::die(x.state, pl);
+            creature::kill(x.state, p, creature::template_of(x.state, x.d));
+            if (auto const pl = creature::player_of(x.state, p)) {
+                // a slugcat stays, dead and gone
                 x.state.world.player_set_eaten(pl, 1);
-            } else if (auto const c = creature::as_creature(x.state, p)) {
-                creature::kill(x.state, p, creature::template_of(x.state, x.d));
+            } else {
+                auto const c = p;
                 x.state.defer(x.room.id, [c](sys::game_state& st) {
                     if (st.world.creature_is_valid(c))
                         creature::destroy(st, c);
@@ -758,7 +763,7 @@ namespace daddy {
                 if (e.progression > 1.f) {
                     // digestion by what it ate (the slugcat's 1)
                     if (!x.size_class)
-                        z.digesting_counter = int32_t(custom::lerp_map(p.is_player() ? 1.f : creature::mass_of(x.state, p), 0.2f, 5.f, 50.f, 1100.f));
+                        z.digesting_counter = int32_t(custom::lerp_map(creature::is_slugcat(x.state.world, p) ? 1.f : creature::mass_of(x.state, p), 0.2f, 5.f, 50.f, 1100.f));
                     z.eats[i] = z.eats[--z.eat_count];
                     finish(x, p);
                     continue;
@@ -863,13 +868,13 @@ namespace daddy {
                 // (Room.BackgroundNoise is 0 here)
             } else {
                 if (x.hd && !x.dead())
-                    x.seen = creature::target{};
+                    x.seen = dcon::creature_id{};
                 z.eyes_closed = std::max(z.eyes_closed, 15);
             }
         }
 
 
-        bool being_eaten(sys::game_state const& state, creature::target p, dcon::room_id room) {
+        bool being_eaten(sys::game_state const& state, dcon::creature_id p, dcon::room_id room) {
             bool found = false;
             rooms::for_each_creature(state, room, ::creature::type::daddy, [&](dcon::creature_id d) {
                 auto const& core = state.world.daddy_data_get_core(creature::daddy_data(state.world, d));
@@ -880,7 +885,7 @@ namespace daddy {
         }
 
         // DaddyLongLegs.Collide with a creature or slugcat: myChunk `i`, their chunk `j`
-        void collide_with(sys::game_state& state, dcon::creature_id d, uint32_t i, creature::target ref, uint32_t j) {
+        void collide_with(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id ref, uint32_t j) {
             auto& w = state.world;
             auto& z = w.daddy_data_get_core(creature::daddy_data(w, d));
             // the tracker knows it and it eats it (CheckDaddyConsumption, the
@@ -968,14 +973,14 @@ namespace daddy {
         return a / m;
     }
 
-    bool holds(sys::game_state const& state, dcon::creature_id d, creature::target p) noexcept {
+    bool holds(sys::game_state const& state, dcon::creature_id d, dcon::creature_id p) noexcept {
         for (uint32_t i = 0; i < tentacle_count(state, d); ++i)
             if (state.world.daddy_tentacle_get_t(tentacle_of(state, d, i)).grab == p)
                 return true;
         return false;
     }
 
-    bool eating(sys::game_state const& state, dcon::creature_id d, creature::target p) noexcept {
+    bool eating(sys::game_state const& state, dcon::creature_id d, dcon::creature_id p) noexcept {
         auto const& z = state.world.daddy_data_get_core(creature::daddy_data(state.world, d));
         for (uint32_t i = 0; i < z.eat_count; ++i)
             if (z.eats[i].who == p)
@@ -1185,13 +1190,13 @@ namespace daddy {
         store(x);
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id d, creature::target t, dcon::room_id room) {
+    bool collides(sys::game_state const& state, dcon::creature_id d, dcon::creature_id t, dcon::room_id room) {
         (void)d;
         // what is being eaten is out of the collision layer
         return target_here(state, t, room) && !being_eaten(state, t, room);
     }
 
-    void collide(sys::game_state& state, dcon::creature_id d, uint32_t i, creature::target t, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id d, uint32_t i, dcon::creature_id t, uint32_t j) {
         collide_with(state, d, i, t, j);
     }
 
@@ -1279,7 +1284,7 @@ namespace daddy {
         store(x);
     }
 
-    void release(sys::game_state& state, dcon::creature_id d, creature::target ref) {
+    void release(sys::game_state& state, dcon::creature_id d, dcon::creature_id ref) {
         auto& w = state.world;
         {
             auto& core = w.daddy_data_get_core(creature::daddy_data(w, d));
@@ -1289,13 +1294,13 @@ namespace daddy {
                 else
                     ++i;
             if (auto& a = w.daddy_data_get_ai(creature::daddy_data(w, d)); a.seen == ref)
-                a.seen = creature::target{};
+                a.seen = dcon::creature_id{};
             for (uint32_t i = 0; i < tentacle_count(state, d); ++i) {
                 auto& t = w.daddy_tentacle_get_t(tentacle_of(state, d, i));
                 if (t.grab == ref)
-                    t.grab = creature::target{};
+                    t.grab = dcon::creature_id{};
                 if (t.hunt == ref)
-                    t.hunt = creature::target{};
+                    t.hunt = dcon::creature_id{};
             }
         }
     }

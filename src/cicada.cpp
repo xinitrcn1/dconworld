@@ -31,8 +31,6 @@ namespace cicada {
         constexpr int32_t forget_time = 250;
         constexpr float float_max = std::numeric_limits<float>::max();
 
-        using creature::player_of;
-        using creature::player_ref;
         using creature::room_of;
 
         vec2& pos(sys::game_state& state, dcon::creature_id c, uint32_t i) {
@@ -103,13 +101,12 @@ namespace cicada {
         }
 
         bool player_here(sys::game_state const& state, dcon::player_id p, dcon::room_id room) {
-            auto const& w = state.world;
-            return p && !w.player_get_in_shortcut(p) && player::body(state, p)
-                && w.physical_object_get_room_from_object_location(player::body(state, p)) == room;
+            return p && creature::here(state, player::creature_of(state, p), room);
         }
 
+        // the slugcat carrying it (in its grasps[0], both hands: TwoHands)
         dcon::player_id holder(sys::game_state const& state, dcon::creature_id c) {
-            return player_of(state, state.world.creature_get_payload(c).cicada.held_by);
+            return creature::player_of(state, creature::holder(state, c));
         }
 
         //
@@ -155,7 +152,7 @@ namespace cicada {
         // Creature.Die
         void die(sys::game_state& state, dcon::creature_id c) {
             state.world.creature_set_dead(c, 1);
-            state.world.creature_get_payload(c).cicada.sticky = creature::target{};
+            state.world.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
         }
 
         // Cicada.Land
@@ -191,7 +188,7 @@ namespace cicada {
         // Cicada.Charge
         void charge(sys::game_state& state, dcon::creature_id c, vec2 at) {
             auto& w = state.world;
-            w.creature_get_payload(c).cicada.sticky = creature::target{};
+            w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
             w.creature_get_payload(c).cicada.no_sticky_counter = 140;
             if (w.creature_get_payload(c).cicada.charge_counter > 0)
                 return;
@@ -277,15 +274,12 @@ namespace cicada {
 
         // a cicada `t` holds (CicadaTrackState.gotACicada: a creature's grasp
         // on one, a slugcat carrying one)
-        bool holds_a_cicada(sys::game_state const& state, creature::target t) {
-            if (auto const p = creature::as_player(state, t))
-                return held_by(state, p) != dcon::creature_id{};
-            if (auto const o = creature::as_creature(state, t)) {
-                auto const& g = state.world.creature_get_grasps(o);
-                for (uint32_t i = 0; i < 2; ++i)
-                    if (auto const h = creature::as_creature(state, g.who[i]); h && creature::type_of(state.world, h) == ::creature::type::cicada)
-                        return true;
-            }
+        bool holds_a_cicada(sys::game_state const& state, dcon::creature_id t) {
+            if (!creature::live(state, t))
+                return false;
+            for (uint32_t i = 0; i < 2; ++i)
+                if (auto const h = creature::grasped(state.world, t, i); h && creature::type_of(state.world, h) == ::creature::type::cicada)
+                    return true;
             return false;
         }
 
@@ -303,8 +297,8 @@ namespace cicada {
         // every tick it is seen: holding a cicada, armed with a spear, caught)
         relationship relationship_to(sys::game_state const& state, dcon::creature_id c, creature::tracked const& r) {
             auto const& w = state.world;
-            if (r.who.is_player()) {
-                auto const p = creature::as_player(state, r.who);
+            if (creature::is_slugcat(w, r.who)) {
+                auto const p = creature::player_of(state, r.who);
                 float num = like_of_player(state, c);
                 if (p && holds_a_cicada(state, r.who))
                     num -= mathf::inverse_lerp(0.9f, 0.1f, num) * 0.7f;
@@ -329,7 +323,7 @@ namespace cicada {
                 return relationship{creature::rel::stay_out_of_way, 0.2f};
             }
             // (caught: Eats 0 for what something carries)
-            if (st.type == creature::rel::eats && creature::held_by_creature(state, r.who, room_of(state, c)))
+            if (st.type == creature::rel::eats && creature::held(state, r.who))
                 return relationship{creature::rel::eats, 0.f};
             return st;
         }
@@ -535,7 +529,7 @@ namespace cicada {
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
-            w.cicada_data_set_focus(creature::cicada_data(w, c), creature::target{});
+            w.cicada_data_set_focus(creature::cicada_data(w, c), dcon::creature_id{});
             if (w.cicada_data_get_no_circle_group_counter(creature::cicada_data(w, c)) > 0)
                 --w.cicada_data_get_no_circle_group_counter(creature::cicada_data(w, c));
             hook_ctx hx{state, c, room};
@@ -545,20 +539,20 @@ namespace cicada {
             auto const& ts = tracker::of(state, c);
             vec2 const main = pos(state, c, 0);
             // the panic after being let go: away from the slugcat
-            if (auto const panic = player_of(state, w.cicada_data_get_panic_flee_player(creature::cicada_data(w, c)))) {
-                vec2 const theirs = w.body_chunk_get_pos(player::body_chunk(state, panic, 0));
+            if (auto const panic = w.cicada_data_get_panic_flee(creature::cicada_data(w, c)); creature::live(state, panic)) {
+                vec2 const theirs = creature::main_pos(state, panic);
                 w.cicada_data_set_swoosh_to_pos(creature::cicada_data(w, c), main - custom::dir_vec(main, theirs) * 100.f);
                 if (!custom::dist_less(main, theirs, 300.f) || w.body_chunk_get_contact_point(chunk(state, c, 0)) != ivec2{0, 0})
-                    w.cicada_data_set_panic_flee_player(creature::cicada_data(w, c), 0);
+                    w.cicada_data_set_panic_flee(creature::cicada_data(w, c), dcon::creature_id{});
                 return;
             }
-            w.cicada_data_set_panic_flee_player(creature::cicada_data(w, c), 0);
+            w.cicada_data_set_panic_flee(creature::cicada_data(w, c), dcon::creature_id{});
 
             // UtilityComparer: threat (weight 1), prey (0.5), rain (1), stuck
             // (1), none smoothed; the prey it antagonizes (what it eats,
             // Hunt, isn't ported)
             auto const* prey_rep = tracker::prey(ts);
-            auto const prey = prey_rep && prey_rep->rel.type == creature::rel::antagonizes ? prey_rep->who : creature::target{};
+            auto const prey = prey_rep && prey_rep->rel.type == creature::rel::antagonizes ? prey_rep->who : dcon::creature_id{};
             float const threat = tracker::threat_utility(ts);
             float const hunt = prey ? tracker::prey_utility(state, c, room, at, tracker_params()) * 0.5f : 0.f;
             float const stuck = stuck_utility(state, c);
@@ -628,9 +622,9 @@ namespace cicada {
                 --counter;
                 if (counter < 1 || pathing::narrow_space(room, spot)) {
                     counter = rng.range(0, rng.range(0, 650));
-                    w.creature_set_forbidden_idle_pos(c, spot);
+                    w.cicada_data_set_forbidden_idle_pos(creature::cicada_data(w, c), spot);
                 }
-                if (spot == w.creature_get_forbidden_idle_pos(c)) {
+                if (spot == w.cicada_data_get_forbidden_idle_pos(creature::cicada_data(w, c))) {
                     ivec2 const t = random_tile(rng, room);
                     if (climbable(state, room, t) && pathing::accessible(room, t, pathing::cicada)
                     && pathing::distance(state, pathing::field_to(state, room.id, dest, pathing::cicada), t) != pathing::unreachable
@@ -717,10 +711,10 @@ namespace cicada {
                     dest = clamp_to_room(room, tracker::best_guess(*prey_rep));
                 }
                 // the slugcat can't grab one that has been pestering it a while
-                if (auto const pp = creature::as_player(state, prey);
+                if (auto const pp = creature::player_of(state, prey);
                     pp && w.creature_get_payload(c).cicada.flying && prey_rep->age > 100 && visual_contact(state, c, room, focus_pos)) {
                     w.creature_get_payload(c).cicada.cant_pick_up_counter = 5;
-                    w.creature_get_payload(c).cicada.cant_pick_up_player = player_ref(pp);
+                    w.creature_get_payload(c).cicada.cant_pick_up_player = uint8_t(pp.index() + 1);
                     return;
                 }
                 break;
@@ -766,7 +760,7 @@ namespace cicada {
             float& stamina = w.creature_get_payload(c).cicada.stamina;
             bool const lifting = w.creature_get_payload(c).cicada.currently_lifting_player != 0;
             w.creature_get_payload(c).cicada.flying = stamina > 0.33333334f ? 1 : 0;
-            w.creature_get_payload(c).cicada.sticky = creature::target{};
+            w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
             if (lifting)
                 stamina -= 1.f / (w.creature_get_payload(c).cicada.gender ? 190.f : 120.f);
             stamina = mathf::clamp(stamina, 0.f, 1.f);
@@ -806,7 +800,7 @@ namespace cicada {
                 vel(state, c, 1).x += float(in[0].x) * stamina * 0.4f;
             }
             w.creature_get_payload(c).cicada.no_sticky_counter = 200;
-            w.cicada_data_set_panic_flee_player(creature::cicada_data(w, c), player_ref(p));
+            w.cicada_data_set_panic_flee(creature::cicada_data(w, c), player::creature_of(state, p));
         }
 
         // Cicada.Act
@@ -885,10 +879,9 @@ namespace cicada {
                     vec2& mp = w.body_chunk_get_pos(main);
                     vec2& spp = w.body_chunk_get_pos(sc);
                     float const rads = w.body_chunk_get_rad(main) + w.body_chunk_get_rad(sc);
-                    bool const entering = sp.is_player() ? w.player_get_entering_shortcut(creature::player_id_of(sp)).has_value()
-                                                        : w.creature_get_entering_shortcut(creature::creature_id_of(sp)).x >= 0;
+                    bool const entering = w.creature_get_entering_shortcut(sp).x >= 0;
                     if (custom::dist_less(mp, spp, rads + 35.f) && !entering && ::cicada::behavior(w.creature_get_behavior(c)) == behavior::antagonize
-                    && spp.y > -20.f && w.creature_get_payload(c).cicada.flying && rng.value() > 0.004761905f && creature::of(holder(state, c)) != sp) {
+                    && spp.y > -20.f && w.creature_get_payload(c).cicada.flying && rng.value() > 0.004761905f && !creature::holds(w, sp, c)) {
                         float const dist = rw::distance(mp, spp);
                         vec2 const a = custom::dir_vec(mp, spp);
                         float const want = rads + 15.f;
@@ -900,17 +893,17 @@ namespace cicada {
                         w.body_chunk_get_vel(sc) += a * (want - dist) * (1.f - ratio) * k;
                         stamina = mathf::clamp(stamina - 0.008333334f, 0.f, 1.f);
                         if (stamina < 0.2f)
-                            w.creature_get_payload(c).cicada.sticky = creature::target{};
+                            w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
                     } else {
                         if (custom::dist_less(mp, spp, rads + 45.f))
                             for (uint32_t m = 0; m < 2; ++m)
                                 vel(state, c, m) += custom::dir_vec(spp, pos(state, c, m)) * 4.f;
-                        w.creature_get_payload(c).cicada.sticky = creature::target{};
+                        w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
                     }
                     if (!w.creature_get_payload(c).cicada.sticky)
                         state.play_sound(sound::sound_id::cicada_tentacles_detatch, room.id, pos(state, c, 0));
                 } else {
-                    w.creature_get_payload(c).cicada.sticky = creature::target{};
+                    w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
                     power = mathf::lerp(power, keep_flying ? 1.f : 0.f, 0.1f);
                 }
             } else {
@@ -1060,7 +1053,7 @@ namespace cicada {
 
         // Cicada.Collide with a creature or slugcat: a bump attack, or
         // clinging to what it antagonizes
-        void collide_with(sys::game_state& state, dcon::creature_id c, room_view const& room, uint32_t i, creature::target p, uint32_t j) {
+        void collide_with(sys::game_state& state, dcon::creature_id c, room_view const& room, uint32_t i, dcon::creature_id p, uint32_t j) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
             hook_ctx hx{state, c, room};
@@ -1073,8 +1066,8 @@ namespace cicada {
                 w.body_chunk_get_vel(pc) += v / w.body_chunk_get_mass(pc);
                 w.creature_get_payload(c).cicada.charge_counter = 0;
                 stun(state, c, 10);
-                creature::stun_target(state, p, 4);
-                state.play_sound(p.is_player() ? sound::sound_id::cicada_bump_attack_hit_player : sound::sound_id::cicada_bump_attack_hit_npc, room_of(state, c), pos(state, c, 0));
+                creature::stun(state, p, 4);
+                state.play_sound(creature::is_slugcat(w, p) ? sound::sound_id::cicada_bump_attack_hit_player : sound::sound_id::cicada_bump_attack_hit_npc, room_of(state, c), pos(state, c, 0));
                 return;
             }
             auto const* prey = tracker::prey(tracker::of(state, c));
@@ -1111,7 +1104,7 @@ namespace cicada {
         auto& rng = w.creature_get_random(c);
         // the slugcat holding it: let go when it can't (it carries it
         // through shortcuts, see follow_player)
-        if (auto const p = holder(state, c); w.creature_get_payload(c).cicada.held_by && (!p || !player_here(state, p, room.id)) && !(p && w.player_get_in_shortcut(p)))
+        if (auto const p = holder(state, c); p && !player_here(state, p, room.id) && !player::in_shortcut(state, p))
             release(state, c);
         // Creature.Update + PhysicalObject.Update
         creature::stun_countdown(state, c);
@@ -1136,7 +1129,7 @@ namespace cicada {
             else
                 act(state, c, room);
         } else {
-            w.creature_get_payload(c).cicada.sticky = creature::target{};
+            w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
             w.creature_get_payload(c).cicada.cant_pick_up_counter = 0;
             w.creature_get_payload(c).cicada.stamina = 0.f;
         }
@@ -1202,7 +1195,7 @@ namespace cicada {
         w.creature_get_payload(c).cicada.flying_power = 0.f;
         w.creature_get_payload(c).cicada.charge_counter = 0;
         w.creature_get_payload(c).cicada.charge_dir = vec2{0.f, 0.f};
-        w.creature_get_payload(c).cicada.sticky = creature::target{};
+        w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
         w.creature_get_payload(c).cicada.sticky_chunk = 0;
         w.creature_get_payload(c).cicada.no_sticky_counter = 0;
         w.creature_get_payload(c).cicada.cant_pick_up_counter = 0;
@@ -1212,8 +1205,6 @@ namespace cicada {
         w.creature_get_payload(c).cicada.struggle_against_player = 0.f;
         w.creature_get_payload(c).cicada.currently_lifting_player = 0;
         w.creature_get_payload(c).cicada.player_jump_boost = 0.f;
-        w.creature_get_payload(c).cicada.held_by = 0;
-        w.creature_get_payload(c).cicada.held_chunk = 0;
         w.cicada_data_set_temp_like(creature::cicada_data(w, c), 0.f);
         w.creature_set_behavior(c, uint8_t(behavior::idle));
         w.creature_set_current_utility(c, 0.f);
@@ -1225,8 +1216,8 @@ namespace cicada {
         w.cicada_data_set_swoosh_to_pos(creature::cicada_data(w, c), std::nullopt);
         w.cicada_data_set_antagonize_method(creature::cicada_data(w, c), 0);
         w.cicada_data_set_antagonize_method_counter(creature::cicada_data(w, c), 0);
-        w.cicada_data_set_panic_flee_player(creature::cicada_data(w, c), 0);
-        w.cicada_data_set_focus(creature::cicada_data(w, c), creature::target{});
+        w.cicada_data_set_panic_flee(creature::cicada_data(w, c), dcon::creature_id{});
+        w.cicada_data_set_focus(creature::cicada_data(w, c), dcon::creature_id{});
         tracker::clear(state, c);
         stuck_tracker st;
         st.unstuck_goal = room_view::get_tile_position(at);
@@ -1236,7 +1227,7 @@ namespace cicada {
         auto& r = w.creature_get_random(c);
         ivec2 const spot = random_tile(r, view);
         w.cicada_data_set_idle_sit_spot(creature::cicada_data(w, c), spot);
-        w.creature_set_forbidden_idle_pos(c, ivec2{-1, -1});
+        w.cicada_data_set_forbidden_idle_pos(creature::cicada_data(w, c), ivec2{-1, -1});
         w.creature_set_destination(c, room_view::get_tile_position(at));
         cicada_graphics::reset(state, c);
         return c;
@@ -1248,12 +1239,12 @@ namespace cicada {
         creature::erase(state, c);
     }
 
-    bool collides(sys::game_state const& state, dcon::creature_id c, creature::target t) {
+    bool collides(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) {
         // what holds it is kept apart by the carry
-        return creature::of(holder(state, c)) != t;
+        return !creature::holds(state.world, t, c);
     }
 
-    void collide(sys::game_state& state, dcon::creature_id c, room_view const& room, uint32_t i, creature::target t, uint32_t j) {
+    void collide(sys::game_state& state, dcon::creature_id c, room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j) {
         if (consious(state, c))
             collide_with(state, c, room, i, t, j);
     }
@@ -1282,20 +1273,10 @@ namespace cicada {
     }
 
     dcon::creature_id held_by(sys::game_state const& state, dcon::player_id p) noexcept {
-        dcon::creature_id found;
         if (!p)
-            return found;
-        auto const look = [&](dcon::creature_id c) {
-            if (state.world.creature_get_payload(c).cicada.held_by == p.index() + 1)
-                found = c;
-        };
-        // in the slugcat's room while the rooms update; anywhere otherwise
-        // (a pipe moves the slugcat first, then what it carries)
-        if (state.index.valid)
-            rooms::for_each_creature(state, rooms::room_of(state, p), ::creature::type::cicada, look);
-        else
-            creature::for_each_of(state.world, creature::type::cicada, look);
-        return found;
+            return dcon::creature_id{};
+        auto const c = creature::grasped(state.world, player::creature_of(state, p), 0);
+        return c && creature::type_of(state.world, c) == ::creature::type::cicada ? c : dcon::creature_id{};
     }
 
     float lift_player_power(sys::game_state const& state, dcon::creature_id c) noexcept {
@@ -1314,7 +1295,7 @@ namespace cicada {
         dcon::creature_id result;
         score = float_max;
         rooms::for_each_creature(state, room.id, ::creature::type::cicada, [&](dcon::creature_id c) {
-            if (w.creature_get_payload(c).cicada.held_by)
+            if (creature::held(state, c))
                 return;
             // Player.Grabability: not while it charges, nor while it is
             // keeping its distance from this slugcat
@@ -1341,35 +1322,31 @@ namespace cicada {
     void grab(sys::game_state& state, dcon::player_id p, dcon::creature_id c) {
         auto& w = state.world;
         // SlugcatGrab: chunk 0 (TwoHands isn't dragged by its closest chunk)
-        w.creature_get_payload(c).cicada.held_by = player_ref(p);
-        w.creature_get_payload(c).cicada.held_chunk = 0;
-        ++w.physical_object_get_grabbed_by_count(body(state, c));
-        w.creature_get_payload(c).cicada.sticky = creature::target{};
+        creature::grab(state, player::creature_of(state, p), 0, c, 0);
+        w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
         remove_from_circle(state, c);
     }
 
     void release(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        if (!w.creature_get_payload(c).cicada.held_by)
+        uint32_t g = 0;
+        auto const h = creature::holder(state, c, &g);
+        if (!h || !creature::is_slugcat(w, h))
             return;
-        uint8_t& n = w.physical_object_get_grabbed_by_count(body(state, c));
-        if (n > 0)
-            --n;
-        w.creature_get_payload(c).cicada.held_by = 0;
+        creature::release_grasp(state, h, g);
         w.creature_get_payload(c).cicada.currently_lifting_player = 0;
     }
 
-    void release(sys::game_state& state, dcon::creature_id c, creature::target p) {
+    void release(sys::game_state& state, dcon::creature_id c, dcon::creature_id p) {
         auto& w = state.world;
-        if (p.is_player() && w.creature_get_payload(c).cicada.held_by == creature::player_id_of(p).index() + 1)
-            release(state, c);
         if (w.creature_get_payload(c).cicada.sticky == p)
-            w.creature_get_payload(c).cicada.sticky = creature::target{};
+            w.creature_get_payload(c).cicada.sticky = dcon::creature_id{};
     }
 
     void release_player(sys::game_state& state, dcon::player_id p) {
-        // whatever holds the slugcat or clings to it is in its room
-        rooms::for_each_creature(state, rooms::room_of(state, p), creature::type::cicada, [&](dcon::creature_id c) { ::cicada::release(state, c, creature::of(p)); });
+        // the one it carries
+        if (auto const c = held_by(state, p))
+            release(state, c);
     }
 
     void carry_update(sys::game_state& state, dcon::player_id p) {
@@ -1378,7 +1355,7 @@ namespace cicada {
         if (!c)
             return;
         auto const main = player::body_chunk(state, p, 0);
-        auto const gc = chunk(state, c, w.creature_get_payload(c).cicada.held_chunk);
+        auto const gc = chunk(state, c, creature::grasp_chunk(w, player::creature_of(state, p), 0));
         vec2& mp = w.body_chunk_get_pos(main);
         vec2& gp = w.body_chunk_get_pos(gc);
         vec2 const a = custom::dir_vec(mp, gp);
@@ -1386,7 +1363,7 @@ namespace cicada {
         // a cicada hangs 30 above the hands
         constexpr float want = 30.f;
         float ratio = w.body_chunk_get_mass(gc) / (w.body_chunk_get_mass(main) + w.body_chunk_get_mass(gc));
-        bool const entering = w.player_get_entering_shortcut(p).has_value();
+        bool const entering = w.creature_get_entering_shortcut(player::creature_of(state, p)).x >= 0;
         if (entering)
             ratio = 0.f;
         else if (object_mass(state, body(state, c)) < object_mass(state, player::body(state, p)))

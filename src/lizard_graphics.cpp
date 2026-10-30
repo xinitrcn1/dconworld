@@ -510,7 +510,7 @@ namespace lizard_graphics {
         g.every_second_draw = false;
     }
 
-    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, creature::target t) {
+    void creature_spotted(sys::game_state& state, dcon::creature_id l, bool first_spot, dcon::creature_id t) {
         auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
         if (head_lights_up_from_noise(lizard::breed_of(state, l)))
             g.black_lizard_light_up_head = mathf::min(g.black_lizard_light_up_head + 0.5f, 1.f);
@@ -744,12 +744,12 @@ namespace lizard_graphics {
         } else if (g.look_counter < 1 && rng.value() < 1.f / float(p.frames_between_look_focus_change)) {
             g.look_counter = p.frames_between_look_focus_change;
             if (rng.value() > 0.3f) {
-                g.look_creature = creature::target{};
+                g.look_creature = dcon::creature_id{};
                 if (ts.count > 0)
                     if (auto const t = ts.reps[rng.range(0, ts.count)].who; t != lizard::grasped(state, l))
                         g.look_creature = t;
             } else {
-                g.look_creature = creature::target{};
+                g.look_creature = dcon::creature_id{};
                 // LookAtNothing
                 float const look_angle = rng.value() * 360.f;
                 g.look_pos = g.draw_positions[0][0] + custom::dir_vec(g.draw_positions[1][0], g.draw_positions[0][0]) * 100.f
@@ -761,7 +761,7 @@ namespace lizard_graphics {
                 g.look_creature = t;
         auto const* look = g.look_creature ? tracker::find(ts, g.look_creature) : nullptr;
         if (!look)
-            g.look_creature = creature::target{};
+            g.look_creature = dcon::creature_id{};
         if (look) {
             vec2 const target = look->visual && creature::here(state, look->who, room.id) ? creature::main_pos(state, look->who) : look->last_seen;
             g.look_pos = custom::move_towards(g.look_pos, target, mathf::lerp(100.f, 20.f, p.neck_stiffness));

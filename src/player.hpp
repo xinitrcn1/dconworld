@@ -6,8 +6,12 @@
 // and Rivulet's movement branches. No Remix (MMF) or other Downpour/Watcher
 // abilities. Shortcuts and items hook in from shortcuts.* and items.*.
 //
-// Players are `player` objects in the data container (one per co-op slot),
-// each controlling a physical_object body through the player_body relation.
+// A slugcat is a creature (creature.hpp, type slugcat): its body, stun,
+// death, grasps, pipes and rain are the creature's like any kind's. What
+// only the slugcat has (Player.cs' movement state, PlayerGraphics, the
+// abilities, food) and its controller's input is its `player` object,
+// which its creature's payload points at (like a kind's data object) and
+// which points back at its creature.
 
 #include <cstdint>
 
@@ -36,6 +40,15 @@ namespace player {
     void update(sys::game_state& state, dcon::player_id p, world::room_view const& room, input_package const& in);
     void stun(sys::game_state& state, dcon::player_id p, int32_t st);
     void die(sys::game_state& state, dcon::player_id p);
+    // Player.Violence (through Creature.Violence) on chunk `k`
+    void violence(sys::game_state& state, dcon::player_id p, uint32_t k, rw::vec2 momentum, float damage, float stun_bonus);
+
+    // the slugcat creature it drives
+    inline dcon::creature_id creature_of(sys::game_state const& state, dcon::player_id p) noexcept { return state.world.player_get_creature(p); }
+    inline bool dead(sys::game_state const& state, dcon::player_id p) noexcept { return state.world.creature_get_dead(creature_of(state, p)) != 0; }
+    inline int32_t stun_of(sys::game_state const& state, dcon::player_id p) noexcept { return state.world.creature_get_stun(creature_of(state, p)); }
+    // travelling a pipe (its vessel; the body stays in the room it left)
+    inline bool in_shortcut(sys::game_state const& state, dcon::player_id p) noexcept { return state.world.creature_get_away(creature_of(state, p)) != 0; }
 
     dcon::physical_object_id body(sys::game_state const& state, dcon::player_id p) noexcept;
     // bodyChunks[i] of the player's body

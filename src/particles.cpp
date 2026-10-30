@@ -225,7 +225,7 @@ namespace particles {
         // Bubble: what a submerged slugcat breathes out (more when running out of air)
         if (room.water) {
             rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p) || w.player_get_eaten(p))
+                if (player::in_shortcut(state, p) || w.player_get_eaten(p))
                     return;
                 vec2 const head = w.body_chunk_get_pos(player::body_chunk(state, p, 0));
                 if (!room.point_submerged(head + vec2{0.f, 8.f}))

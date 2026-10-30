@@ -546,27 +546,18 @@ namespace rain {
                 }
                 vel += custom::deg_to_vec(mathf::lerp(90.f, 270.f, rng.value())) * rng.value() * 5.f * inside;
             };
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (w.player_get_in_shortcut(p) || w.player_get_eaten(p))
-                    return;
-                for (uint32_t i = 0; i < 2; ++i)
-                    throw_chunk(player::body_chunk(state, p, i), 2, i == 0, [&](int32_t st) { player::stun(state, p, st); },
-                        [&]() -> float& { return w.player_get_rain_death(p); },
-                        [&]() {
-                            if (!w.player_get_dead(p)) {
-                                player::die(state, p);
-                                ++stats().players_killed;
-                            }
-                        });
-            });
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id cr) {
+                auto const p = creature::player_of(state, cr);
+                // (a slugcat in a pipe or eaten is out of the rain)
+                if (p && (w.creature_get_away(cr) != 0 || w.player_get_eaten(p)))
+                    return;
                 uint32_t const n = creature::chunk_count(state, cr);
                 uint32_t const m = creature::main_chunk(state, cr);
                 for (uint32_t i = 0; i < n; ++i)
                     throw_chunk(creature::chunk(state, cr, i), n, i == m, [&](int32_t st) { creature::stun(state, cr, st); },
                         [&]() -> float& { return w.creature_get_rain_death(cr); }, [&]() {
                             if (!w.creature_get_dead(cr))
-                                ++stats().creatures_killed;
+                                ++(p ? stats().players_killed : stats().creatures_killed);
                             creature::die(state, cr);
                         });
             });
@@ -581,14 +572,11 @@ namespace rain {
             });
         }
         // Creature.Update's rainDeath recovery and Player.LungUpdate's cap
-        rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-            float& d = w.player_get_rain_death(p);
-            d = mathf::clamp(d - 0.0125f, 0.f, 1.f);
-            w.player_get_air_in_lungs(p) = mathf::min(w.player_get_air_in_lungs(p), 1.f - d);
-        });
         rooms::for_each_creature(state, room.id, [&](dcon::creature_id cr) {
             float& d = w.creature_get_rain_death(cr);
             d = mathf::clamp(d - 0.0125f, 0.f, 1.f);
+            if (auto const p = creature::player_of(state, cr))
+                w.player_get_air_in_lungs(p) = mathf::min(w.player_get_air_in_lungs(p), 1.f - d);
         });
 
         // the flood: the water rises over the room's own level (a room

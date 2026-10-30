@@ -163,7 +163,7 @@ namespace lizard::ai {
         }
 
         // the representation of what it hunts, fights or flees, if any
-        creature::tracked const* rep_of(sys::game_state const& state, dcon::creature_id l, creature::target t) {
+        creature::tracked const* rep_of(sys::game_state const& state, dcon::creature_id l, dcon::creature_id t) {
             return t ? tracker::find(state, l, t) : nullptr;
         }
         creature::tracked const* prey_rep(sys::game_state const& state, dcon::creature_id l) {
@@ -178,7 +178,7 @@ namespace lizard::ai {
         void super_hearing(sys::game_state& state, dcon::creature_id l, room_view const& room, tracker::hooks const& h) {
             auto& w = state.world;
             vec2 const head = chunk_pos(state, l, 0);
-            auto const hear = [&](creature::target t) {
+            auto const hear = [&](dcon::creature_id t) {
                 uint32_t const n = creature::chunk_count_of(state, t);
                 for (uint32_t i = 0; i < n; ++i) {
                     auto const c = creature::chunk_of(state, t, i);
@@ -191,13 +191,9 @@ namespace lizard::ai {
                     }
                 }
             };
-            rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
-                if (creature::here(state, creature::of(p), room.id))
-                    hear(creature::of(p));
-            });
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id o) {
-                if (o != l && creature::here(state, creature::of(o), room.id))
-                    hear(creature::of(o));
+                if (o != l && creature::here(state, o, room.id))
+                    hear(o);
             });
         }
 
@@ -522,7 +518,7 @@ namespace lizard::ai {
             auto const& p = params_of(state, l);
             if (!room.inside(t.x, t.y))
                 return 50.f;
-            if (!pathing::accessible(room, t, p.movement) || !reachable_and_getbackable(state, l, room, t) || t == state.world.creature_get_forbidden_idle_pos(l))
+            if (!pathing::accessible(room, t, p.movement) || !reachable_and_getbackable(state, l, room, t) || t == state.world.lizard_data_get_forbidden_idle_pos(creature::lizard_data(state.world, l)))
                 return float_max;
             float num = 10.f;
             bool const narrow = pathing::narrow_space(room, t);
@@ -590,7 +586,7 @@ namespace lizard::ai {
             auto& rng = w.creature_get_random(l);
             auto const& par = params_of(state, l);
             auto const p = target.who;
-            a.casual_aggression = creature::target{};
+            a.casual_aggression = dcon::creature_id{};
             state.world.creature_get_destination(l) = tracker::best_guess(target);
             vec2 const head = chunk_pos(state, l, 0);
             bool const seen = target.visual && creature::here(state, p, room.id);
@@ -740,7 +736,7 @@ namespace lizard::ai {
                 return;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto& rng = w.creature_get_random(l);
-            a.focus = creature::of(other);
+            a.focus = other;
             auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
             // (graphicsModule != null: rolled either way)
             float const r = rng.value();
@@ -761,11 +757,11 @@ namespace lizard::ai {
                 return;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto& rng = w.creature_get_random(l);
-            auto const ot = creature::of(other);
+            auto const ot = other;
             a.focus = ot;
             if (signal == communication::aggression) {
                 auto const& oa = w.lizard_data_get_ai(creature::lizard_data(w, other));
-                if (oa.submitted_to == creature::of(l))
+                if (oa.submitted_to == l)
                     return;
                 if (a.submitted_to != ot)
                     tracker::increment_anger(state, l, ot, 0.1f);
@@ -790,14 +786,14 @@ namespace lizard::ai {
         }
     }
 
-    creature::target tracked(sys::game_state const& state, dcon::creature_id l) noexcept {
+    dcon::creature_id tracked(sys::game_state const& state, dcon::creature_id l) noexcept {
         auto const* r = prey_rep(state, l);
-        return r ? r->who : creature::target{};
+        return r ? r->who : dcon::creature_id{};
     }
 
-    creature::target focus(sys::game_state const& state, dcon::creature_id l) noexcept {
+    dcon::creature_id focus(sys::game_state const& state, dcon::creature_id l) noexcept {
         auto const t = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).focus;
-        return t && tracker::find(state, l, t) ? t : creature::target{};
+        return t && tracker::find(state, l, t) ? t : dcon::creature_id{};
     }
 
     pathing::field_id field(sys::game_state& state, dcon::creature_id l, room_view const& room) {
@@ -850,7 +846,7 @@ namespace lizard::ai {
         return room.get_tile(f).water != 0 || f.y < 0 || f.y < tile.y - 20 || (f.y < tile.y - 10 && !reachable_and_getbackable(state, l, room, f));
     }
 
-    bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, room_view const& room, creature::target p, uint32_t k) {
+    bool want_to_hold_with_tongue(sys::game_state& state, dcon::creature_id l, room_view const& room, dcon::creature_id p, uint32_t k) {
         if (!creature::here(state, p, room.id))
             return false;
         auto const c = creature::chunk_of(state, p, k);
@@ -859,11 +855,11 @@ namespace lizard::ai {
             && tracker::dynamic_relationship(state, l, p).go_for_kill();
     }
 
-    relationship relationship_to(sys::game_state const& state, dcon::creature_id l, creature::target t) {
+    relationship relationship_to(sys::game_state const& state, dcon::creature_id l, dcon::creature_id t) {
         // UpdateDynamicRelationship: the slugcat by how much it is liked
         // (spears and vulture masks the slugcat carries: masks don't exist
         // here), the rest by the static relationship (no friends)
-        if (t.is_player()) {
+        if (creature::is_slugcat(state.world, t)) {
             float const num = like_of_player(state, l);
             if (num < 0.5f)
                 return relationship{creature::rel::eats, mathf::pow(mathf::inverse_lerp(0.5f, -1.f, num), params_of(state, l).aggression_curve_exponent)};
@@ -872,7 +868,7 @@ namespace lizard::ai {
         return creature::static_relationship(state, l, t);
     }
 
-    void see(sys::game_state& state, dcon::creature_id l, creature::target t) {
+    void see(sys::game_state& state, dcon::creature_id l, dcon::creature_id t) {
         auto const room = world::get_room_view(state, room_of(state, l));
         ai_ctx x{state, l, room};
         tracker::see(state, l, room, t, make_hooks(x));
@@ -926,7 +922,7 @@ namespace lizard::ai {
             s.general_aim_up = mathf::clamp(s.general_aim_up - 0.3f * mathf::inverse_lerp(0.f, 0.5f, s.general_aim_up) * state.world.creature_get_random(l).value(), 0.f, am);
     }
 
-    void collided(sys::game_state& state, dcon::creature_id l, creature::target t) {
+    void collided(sys::game_state& state, dcon::creature_id l, dcon::creature_id t) {
         // Lizard.Collide: seen, and a rival it hasn't submitted to angers it
         see(state, l, t);
         auto& a = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l));
@@ -1028,7 +1024,7 @@ namespace lizard::ai {
             a.focus = ts.aggression;
             if (auto const* f = tracker::aggression(ts)) {
                 vec2 const head = chunk_pos(state, l, 0);
-                auto const other = creature::as_creature(state, f->who);
+                auto const other = creature::live(state, f->who) ? f->who : dcon::creature_id{};
                 bool const lizard = other && creature::type_of(w, other) == ::creature::type::lizard;
                 vec2 const fp = creature::main_pos(state, f->who);
                 if (f->visual && creature::here(state, f->who, room.id) && custom::dist_less(head, fp, 160.f)
@@ -1088,7 +1084,7 @@ namespace lizard::ai {
                 a.idle_counter = 0;
             if (a.idle_counter < 1) {
                 if (before > 0)
-                    state.world.creature_get_forbidden_idle_pos(l) = state.world.creature_get_destination(l);
+                    state.world.lizard_data_get_forbidden_idle_pos(creature::lizard_data(state.world, l)) = state.world.creature_get_destination(l);
                 ivec2 const t{rng.range(0, room.width), rng.range(0, room.height)};
                 if (idle_spot_score(state, l, room, t) < idle_spot_score(state, l, room, state.world.creature_get_destination(l))) {
                     state.world.creature_get_destination(l) = t;
@@ -1099,14 +1095,14 @@ namespace lizard::ai {
                 }
             }
             if (restless) {
-                if (state.world.creature_get_forbidden_idle_pos(l) != state.world.creature_get_destination(l))
+                if (state.world.lizard_data_get_forbidden_idle_pos(creature::lizard_data(state.world, l)) != state.world.creature_get_destination(l))
                     a.run_speed = mathf::lerp(a.run_speed, 0.25f, 0.5f);
             } else {
                 a.run_speed = mathf::lerp(a.run_speed, 0.f, 0.5f);
             }
             if (rng.value() < 0.00125f)
                 make_sound(state, l, emotion::boredom);
-            a.focus = creature::target{};
+            a.focus = dcon::creature_id{};
             break;
         }
         case behavior::return_prey:
@@ -1129,7 +1125,7 @@ namespace lizard::ai {
                 make_sound(state, l, emotion::pain_idle, 1.f - w.creature_get_health(l));
             break;
         case behavior::frustrated:
-            a.focus = prey ? prey->who : creature::target{};
+            a.focus = prey ? prey->who : dcon::creature_id{};
             a.run_speed = mathf::lerp(a.run_speed, 1.f, 0.5f);
             if (rng.value() < 0.1f || custom::manhattan_distance(at, state.world.creature_get_destination(l)) < 10) {
                 ivec2 const t{rng.range(0, room.width), rng.range(0, room.height)};

@@ -4,18 +4,20 @@
 //
 // A creature is one `creature` object (creature_types.hpp, the definitions'
 // comments in dcon_generated.txt) whose `type` says which kind's code runs
-// it: centipede.*, dropbug.*, cicada.*, lizard.*, daddy.*, leech.*. Whatever doesn't
-// depend on the kind is here and runs the same for all of them: the body
-// and its chunks, Creature.Update's stun countdown, being conscious, the
-// slugcat references, the projectile trace and Violence's dispatch, letting
-// go of a slugcat, the room transfer, destroying. The kinds' own code is
-// called through the few `switch (type)`s of creature.cpp.
+// it: player.* (the slugcat), centipede.*, dropbug.*, cicada.*, lizard.*,
+// daddy.*, leech.*. Whatever doesn't depend on the kind is here and runs the
+// same for all of them: the body and its chunks, Creature.Update's stun
+// countdown, being conscious, grasps, the other creatures it refers to (by
+// id: a tracked prey, a grasp, a bite), the projectile trace and Violence's
+// dispatch, letting go, the room transfer, destroying. The kinds' own code
+// is called through the few `switch (type)`s of creature.cpp.
 //
 // Adding a kind: a payload struct (at most 64 bytes) in creature_types.hpp
 // and its entry in `type`, optionally a data object in dcon_generated.txt
 // (and its accessor below), and a case in each switch of creature.cpp (and
 // render.cpp's sprites).
 
+#include <atomic>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -90,9 +92,9 @@ namespace creature {
     dcon::body_chunk_id chunk(sys::game_state const& state, dcon::creature_id c, uint32_t i) noexcept;
     dcon::room_id room_of(sys::game_state const& state, dcon::creature_id c) noexcept;
     float total_mass(sys::game_state const& state, dcon::creature_id c) noexcept;
-    // Creature.Consious
+    // Creature.Consious (false for one out of reach)
     inline bool consious(sys::game_state const& state, dcon::creature_id c) noexcept {
-        return state.world.creature_get_stun(c) <= 0 && !state.world.creature_get_dead(c);
+        return rooms::reachable(state, c) && state.world.creature_get_stun(c) <= 0 && !state.world.creature_get_dead(c);
     }
     // Creature.Update's stun countdown
     inline void stun_countdown(sys::game_state& state, dcon::creature_id c) noexcept {
@@ -103,51 +105,49 @@ namespace creature {
     // Creature.mainBodyChunk's index (the centipede's head end)
     uint32_t main_chunk(sys::game_state const& state, dcon::creature_id c) noexcept;
 
-    // a slugcat a creature keeps as its index + 1: the player if it still
-    // exists and the room's update may look at it (rooms::reachable)
-    dcon::player_id player_of(sys::game_state const& state, uint8_t v) noexcept;
-    inline uint8_t player_ref(dcon::player_id p) noexcept { return p ? uint8_t(p.index() + 1) : 0; }
-
     //
-    // Targets: a creature or a slugcat (creature_types.hpp's target)
+    // Other creatures: what one creature looks at of another (the slugcats
+    // included: a slugcat is a creature of type slugcat)
     //
-    inline target of(dcon::player_id p) noexcept { return p ? target{uint16_t(target::player_flag | p.index())} : target{}; }
-    inline target of(dcon::creature_id c) noexcept { return c ? target{uint16_t(c.index() + 1)} : target{}; }
-    // the ids a target names, whether or not they still exist
-    inline dcon::player_id player_id_of(target t) noexcept {
-        return t.is_player() ? dcon::player_id{dcon::player_id::value_base_t(t.v & ~target::player_flag)} : dcon::player_id{};
+    // whether `c` exists and the room's update may look at it
+    // (rooms::reachable: in the room updating on this thread, or in its
+    // pipes and dens); what follows answers for live ones only
+    inline bool live(sys::game_state const& state, dcon::creature_id c) noexcept {
+        return c && state.world.creature_is_valid(c) && rooms::reachable(state, c);
     }
-    inline dcon::creature_id creature_id_of(target t) noexcept {
-        return t.is_creature() ? dcon::creature_id{dcon::creature_id::value_base_t(t.v - 1)} : dcon::creature_id{};
+    // the slugcat's Player.cs state (its `player`), none for any other kind
+    // or a creature out of reach
+    dcon::player_id player_of(sys::game_state const& state, dcon::creature_id c) noexcept;
+    inline bool is_slugcat(dcon::data_container const& w, dcon::creature_id c) noexcept { return w.creature_get_type(c) == type::slugcat; }
+    // the creature whose body `o` is (none for an item's)
+    inline dcon::creature_id of_body(dcon::data_container const& w, dcon::physical_object_id o) noexcept {
+        return o ? w.physical_object_get_creature_from_creature_body(o) : dcon::creature_id{};
     }
-    // the slugcat or creature `t` names if it exists and the room's update
-    // may look at it (rooms::reachable: in the room updating on this thread)
-    dcon::player_id as_player(sys::game_state const& state, target t) noexcept;
-    dcon::creature_id as_creature(sys::game_state const& state, target t) noexcept;
-    inline bool live(sys::game_state const& state, target t) noexcept { return as_player(state, t) || as_creature(state, t); }
-    // its body, chunks, mass (reachable targets only: none otherwise)
-    dcon::physical_object_id body_of(sys::game_state const& state, target t) noexcept;
-    uint32_t chunk_count_of(sys::game_state const& state, target t) noexcept;
-    dcon::body_chunk_id chunk_of(sys::game_state const& state, target t, uint32_t i) noexcept;
+    // its body, chunks, mass (none for one out of reach)
+    dcon::physical_object_id body_of(sys::game_state const& state, dcon::creature_id c) noexcept;
+    uint32_t chunk_count_of(sys::game_state const& state, dcon::creature_id c) noexcept;
+    dcon::body_chunk_id chunk_of(sys::game_state const& state, dcon::creature_id c, uint32_t i) noexcept;
     // Creature.mainBodyChunk (a slugcat's chunk 0)
-    uint32_t main_chunk_of(sys::game_state const& state, target t) noexcept;
-    rw::vec2 main_pos(sys::game_state const& state, target t) noexcept;
-    float mass_of(sys::game_state const& state, target t) noexcept;
-    bool dead(sys::game_state const& state, target t) noexcept;
-    bool consious(sys::game_state const& state, target t) noexcept;
-    // out in `room` (not in a pipe, a den or another room): what can be
-    // seen, touched, bitten
-    bool here(sys::game_state const& state, target t, dcon::room_id room) noexcept;
+    inline uint32_t main_chunk_of(sys::game_state const& state, dcon::creature_id c) noexcept { return live(state, c) ? main_chunk(state, c) : 0; }
+    rw::vec2 main_pos(sys::game_state const& state, dcon::creature_id c) noexcept;
+    float mass_of(sys::game_state const& state, dcon::creature_id c) noexcept;
+    // a slugcat eaten (by a den, the rot, a long legs): dead and gone
+    // (a creature eaten is destroyed)
+    bool eaten(sys::game_state const& state, dcon::creature_id c) noexcept;
+    // dead, or gone out of reach
+    inline bool dead(sys::game_state const& state, dcon::creature_id c) noexcept { return !live(state, c) || state.world.creature_get_dead(c) != 0; }
+    // out in `room` (not in a pipe, a den or another room, nor an eaten
+    // slugcat): what can be seen, touched, bitten
+    bool here(sys::game_state const& state, dcon::creature_id c, dcon::room_id room) noexcept;
 
     //
     // Relationships (relationships.cpp): CreatureTemplate.relationships
     //
     tmpl template_of(sys::game_state const& state, dcon::creature_id c) noexcept;
-    tmpl template_of(sys::game_state const& state, target t) noexcept;
     char const* to_string(tmpl t) noexcept;
     // CreatureTemplate.CreatureRelationship: `a`'s towards `b`
     relationship static_relationship(tmpl a, tmpl b) noexcept;
-    inline relationship static_relationship(sys::game_state const& state, dcon::creature_id c, target t) noexcept {
+    inline relationship static_relationship(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) noexcept {
         return static_relationship(template_of(state, c), template_of(state, t));
     }
     // CreatureTemplate.bodySize, smallCreature
@@ -157,39 +157,71 @@ namespace creature {
     float attraction_value(attraction a) noexcept;
 
     //
-    // Grasps (Creature.grasps): what `c` holds, by grasp
+    // Grasps (Creature.grasps): what `c` holds, by grasp: a creature, or (a
+    // slugcat's hands) an item
     //
-    inline target grasped(dcon::data_container const& w, dcon::creature_id c, uint32_t i = 0) noexcept { return w.creature_get_grasps(c).who[i]; }
+    inline dcon::physical_object_id grasped_object(dcon::data_container const& w, dcon::creature_id c, uint32_t i = 0) noexcept {
+        return w.creature_get_grasps(c).obj[i];
+    }
+    inline dcon::creature_id grasped(dcon::data_container const& w, dcon::creature_id c, uint32_t i = 0) noexcept {
+        return of_body(w, grasped_object(w, c, i));
+    }
+    inline dcon::item_id grasped_item(dcon::data_container const& w, dcon::creature_id c, uint32_t i = 0) noexcept {
+        auto const o = grasped_object(w, c, i);
+        return o ? w.physical_object_get_item_from_item_body(o) : dcon::item_id{};
+    }
     inline uint8_t grasp_chunk(dcon::data_container const& w, dcon::creature_id c, uint32_t i = 0) noexcept { return w.creature_get_grasps(c).chunk[i]; }
+    // the grasp holding `t` (-1 none)
+    inline int32_t grasp_on(dcon::data_container const& w, dcon::creature_id c, dcon::creature_id t) noexcept {
+        auto const o = w.creature_get_body_from_creature_body(t);
+        auto const& g = w.creature_get_grasps(c);
+        return !o ? -1 : g.obj[0] == o ? 0 : g.obj[1] == o ? 1 : -1;
+    }
+    inline bool holds(dcon::data_container const& w, dcon::creature_id c, dcon::creature_id t) noexcept { return grasp_on(w, c, t) >= 0; }
     // Creature.Grab: `c`'s grasp `i` on `t`'s chunk (grabbedBy counted on the body)
-    void grab(sys::game_state& state, dcon::creature_id c, uint32_t i, target t, uint32_t chunk);
+    void grab(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id t, uint32_t chunk);
+    // ...on an item (a slugcat's hand)
+    void grab_item(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::item_id it);
     // Creature.ReleaseGrasp
     void release_grasp(sys::game_state& state, dcon::creature_id c, uint32_t i);
-    // whether a creature of the room holds `t` (grabbedBy.Count > 0 for creatures)
-    bool held_by_creature(sys::game_state const& state, target t, dcon::room_id room) noexcept;
+    // something holds `t` (grabbedBy.Count > 0)
+    inline bool held(sys::game_state const& state, dcon::creature_id t) noexcept {
+        auto const o = state.world.creature_get_body_from_creature_body(t);
+        return o && state.world.physical_object_get_grabbed_by_count(o) > 0;
+    }
     // every creature of `room` holding `t`, with the grasp
     template<typename F>
-    void for_each_holder(sys::game_state const& state, dcon::room_id room, target t, F&& f) {
-        rooms::for_each_creature(state, room, [&](dcon::creature_id o) {
-            auto const& g = state.world.creature_get_grasps(o);
+    void for_each_holder(sys::game_state const& state, dcon::room_id room, dcon::creature_id t, F&& f) {
+        auto const o = state.world.creature_get_body_from_creature_body(t);
+        if (!o || state.world.physical_object_get_grabbed_by_count(o) == 0)
+            return;
+        rooms::for_each_creature(state, room, [&](dcon::creature_id h) {
+            auto const& g = state.world.creature_get_grasps(h);
             for (uint32_t i = 0; i < 2; ++i)
-                if (g.who[i] == t)
-                    f(o, i);
+                if (g.obj[i] == o)
+                    f(h, i);
         });
     }
+    // the first creature of its room holding `t` (grabbedBy[0]), and by which grasp
+    dcon::creature_id holder(sys::game_state const& state, dcon::creature_id t, uint32_t* grasp = nullptr) noexcept;
 
     //
-    // Fights: one creature hurting another or a slugcat
+    // Fights: one creature hurting another (a slugcat included)
     //
-    // Creature.Violence on the target's chunk `k` (Player.Violence for a
-    // slugcat: a stun, death from a full point of damage, letting go of what
-    // it holds when stunned hard), by a creature of template `source`
-    void violence_on(sys::game_state& state, target t, uint32_t k, rw::vec2 momentum, float damage, float stun_bonus, damage_type type, tmpl source);
-    // Creature.Stun / Die of the target, by `source`
-    void stun_target(sys::game_state& state, target t, int32_t st);
-    void kill(sys::game_state& state, target t, tmpl source);
+    // Creature.Violence on `t`'s chunk `k` (Player.Violence for a slugcat: a
+    // stun, death from a full point of damage, letting go of what it holds
+    // when stunned hard), by a creature of template `source`
+    void violence_on(sys::game_state& state, dcon::creature_id t, uint32_t k, rw::vec2 momentum, float damage, float stun_bonus, damage_type type, tmpl source);
+    // Creature.Die of `t`, by `source`
+    void kill(sys::game_state& state, dcon::creature_id t, tmpl source);
     // a creature died of something that wasn't a creature (fuzz statistics)
     inline constexpr uint8_t killed_by_other = 0xFF;
+    // the kills since start, by killer and victim (the fuzz's; never read
+    // by the simulation)
+    struct kill_counts {
+        std::atomic<uint32_t> n[tmpl_count][tmpl_count] = {};
+    };
+    kill_counts& kills() noexcept;
 
     //
     // The dispatch to the kinds
@@ -225,6 +257,9 @@ namespace creature {
     // reactions aside): the stun, death and letting go
     void stun(sys::game_state& state, dcon::creature_id c, int32_t st);
     void die(sys::game_state& state, dcon::creature_id c);
+    // Creature.LoseAllGrasps: a slugcat drops what it holds, a creature
+    // lets go of everything of its room (below)
+    void lose_all_grasps(sys::game_state& state, dcon::creature_id c);
     // Creature.LoseAllGrasps and the rest the kind holds on to (tongue,
     // tentacles, clinging): it lets go of everything of the room
     void release_all(sys::game_state& state, dcon::creature_id c, dcon::room_id room);
@@ -239,24 +274,28 @@ namespace creature {
     };
     // SharedPhysics.TraceProjectileAgainstBodyChunks over the room's
     // creatures: the chunk (or a daddy's tentacle) the segment hits first
-    bool trace(sys::game_state const& state, dcon::room_id room, rw::vec2 from, rw::vec2 to, float rad, dcon::creature_id& hit, hit_part& part);
+    // (not `thrown_by`, nor a slugcat when a slugcat threw it)
+    bool trace(sys::game_state const& state, dcon::room_id room, rw::vec2 from, rw::vec2 to, float rad, dcon::creature_id thrown_by, dcon::creature_id& hit,
+        hit_part& part);
     // Creature.Violence and the kinds' own; `rock`: the source is a Rock
     // (it turns a lizard around)
     void violence(sys::game_state& state, dcon::creature_id c, hit_part const& part, rw::vec2 momentum, float damage, float stun_bonus,
         damage_type type = damage_type::blunt, bool rock = false);
     // an explosion's blast: Violence on the first chunk of every creature
-    // within `rad` of `at`, falling off with distance
-    void blast(sys::game_state& state, dcon::room_id room, rw::vec2 at, float rad, float force, float damage, float stun);
+    // within `rad` of `at`, falling off with distance; a slugcat (not
+    // `source`'s) within `kill_rad` dies, further out it is stunned (none
+    // with no kill radius)
+    void blast(sys::game_state& state, dcon::room_id room, rw::vec2 at, float rad, float force, float damage, float stun, float kill_rad = 0.f,
+        dcon::physical_object_id source = {});
     // FlareBomb's flash: a stun for every creature that sees it
     void flash(sys::game_state& state, world::room_view const& room, rw::vec2 at, float rad);
-    // every creature lets go of the slugcat (respawned, destroyed, eaten,
-    // warped away): the ones in its room
-    void release_player(sys::game_state& state, dcon::player_id p);
-    // ...of `t`, in `room`
-    void release_target(sys::game_state& state, target t, dcon::room_id room);
+    // every creature of `room` lets go of `t` (respawned, destroyed, eaten,
+    // warped away, carried into a den)
+    void release_target(sys::game_state& state, dcon::creature_id t, dcon::room_id room);
+    // ...of `t`, wherever it is
+    void release_target(sys::game_state& state, dcon::creature_id t);
     // `c` lets go of `t` (the kind's grasps, clinging, tongue, eating)
-    void release(sys::game_state& state, dcon::creature_id c, target t);
-    void release_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p);
+    void release(sys::game_state& state, dcon::creature_id c, dcon::creature_id t);
     // Weapon.INotifyOfFlyingWeapons: a thrown weapon at `pos` moving at
     // `vel`, thrown from `thrown_pos`
     void flying_weapon(sys::game_state& state, dcon::room_id room, rw::vec2 pos, rw::vec2 vel, rw::vec2 thrown_pos);

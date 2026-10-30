@@ -31,6 +31,22 @@ namespace warps {
     // RoomCamera.warpPointTimer, once per tick
     void update_sequence(sys::game_state& state);
 
+    // Creatures travel through warps on their own (migrate.hpp): where a
+    // warp leads (a DynamicWarpTarget for one without a destination; no
+    // room: nowhere), a room's `k`th warp, its position
+    struct target {
+        dcon::room_id room;
+        rw::vec2 pos{0.f, 0.f};
+    };
+    target where_to(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
+    dcon::warp_point_id point(sys::game_state const& state, dcon::room_id room, uint32_t k) noexcept;
+    // it can be taken (not closed, not a one way warp's exit)
+    bool leads_away(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
+    rw::vec2 position(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
+    // the warp carries `c` (in its middle) and what it holds to where it
+    // leads: a transaction of the warp's room
+    void carry(sys::game_state& state, dcon::creature_id c, dcon::warp_point_id wp);
+
     // the slugcat can use warps (only the Watcher)
     bool is_watcher(sys::game_state const& state, dcon::player_id p) noexcept;
     // RainWorldGame.ActiveRippleLayer: 1 while the Watcher is camouflaged at

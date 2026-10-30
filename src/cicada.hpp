@@ -36,8 +36,8 @@ namespace cicada {
     // slugcat (not the one holding it), Cicada.Collide's bump attacks and
     // tentacle clinging (its chunk `i` touched the other's `j`), bumping
     // into another cicada while charging
-    bool collides(sys::game_state const& state, dcon::creature_id c, creature::target t);
-    void collide(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, creature::target t, uint32_t j);
+    bool collides(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t);
+    void collide(sys::game_state& state, dcon::creature_id c, world::room_view const& room, uint32_t i, dcon::creature_id t, uint32_t j);
     void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id other, uint32_t j);
     // Creature.Violence (+ Cicada.Stun)
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t chunk, rw::vec2 momentum, float damage, float stun_bonus);
@@ -59,7 +59,7 @@ namespace cicada {
     // Creature.ReleaseGrasp from the player's side
     void release(sys::game_state& state, dcon::creature_id c);
     // lets go of `t`: held by it, clinging to it
-    void release(sys::game_state& state, dcon::creature_id c, creature::target t);
+    void release(sys::game_state& state, dcon::creature_id c, dcon::creature_id t);
     // releases the cicada `p` holds and any cicada clinging to `p`
     void release_player(sys::game_state& state, dcon::player_id p);
     // Player.GraphicsModuleUpdated's HeavyCarry pull: the held cicada and

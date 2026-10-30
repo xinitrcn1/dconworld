@@ -11,7 +11,7 @@
 #include "math.hpp"
 #include "pathing_types.hpp"
 #include "player_types.hpp"
-#include "target_types.hpp"
+#include "dcon_generated_ids.hpp"
 
 namespace lizard {
     // CreatureTemplate.Type of the lizard breeds (vanilla, Downpour, Watcher)
@@ -269,7 +269,7 @@ namespace lizard {
         int32_t stuck_counter = 0;
         int32_t delay = 0;
         // what it is attached to (a creature or a slugcat) and the chunk
-        creature::target attached;
+        dcon::creature_id attached;
         uint8_t attached_chunk = 0;
         bool bite_inanimate = false;
     };
@@ -347,7 +347,7 @@ namespace lizard {
         float aim_up = 0.f;
         float general_aim_up = 0.5f;
         // aimForChunk
-        creature::target aim;
+        dcon::creature_id aim;
         uint8_t aim_chunk = 0;
     };
 
@@ -386,9 +386,9 @@ namespace lizard {
         int32_t idle_restlessness = 0;
         int32_t unable_to_find_comfortable_position = 0;
         // focusCreature, casualAggressionTarget, submittedTo
-        creature::target focus;
-        creature::target casual_aggression;
-        creature::target submitted_to;
+        dcon::creature_id focus;
+        dcon::creature_id casual_aggression;
+        dcon::creature_id submitted_to;
         int32_t time_in_room = 0;
         int32_t attempt_bite_frames = 0;
         // MissionTracker.LeaveRoom after submitting to another lizard: ticks
@@ -637,7 +637,7 @@ namespace lizard {
         rw::vec2 tail_direction{0.f, 0.f};
         rw::vec2 look_pos{0.f, 0.f};
         // CreatureLooker: what it looks at (none: lookPos), and its timer
-        creature::target look_creature;
+        dcon::creature_id look_creature;
         int32_t look_counter = 0;
         float head_color_setter = 0.f;
         rw::vec2 eyes[2][3];
@@ -744,9 +744,9 @@ namespace lizard {
         float mass_left = 1.f;
         float dissapear_speed = 0.f;
         float my_aim_up = 0.f;
-        creature::target my_aim;
+        dcon::creature_id my_aim;
         uint8_t my_aim_chunk = 0;
-        creature::target stick;
+        dcon::creature_id stick;
         uint8_t stick_chunk = 0;
         int32_t slime_count = 0;
         spit_slime slime[max_slime];
