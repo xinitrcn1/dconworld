@@ -42,7 +42,19 @@ namespace warps {
         bool player_usable(sys::game_state const& state, dcon::player_id p, dcon::room_id room) {
             auto const& w = state.world;
             return w.physical_object_get_room_from_object_location(player::body(state, p)) == room && !player::in_shortcut(state, p)
-                && !player::dead(state, p) && !w.player_get_eaten(p) && !w.player_get_npc(p);
+                && !player::dead(state, p) && !w.player_get_eaten(p);
+        }
+        // the player's slugcat, not an NPC one: it brings the screen wide
+        // sequence (and the camera) along
+        bool controlled(sys::game_state const& state, dcon::player_id p) { return !state.world.player_get_npc(p); }
+        // may set a warp off: the Watcher, and any NPC slugcat (they take
+        // warps on their way to a shelter)
+        bool may_warp(sys::game_state const& state, dcon::player_id p) { return !controlled(state, p) || is_watcher(state, p); }
+        sys::game_state::warp_pull& pull_of(sys::game_state& state, dcon::warp_point_id wp) {
+            auto& v = state.warp_pulls;
+            if (v.size() <= size_t(wp.index()))
+                v.resize(size_t(wp.index()) + 1);
+            return v[size_t(wp.index())];
         }
         vec2 main_chunk(sys::game_state const& state, dcon::player_id p) {
             return state.world.body_chunk_get_pos(player::body_chunk(state, p, 0));
@@ -122,12 +134,13 @@ namespace warps {
         }
 
         void change_state(sys::game_state& state, dcon::warp_point_id wp, warp_state next);
+        void release(sys::game_state& state, sys::game_state::warp_pull& pull);
 
         // WarpPoint.SuckInCreatures: zero gravity around the warp, the
         // Watcher drawn into its middle, everything else spiralling in
         void suck_in(sys::game_state& state, dcon::warp_point_id wp) {
             auto& w = state.world;
-            auto& seq = state.warp;
+            auto& pull = pull_of(state, wp);
             auto const placed = placed_of(state, wp);
             float const act = activate_animation_time(w.warp_placed_get_effect(placed));
             float const at = float(w.warp_point_get_activation_time(wp));
@@ -137,13 +150,15 @@ namespace warps {
             vec2 const centre{pos.x, pos.y + 30.f};
             auto const room = room_of(state, wp);
             auto const hold = [&](dcon::physical_object_id o) {
-                if (std::find(seq.pulled.begin(), seq.pulled.end(), o) != seq.pulled.end())
+                if (std::find(pull.held.begin(), pull.held.end(), o) != pull.held.end())
                     return;
-                seq.pulled.push_back(o);
-                seq.pulled_gravity.push_back(w.physical_object_get_g(o));
+                pull.held.push_back(o);
+                pull.gravity.push_back(w.physical_object_get_g(o));
                 w.physical_object_set_g(o, 0.f);
             };
-            // the Watcher(s) close enough float into the middle
+            // the slugcats close enough (the one that set it off, those in
+            // its grab) float into the middle; one further off in the room
+            // stays, neither pulled nor carried
             std::vector<dcon::physical_object_id> players_held;
             w.for_each_player([&](dcon::player_id p) {
                 if (!player_usable(state, p, room) || !custom::dist_less(pos, main_chunk(state, p), suck_radius))
@@ -155,6 +170,23 @@ namespace warps {
                 auto const o = player::body(state, p);
                 hold(o);
                 players_held.push_back(o);
+                // (the player stepping into it late: the screen wide sequence too)
+                if (controlled(state, p) && !pull.camera) {
+                    pull.camera = true;
+                    if (!state.warp.active) {
+                        auto& seq = state.warp;
+                        seq = sys::game_state::warp_sequence{};
+                        seq.active = true;
+                        seq.origin = wp;
+                        seq.from_room = room;
+                        seq.from_pos = pos;
+                        seq.to_room = room;
+                        seq.to_pos = pos;
+                        seq.effect = w.warp_placed_get_effect(placed);
+                        seq.ripple = w.warp_placed_get_ripple_warp(placed);
+                        seq.duration = act * 2.f;
+                    }
+                }
                 w.player_set_warp_held(p, 1);
                 auto const c0 = player::body_chunk(state, p, 0);
                 auto const c1 = player::body_chunk(state, p, 1);
@@ -200,14 +232,12 @@ namespace warps {
                     return;
                 swirl(o);
             });
-            // the creatures, stunned
+            // the creatures, stunned (slugcats other than those it holds stay)
             rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+                if (creature::is_slugcat(w, c))
+                    return;
                 w.creature_set_stun(c, std::max(w.creature_get_stun(c), 20));
                 swirl(creature::body(state, c));
-            });
-            w.for_each_player([&](dcon::player_id p) {
-                if (player_usable(state, p, room))
-                    swirl(player::body(state, p));
             });
         }
 
@@ -230,6 +260,7 @@ namespace warps {
         void perform_warp(sys::game_state& state, dcon::warp_point_id wp) {
             auto& w = state.world;
             auto& seq = state.warp;
+            auto& pull = pull_of(state, wp);
             auto const placed = placed_of(state, wp);
             auto const dest = destination_of(state, wp);
             if (!w.warp_placed_get_dest_room(placed))
@@ -240,6 +271,7 @@ namespace warps {
             if (state.ripple_level < 1.f)
                 state.ripple_level = 1.f;
             if (!dest.room) {
+                release(state, pull);
                 change_state(state, wp, warp_state::cool_down);
                 return;
             }
@@ -255,10 +287,13 @@ namespace warps {
                 }
             });
             vec2 const out = exit ? pos_of(state, exit) : dest.pos;
-            seq.to_room = dest.room;
-            seq.to_pos = out;
+            if (pull.camera && seq.active && seq.origin == wp) {
+                seq.to_room = dest.room;
+                seq.to_pos = out;
+            }
             auto const src = room_of(state, wp);
-            auto const objects = seq.pulled;
+            auto const objects = pull.held;
+            std::vector<dcon::player_id> arrivals;
             for (size_t i = 0; i < objects.size(); ++i) {
                 auto const o = objects[i];
                 if (!w.physical_object_is_valid(o) || w.physical_object_get_room_from_object_location(o) != src)
@@ -269,6 +304,9 @@ namespace warps {
                 bool const is_player = oc && creature::is_slugcat(w, oc);
                 vec2 const at = is_player ? out : out + vec2{std::sin(ang), std::cos(ang)} * (20.f + 6.f * float(i));
                 place_object(state, o, dest.room, at);
+                if (is_player)
+                    if (auto const pl = creature::player_of(state, oc))
+                        arrivals.push_back(pl);
                 // a creature pulled along: in its new room (its AI, its trip)
                 if (oc && !is_player && w.creature_get_away(oc) == 0) {
                     dens::changed_rooms(state, oc, src, dest.room, true);
@@ -287,22 +325,34 @@ namespace warps {
                 items::carry_update(state, p);
                 player_graphics::reset(state, p);
             });
-            seq.transferred = true;
-            if (exit)
+            if (pull.camera && seq.active && seq.origin == wp)
+                seq.transferred = true;
+            bool const camera = pull.camera;
+            release(state, pull);
+            if (exit) {
                 change_state(state, exit, warp_state::exit);
+                auto& out_pull = pull_of(state, exit);
+                out_pull.arrivals = std::move(arrivals);
+                out_pull.camera = camera;
+                // (without the screen wide sequence: as long as its second half)
+                out_pull.exit_timer = int32_t(activate_animation_time(w.warp_placed_get_effect(placed)));
+            }
             change_state(state, wp, w.warp_placed_get_limited_use(placed) && w.warp_point_get_uses(wp) <= 0 ? warp_state::closed : warp_state::cool_down);
         }
 
-        // gives the pulled objects their gravity back
-        void release_pulled(sys::game_state& state) {
+        // gives a pull's objects their gravity back (the slugcats hover on out
+        // of the exit tear a while longer)
+        void release(sys::game_state& state, sys::game_state::warp_pull& pull) {
             auto& w = state.world;
-            auto& seq = state.warp;
-            for (size_t i = 0; i < seq.pulled.size(); ++i)
-                if (w.physical_object_is_valid(seq.pulled[i]))
-                    w.physical_object_set_g(seq.pulled[i], seq.pulled_gravity[i]);
-            seq.pulled.clear();
-            seq.pulled_gravity.clear();
-            w.for_each_player([&](dcon::player_id p) { w.player_set_warp_held(p, 0); });
+            for (size_t i = 0; i < pull.held.size(); ++i)
+                if (w.physical_object_is_valid(pull.held[i])) {
+                    w.physical_object_set_g(pull.held[i], pull.gravity[i]);
+                    if (auto const c = creature::of_body(w, pull.held[i]))
+                        if (auto const pl = creature::player_of(state, c))
+                            w.player_set_warp_held(pl, 0);
+                }
+            pull.held.clear();
+            pull.gravity.clear();
         }
 
         // WarpPoint.ChangeState
@@ -325,8 +375,18 @@ namespace warps {
                         w.player_set_warp_point_cooldown(p, 80);
                 });
                 w.warp_point_set_activation_time(wp, 0);
+                auto& pull = pull_of(state, wp);
+                pull = sys::game_state::warp_pull{};
+                // the screen wide sequence: only when the player goes too (it
+                // set the warp off, or it is in the pull's grab)
+                auto const by = w.warp_point_get_triggered_by(wp);
+                pull.camera = by && controlled(state, by);
+                w.for_each_player([&](dcon::player_id p) {
+                    if (controlled(state, p) && player_usable(state, p, room) && custom::dist_less(pos_of(state, wp), main_chunk(state, p), pull_radius))
+                        pull.camera = true;
+                });
                 auto& seq = state.warp;
-                if (!seq.active) {
+                if (pull.camera && !seq.active) {
                     seq = sys::game_state::warp_sequence{};
                     seq.active = true;
                     seq.origin = wp;
@@ -451,13 +511,16 @@ namespace warps {
 
             switch (w.warp_point_get_state(wp)) {
             case warp_state::ready: {
-                if (!transportable(state, wp) || state.warp.active)
+                // (the player's screen wide sequence elsewhere doesn't hold an
+                // NPC's warp up)
+                if (!transportable(state, wp))
                     break;
-                // the closest Watcher that may warp
+                // the closest slugcat that may warp (the Watcher, an NPC)
                 dcon::player_id who;
                 float best = 0.f;
                 w.for_each_player([&](dcon::player_id p) {
-                    if (!player_usable(state, p, room.id) || !is_watcher(state, p) || w.player_get_warp_point_cooldown(p) > 0)
+                    if (!player_usable(state, p, room.id) || !may_warp(state, p) || w.player_get_warp_point_cooldown(p) > 0
+                        || (controlled(state, p) && state.warp.active))
                         return;
                     float const d = rw::distance(pos, main_chunk(state, p));
                     if (!who || d < best) {
@@ -515,10 +578,12 @@ namespace warps {
                     perform_warp(state, wp);
                 break;
             }
-            case warp_state::exit:
-                // the Watcher hovers out of the tear while the transition clears
+            case warp_state::exit: {
+                // the slugcats that came out hover out of the tear while the
+                // transition clears
+                auto& pull = pull_of(state, wp);
                 w.for_each_player([&](dcon::player_id p) {
-                    if (!player_usable(state, p, room.id))
+                    if (!player_usable(state, p, room.id) || std::find(pull.arrivals.begin(), pull.arrivals.end(), p) == pull.arrivals.end())
                         return;
                     w.player_set_levitation_active(p, 1);
                     w.player_set_levitation_needs_cooldown(p, 1);
@@ -532,9 +597,13 @@ namespace warps {
                             w.body_chunk_get_vel(c).x = 0.f;
                     }
                 });
-                if (!state.warp.active || state.warp.progress >= state.warp.duration)
+                bool const done = pull.camera ? (!state.warp.active || state.warp.progress >= state.warp.duration) : --pull.exit_timer <= 0;
+                if (done) {
+                    pull.arrivals.clear();
                     change_state(state, wp, warp_state::spawn_items);
+                }
                 break;
+            }
             case warp_state::spawn_items:
                 // everything already came out with the Watcher
                 change_state(state, wp, warp_state::cool_down);
@@ -677,13 +746,8 @@ namespace warps {
             return;
         seq.last_progress = seq.progress;
         seq.progress += 1.f;
-        // the pull lets go once everything is out on the other side
-        if (seq.transferred && !seq.pulled.empty())
-            release_pulled(state);
-        if (seq.progress > seq.duration) {
-            release_pulled(state);
+        if (seq.progress > seq.duration)
             seq.active = false;
-        }
     }
 
     void spawn_ripple_ring(sys::game_state& state, dcon::room_id room, vec2 pos, float rad, float intensity, float seconds) {

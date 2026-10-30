@@ -70,6 +70,21 @@ the tools for tracing them, and what is known not to work yet.
   −500 px, −250 in a wall climb, in a room without water). The port doesn't
   kill a slugcat for it otherwise; an NPC down there waited under the room
   for good.
+- **Warps** go as for the player (warps.cpp): it walks under the tear and
+  stands still in its grab (any input holds a warp back) until the warp
+  sets off, is pulled into it, comes out of the exit tear hovering. Any
+  NPC slugcat may set a warp off (the player's slugcat only as the
+  Watcher). The warp carries the one that set it off and the slugcats in
+  its grab (`pull_radius`), no other slugcat in the room. The screen wide
+  transition (and the camera's move to the other room) plays only when the
+  player's slugcat is among them; without it the hover lasts the
+  sequence's second half. Each warp keeps its own pull
+  (`game_state::warp_pulls`), so warps in different rooms go at once. A
+  tear out of reach from the ground carries it after 400 ticks of waiting.
+- **Jumps that carry too far.** A charge pounce or a running jump goes its
+  full length: one planned onto a ledge short of that needs a wall to stop
+  against or ground all the way past it (WARG_B35's open side sent slugcats
+  out of the room).
 - **Shafts three wide** (wall jumps between their walls): each climb is
   found from the start tile under any of the shaft's columns (under the
   right side of WRFA_C11's upper shaft its left column is two over, and the

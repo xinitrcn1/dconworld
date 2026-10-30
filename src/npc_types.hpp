@@ -102,6 +102,8 @@ namespace npc {
         rw::ivec2 flee_tile{-1, -1};
         // a pack leader waiting for the others at a pipe
         int32_t wait = 0;
+        // ticks standing in a warp waiting for it to set off
+        int32_t warp_wait = 0;
         // chased back through a pipe: how many times in a row from the same
         // room (its index + 1), the ticks it hides before trying again (more
         // each time: a creature camping by the pipe moves on in the end)

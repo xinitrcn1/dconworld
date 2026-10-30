@@ -1255,6 +1255,64 @@ namespace selftest {
             r.check("survivor can't warp", simulation::player_room(gs, s.p) == a && !gs.warp.active, s.describe());
         }
         {
+            // an NPC slugcat (any one) standing still in a warp sets it off and
+            // goes through the same sequence: pulled in, hovering out of the
+            // exit. The player's Watcher across the room, out of the warp's
+            // grab, stays, and no screen wide transition plays
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(8, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}});
+            add_warp(gs, b, {feet_at(10, 1) + vec2{0.f, 20.f}, a, feet_at(8, 1) + vec2{0.f, 20.f}});
+            gs.ripple_level = 1.f;
+            sim s(gs, a, feet_at(34, 1), player::slugcat_name::watcher);
+            rw::rng rng{0x3A4Bu};
+            auto const q = npc::create(gs, a, feet_at(8, 1), rng, {}, player::slugcat_name::white);
+            // (it stays put: still in the warp, as if waiting to set off)
+            w.slugcat_npc_get_nav(npc::of(gs, q)).goal_timer = -100000;
+            bool screen = false, hovered = false, arrived = false;
+            uint32_t t = 0, through = 0;
+            for (; t < 1500 && !(arrived && hovered); ++t) {
+                s.run(1, 0, 0);
+                screen = screen || gs.warp.active;
+                if (!arrived && simulation::player_room(gs, q) == b)
+                    through = t;
+                arrived = arrived || simulation::player_room(gs, q) == b;
+                hovered = hovered || (arrived && w.player_get_levitation_active(q) != 0);
+            }
+            bool const player_stayed = simulation::player_room(gs, s.p) == a;
+            char d[160];
+            std::snprintf(d, sizeof(d), " through=%d after %u ticks hovered=%d screen=%d player_stayed=%d", int(arrived), through, int(hovered), int(screen),
+                int(player_stayed));
+            r.check("NPC slugcat warps, the player out of its grab doesn't", arrived && through > 60 && hovered && !screen && player_stayed, s.describe() + d);
+            npc::destroy(gs, q);
+        }
+        {
+            // the same with the player's Watcher in the warp's grab: it goes
+            // along, and the screen wide transition plays
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(8, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}});
+            add_warp(gs, b, {feet_at(10, 1) + vec2{0.f, 20.f}, a, feet_at(8, 1) + vec2{0.f, 20.f}});
+            gs.ripple_level = 1.f;
+            sim s(gs, a, feet_at(11, 1), player::slugcat_name::watcher);
+            rw::rng rng{0x3A4Cu};
+            auto const q = npc::create(gs, a, feet_at(8, 1), rng, {}, player::slugcat_name::white);
+            w.slugcat_npc_get_nav(npc::of(gs, q)).goal_timer = -100000;
+            bool screen = false;
+            for (uint32_t t = 0; t < 1500 && !(simulation::player_room(gs, q) == b && simulation::player_room(gs, s.p) == b); ++t) {
+                s.run(1, 0, 0);
+                screen = screen || gs.warp.active;
+            }
+            bool const both = simulation::player_room(gs, q) == b && simulation::player_room(gs, s.p) == b;
+            s.until(800, [&] { return !gs.warp.active; });
+            char d[96];
+            std::snprintf(d, sizeof(d), " both_through=%d screen=%d", int(both), int(screen));
+            r.check("player in the grab warps along", both && screen, s.describe() + d);
+            npc::destroy(gs, q);
+        }
+        {
             // a one way warp's exit never takes anyone anywhere, its entrance
             // works once and closes (limited use)
             auto& w = gs.world;

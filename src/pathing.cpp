@@ -361,6 +361,18 @@ namespace pathing {
                         // from it (the body crouches over two tiles)
                         if (!ground || !open(room, side) || standable(room, side))
                             continue;
+                        // past a landing at `v` going `s`, within `left` tiles: a wall
+                        // it stops against, else ground all the way to land on
+                        auto const stops = [&](ivec2 v, int32_t sd, int32_t left) {
+                            for (int32_t k = 1; k <= left - 1; ++k) {
+                                ivec2 const t = v + ivec2{sd * k, 0};
+                                if (!room.inside(t.x, t.y) || !open(room, t) || !open(room, t + ivec2{0, 1}))
+                                    return room.inside(t.x, t.y);
+                                if (!standable(room, t))
+                                    return false;
+                            }
+                            return true;
+                        };
                         bool const run_up = standable(room, g - ivec2{s, 0}) && standable(room, g - ivec2{2 * s, 0}) && open(room, g + ivec2{0, 1})
                             && open(room, g - ivec2{s, -1}) && open(room, g - ivec2{2 * s, -1});
                         // (onto the ground, or catching a pole on the way)
@@ -369,16 +381,26 @@ namespace pathing {
                             for (int32_t dy = 3; dy >= -max_fall_jump; --dy)
                                 for (int32_t dx = 2; dx <= leap_reach(dy); ++dx) {
                                     ivec2 const v = g + ivec2{s * dx, dy};
-                                    if (arc_clear(room, g, v, s, 2) || (pole(v) && arc_open(room, g, v, s, 2)))
-                                        add(g, v, 30u + 10u * uint32_t(dx) + edge_of_reach(dx, leap_reach(dy)), step_kind::leap, s);
+                                    if (!(arc_clear(room, g, v, s, 2) || (pole(v) && arc_open(room, g, v, s, 2))))
+                                        continue;
+                                    // (a running jump carries on too)
+                                    if (!pole(v) && !stops(v, s, leap_reach(dy) - dx))
+                                        continue;
+                                    add(g, v, 30u + 10u * uint32_t(dx) + edge_of_reach(dx, leap_reach(dy)), step_kind::leap, s);
                                 }
                         ivec2 const back = g - ivec2{s, 0};
                         if (standable(room, back) && open(room, back + ivec2{0, 1}))
                             for (int32_t dy = 2; dy >= -max_fall_jump; --dy)
                                 for (int32_t dx = 3; dx <= pounce_reach(dy); ++dx) {
                                     ivec2 const v = back + ivec2{s * dx, dy};
-                                    if (arc_clear(room, back, v, s, 1) || (pole(v) && arc_open(room, back, v, s, 1)))
-                                        add(back, v, 40u + 10u * uint32_t(dx) + edge_of_reach(dx, pounce_reach(dy)), step_kind::pounce, s);
+                                    if (!(arc_clear(room, back, v, s, 1) || (pole(v) && arc_open(room, back, v, s, 1))))
+                                        continue;
+                                    // (a pounce goes its full length: short of that, onto a
+                                    // ledge with nothing past it to stop it, it carries on
+                                    // over the edge, out of WARG_B35's open side)
+                                    if (!pole(v) && !stops(v, s, pounce_reach(dy) - dx))
+                                        continue;
+                                    add(back, v, 40u + 10u * uint32_t(dx) + edge_of_reach(dx, pounce_reach(dy)), step_kind::pounce, s);
                                 }
                     }
                     // a hop onto a pole close by

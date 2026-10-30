@@ -483,7 +483,10 @@ namespace migrate {
             for (int32_t i = 0; i < 20 && tile.y > 0 && !room.get_tile(tile + ivec2{0, -1}).solid(); ++i)
                 --tile.y;
             vec2 const me = creature::main_pos(state, c);
-            if ((custom::dist_less(me, at, warps::pull_radius) && room.visual_contact(me, at)) || custom::dist_less(me, room_view::middle_of_tile(tile), 40.f))
+            // (a slugcat goes through the warp's own sequence: it stands in
+            // it until the warp sets off, npc.cpp)
+            if (!creature::is_slugcat(w, c)
+                && ((custom::dist_less(me, at, warps::pull_radius) && room.visual_contact(me, at)) || custom::dist_less(me, room_view::middle_of_tile(tile), 40.f)))
                 warps::carry(state, c, wp);
             return tile;
         }

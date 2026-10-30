@@ -55,6 +55,9 @@ namespace npc {
         // it ignores them this long and goes on its way
         constexpr int32_t flee_patience = 400;
         constexpr int32_t brave_ticks = 600;
+        // standing in a warp this long without it setting off (a tear out of
+        // reach): carried through anyway
+        constexpr int32_t warp_patience = 400;
         // a guessed way on steps off an edge only this far above something
         // to stand on
         constexpr int32_t safe_drop = 6;
@@ -1350,6 +1353,23 @@ namespace npc {
                     return input(0, 0);
                 bool const pipe = w().creature_get_going_home(c) != 0;
                 ivec2 const goal = pipe ? w().creature_get_travel_tile(c) : *tile;
+                // a warp: in its grab, still, until it sets off and carries it
+                // through (the warp's own sequence, as for the player); a tear
+                // out of its reach from the ground carries it after a while
+                if (auto const& trip = w().creature_get_trip(c); !pipe && trip.next < trip.hops && trip.exit[trip.next] >= migrate::warp_hop)
+                    if (auto const wp = warps::point(state, room.id, trip.exit[trip.next] - migrate::warp_hop)) {
+                        vec2 const tear = warps::position(state, wp);
+                        // (still: any input holds the warp back)
+                        if (custom::dist_less(pos(state, p, 0), tear, warps::pull_radius - 5.f) || at == goal) {
+                            nav.stuck = 0;
+                            if (++nav.warp_wait > warp_patience) {
+                                nav.warp_wait = 0;
+                                warps::carry(state, c, wp);
+                            }
+                            return input(0, 0);
+                        }
+                    }
+                nav.warp_wait = 0;
                 if (pipe && wait_for_pack(goal))
                     return input(0, 0);
                 // at a gate's closed middle door: wait for it to open

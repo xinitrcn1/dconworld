@@ -300,12 +300,23 @@ namespace sys {
             bool transferred = false;
             bool ripple = false;
             world::warp_effect effect;
-            // objects the pull took hold of (objectsToRestoreGravityTo), they
-            // travel along and get their gravity back on the other side
-            std::vector<dcon::physical_object_id> pulled;
-            std::vector<float> pulled_gravity;
         };
         warp_sequence warp;
+        // A warp point's own pull (WarpPoint.objectsToRestoreGravityTo and
+        // what it carries), by the point's index: an NPC slugcat warps with
+        // the same sequence the player does, without the screen wide
+        // transition unless the player is pulled along
+        struct warp_pull {
+            std::vector<dcon::physical_object_id> held;
+            std::vector<float> gravity;
+            // the player is among them: the screen wide sequence plays
+            bool camera = false;
+            // at an exit: the slugcats that came out, hovering, and how
+            // long more (without the screen wide sequence to wait for)
+            std::vector<dcon::player_id> arrivals;
+            int32_t exit_timer = 0;
+        };
+        std::vector<warp_pull> warp_pulls;
 
         using ripple_ring = sys::ripple_ring;
         std::vector<ripple_ring> ripple_rings;
