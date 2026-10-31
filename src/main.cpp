@@ -15,6 +15,7 @@
 #include "audio.hpp"
 #include "centipede.hpp"
 #include "leech.hpp"
+#include "loach.hpp"
 #include "tube_worm.hpp"
 #include "spawns.hpp"
 #include "cicada.hpp"
@@ -1217,6 +1218,22 @@ int main(int argc, char* argv[]) {
                     auto const c = centipede::create(gs, a.room, at, -1.f, centipede::variant(variant));
                     reports::add_log(std::string{centipede::to_string(centipede::variant(variant))} + ", size "
                         + std::to_string(gs.world.creature_get_payload(c).centipede.size));
+                    break;
+                }
+                case SDLK_L: {
+                    if (e.key.mod & SDL_KMOD_CTRL) {
+                        remove_all(creature::type::loach);
+                        break;
+                    }
+                    // Shift: on to the next variant
+                    static uint32_t variant = 0;
+                    if ((e.key.mod & SDL_KMOD_SHIFT) != 0)
+                        variant = (variant + 1) % loach::variant_count;
+                    float mx = 0.f, my = 0.f;
+                    SDL_GetMouseState(&mx, &my);
+                    // same mapping as the teleport click
+                    vec2 const at = render::screen_to_room(r, a.cam, mx, my);
+                    loach::create(gs, a.room, at);
                     break;
                 }
                 case SDLK_O: {
