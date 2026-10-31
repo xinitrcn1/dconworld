@@ -12,8 +12,8 @@ region_properties
     batDepleteCyclesMaxIfLessThanTwoLeft            member      uint            3
     batsPerActiveSwarmRoom                          member      uint            10
     overseersSpawnChance                            member      float           0.8
-    overseersMin                                    member      uint            4
-    overseersMax                                    member      uint            4
+    overseersMin                                    member      uint            1
+    overseersMax                                    member      uint            3
     playerGuideOverseerSpawnChance                  member      float           1
     ghostRelKarmaReq                                member      uint            0
     albinos                                         member      bool            false

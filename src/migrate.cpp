@@ -41,6 +41,7 @@ namespace migrate {
             case tmpl::terror_long_legs:
             case tmpl::hunter_daddy: return 400;
             case tmpl::drop_bug: return 200;
+            case tmpl::lantern_mouse: return 50;
             default: return 1;
             }
         }
@@ -56,7 +57,8 @@ namespace migrate {
             }
         }
         bool can_fly(tmpl t) noexcept {
-            return t == tmpl::cicada_a || t == tmpl::cicada_b || t == tmpl::centiwing;
+            return t == tmpl::cicada_a || t == tmpl::cicada_b || t == tmpl::centiwing || t == tmpl::sky_whale || t == tmpl::overseer
+                || t == tmpl::vulture || t == tmpl::king_vulture || t == tmpl::miros_vulture;
         }
 
         attr parse_attraction(std::string_view s) {

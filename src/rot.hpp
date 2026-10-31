@@ -39,6 +39,8 @@ namespace rot {
             // a pole plant's stalk instead (PoleMimic is an IClimbableVine;
             // `vine` empty then)
             dcon::creature_id mimic;
+            // a sky whale's whisker + 1 (`mimic` is then the whale), 0 none
+            uint8_t whisker = 0;
         };
         // the closest vine within `rad` of `pos` (VineOverlap)
         std::optional<position> overlap(sys::game_state const& state, dcon::room_id room, rw::vec2 pos, float rad);

@@ -40,6 +40,17 @@
 #include "scavenger_types.hpp"
 #include "deer_types.hpp"
 #include "miros_types.hpp"
+#include "barnacle_types.hpp"
+#include "egg_bug_types.hpp"
+#include "garbage_worm_types.hpp"
+#include "lantern_mouse_types.hpp"
+#include "loach_types.hpp"
+#include "moth_grub_types.hpp"
+#include "overseer_types.hpp"
+#include "snail_types.hpp"
+#include "sky_whale_types.hpp"
+#include "yeek_types.hpp"
+#include "vulture_types.hpp"
 
 namespace creature {
     // CreatureTemplate.Type of the ported creatures. The order is the update
@@ -65,11 +76,32 @@ namespace creature {
         // rain deer
         deer,
         miros,
+        // the Watcher's barnacle
+        barnacle,
+        // egg bug and Downpour's fire bug (the payload's variant)
+        egg_bug,
+        garbage_worm,
+        lantern_mouse,
+        // the Watcher's loach (Loach, RotLoach: the payload's variant)
+        loach,
+        // the Watcher's moth grub
+        moth_grub,
+        // Five Pebbles' (and Moon's) little eyes
+        overseer,
+        snail,
+        // the Watcher's sky whale
+        sky_whale,
+        // Downpour's Yeek
+        yeek,
+        // Vulture, KingVulture, MirosVulture (the payload's variant)
+        vulture,
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
     inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech, type::tube_worm,
-        type::needle_worm, type::pole_mimic, type::tentacle_plant, type::jetfish, type::scavenger, type::deer, type::miros};
+        type::needle_worm, type::pole_mimic, type::tentacle_plant, type::jetfish, type::scavenger, type::deer, type::miros,
+        type::barnacle, type::egg_bug, type::garbage_worm, type::lantern_mouse, type::loach, type::moth_grub, type::overseer, type::snail,
+        type::sky_whale, type::yeek, type::vulture};
 
     // Creature.DamageType, as far as the ports tell them apart
     enum class damage_type : uint8_t {
@@ -102,6 +134,18 @@ namespace creature {
         scavenger,
         deer,
         miros_bird,
+        barnacle,
+        egg_bug, fire_bug,
+        scavenger_elite, scavenger_disciple,
+        garbage_worm,
+        lantern_mouse,
+        loach,
+        vulture, king_vulture, miros_vulture,
+        moth_grub,
+        overseer,
+        snail,
+        sky_whale,
+        yeek,
         count
     };
     inline constexpr uint32_t tmpl_count = uint32_t(tmpl::count);
@@ -467,6 +511,8 @@ namespace creature {
         uint8_t moving;
         uint8_t drop;
         uint8_t climbing_up_coming;
+        // which template: Scavenger, ScavengerElite, ScavengerDisciple
+        scavenger::variant variant;
         // scavenger_data
         uint16_t data;
     };
@@ -511,6 +557,305 @@ namespace creature {
         uint16_t data;
     };
 
+    struct barnacle_payload {
+        // AbstractCreature.personality.dominance (who climbs over whom)
+        float dominance;
+        // BarnacleAI.runSpeed, groupDiscomfort, nextGroupDiscomfortTick
+        float run_speed;
+        float group_discomfort;
+        float next_group_discomfort_tick;
+        // Barnacle.footingCounter, shakeTime, shakeCooldown,
+        // delayBeforeJumping, temporaryDamageImmunity, specialMoveCounter
+        int16_t footing_counter;
+        int16_t shake_time;
+        int16_t shake_cooldown;
+        int16_t delay_before_jumping;
+        int16_t temporary_damage_immunity;
+        int16_t special_move_counter;
+        // BarnacleAI.temporaryPanic, runAwayTime
+        int16_t temporary_panic;
+        int16_t run_away_time;
+        // BarnacleAI.leader (its followers name it here; `leading` is every
+        // barnacle of the room naming it)
+        dcon::creature_id leader;
+        // hasShell (State.miscWatcherSaveFlags == 0), BarnacleAI.idleSplash,
+        // scattering, nearNarrowPos, Swimming last tick
+        uint8_t has_shell;
+        uint8_t idle_splash;
+        uint8_t scattering;
+        uint8_t near_narrow_pos;
+        uint8_t swimming;
+        // barnacle_data
+        uint16_t data;
+    };
+
+    struct egg_bug_payload {
+        // EggBug.hue, runSpeed, runCycle; EggBugAI.fear; antennaAttention
+        float hue;
+        float run_speed;
+        float run_cycle;
+        float fear;
+        float antenna_attention;
+        rw::vec2 travel_dir;
+        // footingCounter, outOfWaterFooting, specialMoveCounter, noJumps,
+        // shake, the fire bug's timeWithoutEggs
+        int16_t footing_counter;
+        int16_t out_of_water_footing;
+        int16_t special_move_counter;
+        int16_t no_jumps;
+        int16_t shake;
+        int16_t time_without_eggs;
+        // the template (EggBug, FireBug)
+        egg_bug::variant variant;
+        // eggsLeft, dropEggs, dropSpears, sitting, swimming
+        uint8_t eggs_left;
+        uint8_t drop_eggs;
+        uint8_t drop_spears;
+        uint8_t sitting;
+        uint8_t swimming;
+        // egg_bug_data
+        uint16_t data;
+    };
+
+    struct garbage_worm_payload {
+        // GarbageWorm.rootPos, lookPoint, chargePos (has_charge: not null)
+        rw::vec2 root_pos;
+        rw::vec2 look_point;
+        rw::vec2 charge_pos;
+        // GarbageWormState.bodySize; GarbageWorm.extended, retractSpeed
+        float body_size;
+        float extended;
+        float retract_speed;
+        // GarbageWorm.hole: its index in the room's garbage holes (-1 none)
+        int16_t hole;
+        uint8_t has_charge;
+        // grabSpears, lastExtended, canBeHitByWeapons
+        uint8_t grab_spears;
+        uint8_t last_extended;
+        uint8_t can_be_hit;
+        // garbage_worm_data
+        uint16_t data;
+    };
+
+    struct lantern_mouse_payload {
+        // LanternMouse.runSpeed, ropeLength, runCycle, swingFac, swingFacGetTo,
+        // profileFac, ropeStretch, fallAsleep, wakeUp; AirBreatherCreature.lungs
+        float run_speed;
+        float rope_length;
+        float run_cycle;
+        float swing_fac;
+        float swing_fac_get_to;
+        float profile_fac;
+        float rope_stretch;
+        float fall_asleep;
+        float wake_up;
+        float lungs;
+        // LanternMouse.footingCounter (Footing: over 20)
+        int32_t footing_counter;
+        // MouseState.battery (4000 new; runs down once dead)
+        int32_t battery;
+        // specialMoveCounter, ropeInvincible, voiceCounter
+        int16_t special_move_counter;
+        int16_t rope_invincible;
+        int16_t voice_counter;
+        // sitting, shrinkingRope, currentlyClimbingCorridor, carried
+        uint8_t sitting;
+        uint8_t shrinking_rope;
+        uint8_t climbing_corridor;
+        uint8_t carried;
+        // lantern_mouse_data
+        uint16_t data;
+    };
+
+    struct loach_payload {
+        // Loach.bodDir, moveDirection
+        rw::vec2 bod_dir;
+        rw::vec2 move_direction;
+        float flip_dir;
+        float resting;
+        float preferred_height;
+        float next_floor_height;
+        float enter_room_force_push;
+        float sac_lift_factor;
+        float head_lift_factor;
+        float height_lerp;
+        int16_t hesist_counter;
+        int16_t lurch_progress;
+        int16_t digesting_counter;
+        uint8_t stay_still;
+        uint8_t legs_grabbing;
+        uint8_t lurching;
+        uint8_t held_back_by_leg;
+        uint8_t worm_grass_below;
+        // Loach or RotLoach
+        loach::variant variant;
+        // loach_data
+        uint16_t data;
+    };
+
+    struct moth_grub_payload {
+        // MothGrub.localHeadWay, lookAtPoint, lookOffWay
+        rw::vec2 local_head_way;
+        rw::vec2 look_at_point;
+        rw::vec2 look_off_way;
+        int32_t look_off_time;
+        int32_t look_wiggle;
+        // selfRightTimer, selfRightWasTilted, selfRightState
+        int16_t self_right_timer;
+        int8_t self_right_was_tilted;
+        uint8_t self_right_state;
+        // AbstractCreature.personality.energy (the graphics)
+        float energy;
+        // moth_grub_data
+        uint16_t data;
+    };
+
+    struct overseer_payload {
+        // Overseer.hoverTile, rootTile
+        rw::ivec2 hover_tile;
+        rw::ivec2 root_tile;
+        // extended, lastExtended, dying, lastDying, size, zipProgSpeed
+        float extended;
+        float last_extended;
+        float dying;
+        float last_dying;
+        float size;
+        float zip_prog_speed;
+        int32_t stationary_counter;
+        int16_t conversation_delay;
+        // mode, afterWithdrawMode
+        overseer::mode mode;
+        overseer::mode after_withdraw_mode;
+        // zipMeshDirection, leaveRoomOnZipCompletion
+        uint8_t zip_mesh_direction;
+        uint8_t leave_room_on_zip;
+        // OverseerAbstractAI.ownerIterator (the colour), playerGuide
+        uint8_t owner_iterator;
+        uint8_t guide;
+        // in the offscreen den: hidden in its wall until the rain is over
+        uint8_t offscreen;
+        // Destroy at the end of the dying flicker is queued
+        uint8_t destroy_queued;
+        // overseer_data
+        uint16_t data;
+    };
+
+    struct snail_payload {
+        // Snail.size, clickCounter, SnailAI.scared
+        float size;
+        float click_counter;
+        float scared;
+        // Snail.shellDirection, breathingForce, suckPoint (has_suck_point:
+        // not null), dropToTile (has_drop_to_tile)
+        rw::vec2 shell_direction;
+        rw::vec2 breathing_force;
+        rw::vec2 suck_point;
+        rw::ivec2 drop_to_tile;
+        // Snail.triggerTicker, allowedInNonAccesibleTile
+        int16_t trigger_ticker;
+        int16_t allowed_in_non_accessible_tile;
+        uint8_t has_suck_point;
+        uint8_t has_drop_to_tile;
+        // Snail.triggered, justClicked, bloated; SnailAI.move (outOfShell);
+        // lastOutOfShell
+        uint8_t triggered;
+        uint8_t just_clicked;
+        uint8_t bloated;
+        uint8_t move;
+        uint8_t last_out_of_shell;
+        // snail_data
+        uint16_t data;
+    };
+
+    struct sky_whale_payload {
+        // SkyWhale.flyDir, roll, lastRoll, rollOffset, targetRollOffset,
+        // rollOffsetVel, flyingPower
+        rw::vec2 fly_dir;
+        float roll;
+        float last_roll;
+        float roll_offset;
+        float target_roll_offset;
+        float roll_offset_vel;
+        float flying_power;
+        // CreatureParams.sizeMultiplier
+        float size;
+        // SkyWhaleAI: timeInRoom, timeToTire, idlePosCounter
+        int32_t time_in_room;
+        int32_t time_to_tire;
+        int32_t idle_pos_counter;
+        // off screen (over the room's side, or not in yet): ticks before it
+        // flies back in
+        int16_t hidden_timer;
+        // the AltVariant (superSizeMe); off screen; leaving over the side
+        // (tryingToLeaveRoom), which side (-1 left, 1 right, 0 not picked)
+        uint8_t alt;
+        uint8_t hidden;
+        uint8_t leaving;
+        int8_t leave_side;
+        // SkyWhaleAI.currentNode (-1 none), testNodeIndex
+        int8_t current_node;
+        uint8_t test_node_index;
+        // sky_whale_data
+        uint16_t data;
+    };
+
+    struct yeek_payload {
+        // Yeek.bodyDirection, climbingOrientation, controlledJumpVelocity
+        rw::vec2 body_direction;
+        rw::vec2 climbing_orientation;
+        rw::vec2 controlled_jump_velocity;
+        // Yeek.headLeadingCounter, yeekCallCounter, grabCooldown,
+        // interestInClimbingPoles, ceilingClearance; YeekAI.fearCounter
+        float head_leading_counter;
+        float yeek_call_counter;
+        float grab_cooldown;
+        float interest_in_climbing_poles;
+        float ceiling_clearance;
+        float fear_counter;
+        // Yeek.timeSinceHop, timeSinceJump, maxJumpCounter
+        int16_t time_since_hop;
+        int16_t time_since_jump;
+        int16_t max_jump_counter;
+        // Yeek.hardFacingDir, climbingMode, tunnelCrawlingMode, usingStandardMass
+        int8_t hard_facing_dir;
+        uint8_t climbing;
+        uint8_t tunnel;
+        uint8_t standard_mass;
+        // ticks to the next climbing step (YeekGraphics.CanAdvanceClimb)
+        uint8_t climb_step;
+        // CreatureState.meatLeft (meatPoints 2); the eating slugcat's Player.eatMeat
+        uint8_t meat_left;
+        uint8_t eat_meat;
+        // yeek_data
+        uint16_t data;
+    };
+
+    struct vulture_payload {
+        // Vulture.moveDirection, jetFuel, wingFlap, wingFlapAmplitude,
+        // tuskCharge, jawOpen, lastJawOpen
+        rw::vec2 move_direction;
+        float jet_fuel;
+        float wing_flap;
+        float wing_flap_amplitude;
+        float tusk_charge;
+        float jaw_open;
+        float last_jaw_open;
+        // snapFrames, laserCounter, landingBrake, stuckShake
+        int16_t snap_frames;
+        int16_t laser_counter;
+        int16_t landing_brake;
+        int16_t stuck_shake;
+        // the template (Vulture, KingVulture, MirosVulture), VultureState.mask
+        vulture::variant variant;
+        uint8_t mask;
+        uint8_t hover_still;
+        uint8_t last_hover_still;
+        // its wings (creature_parts, tentacles[i] by their index)
+        uint8_t wing_count;
+        // vulture_data
+        uint16_t data;
+    };
+
     // creature.payload: the struct of the creature's type
     union payload {
         slugcat_payload slugcat;
@@ -528,6 +873,17 @@ namespace creature {
         scavenger_payload scavenger;
         deer_payload deer;
         miros_payload miros;
+        barnacle_payload barnacle;
+        egg_bug_payload egg_bug;
+        garbage_worm_payload garbage_worm;
+        lantern_mouse_payload lantern_mouse;
+        loach_payload loach;
+        moth_grub_payload moth_grub;
+        overseer_payload overseer;
+        snail_payload snail;
+        sky_whale_payload sky_whale;
+        yeek_payload yeek;
+        vulture_payload vulture;
 
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
@@ -547,6 +903,17 @@ namespace creature {
     static_assert(sizeof(scavenger_payload) <= 64);
     static_assert(sizeof(deer_payload) <= 64);
     static_assert(sizeof(miros_payload) <= 64);
+    static_assert(sizeof(barnacle_payload) <= 64);
+    static_assert(sizeof(egg_bug_payload) <= 64);
+    static_assert(sizeof(garbage_worm_payload) <= 64);
+    static_assert(sizeof(lantern_mouse_payload) <= 64);
+    static_assert(sizeof(loach_payload) <= 64);
+    static_assert(sizeof(moth_grub_payload) <= 64);
+    static_assert(sizeof(overseer_payload) <= 64);
+    static_assert(sizeof(snail_payload) <= 64);
+    static_assert(sizeof(sky_whale_payload) <= 64);
+    static_assert(sizeof(yeek_payload) <= 64);
+    static_assert(sizeof(vulture_payload) <= 64);
     static_assert(sizeof(payload) <= 64);
     static_assert(std::is_trivially_copyable_v<payload>);
 
@@ -558,6 +925,12 @@ namespace creature {
         daddy_tube,
         // DeerTentacle (Tentacle): a rain deer's leg, its deer_leg data object
         deer_leg,
+        // LoachLeg / LoachTentacle (Tentacle): a loach's leg or mouth
+        // tentacle, its loach_limb data object
+        loach_leg,
+        loach_tentacle,
+        // VultureTentacle (Tentacle): a vulture's wing, its vulture_wing data object
+        vulture_wing,
     };
 
     struct daddy_tentacle_payload {
@@ -585,16 +958,30 @@ namespace creature {
         uint16_t data;
     };
 
+    struct loach_limb_payload {
+        // loach_limb
+        uint16_t data;
+    };
+
+    struct vulture_wing_payload {
+        // vulture_wing
+        uint16_t data;
+    };
+
     union part_payload {
         daddy_tentacle_payload daddy_tentacle;
         daddy_tube_payload daddy_tube;
         deer_leg_payload deer_leg;
+        loach_limb_payload loach_limb;
+        vulture_wing_payload vulture_wing;
 
         part_payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
     };
     static_assert(sizeof(daddy_tentacle_payload) <= 64);
     static_assert(sizeof(daddy_tube_payload) <= 64);
     static_assert(sizeof(deer_leg_payload) <= 64);
+    static_assert(sizeof(loach_limb_payload) <= 64);
+    static_assert(sizeof(vulture_wing_payload) <= 64);
     static_assert(sizeof(part_payload) <= 64);
     static_assert(std::is_trivially_copyable_v<part_payload>);
 }

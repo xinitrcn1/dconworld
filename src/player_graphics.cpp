@@ -6,6 +6,10 @@
 #include "body_parts.hpp"
 #include "cicada.hpp"
 #include "jetfish.hpp"
+#include "lantern_mouse.hpp"
+#include "moth_grub.hpp"
+#include "snail.hpp"
+#include "yeek.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "creature.hpp"
@@ -312,13 +316,13 @@ namespace player_graphics {
                 else
                     h.absolute_hunt_pos += vec2{float(flip) * 15.f, 10.f};
             } else if (anim == animation_index::vine_grab
-                && rot::vines::valid(state, room.id, rot::vines::position{w.player_get_vine(p), 0.f, w.player_get_vine_mimic(p)})) {
+                && rot::vines::valid(state, room.id, rot::vines::position{w.player_get_vine(p), 0.f, w.player_get_vine_mimic(p), w.player_get_vine_whisker(p)})) {
                 // hand over hand along the vine (a rot tube or a pole plant)
                 flag = false;
-                rot::vines::position const vp{w.player_get_vine(p), w.player_get_vine_float_pos(p), w.player_get_vine_mimic(p)};
+                rot::vines::position const vp{w.player_get_vine(p), w.player_get_vine_float_pos(p), w.player_get_vine_mimic(p), w.player_get_vine_whisker(p)};
                 float const along = 20.f * side * std::sin(frame / 30.f * 2.f * mathf::pi) / rot::vines::total_length(state, vp);
                 h.mode = limb_mode::hunt_absolute_position;
-                h.absolute_hunt_pos = rot::vines::on_vine_pos(state, rot::vines::position{vp.vine, vp.float_pos + along, vp.mimic})
+                h.absolute_hunt_pos = rot::vines::on_vine_pos(state, rot::vines::position{vp.vine, vp.float_pos + along, vp.mimic, vp.whisker})
                     + custom::perpendicular_vector(rot::vines::vine_dir(state, vp)) * rot::vines::vine_rad(state, vp) * side;
             }
             return flag;
@@ -345,9 +349,17 @@ namespace player_graphics {
             // HeavyCarry (a cicada): the first hand always holds on to it, the
             // other one unless it is busy climbing (no Remix)
             auto carried = cicada::held_by(state, p);
-            // (a jetfish is held the same way)
+            // (a jetfish, lantern mouse, moth grub, snail or yeek is held the same way)
             if (!carried)
                 carried = jetfish::held_by(state, p);
+            if (!carried)
+                carried = lantern_mouse::held_by(state, p);
+            if (!carried)
+                carried = moth_grub::held_by(state, p);
+            if (!carried)
+                carried = snail::held_by(state, p);
+            if (!carried)
+                carried = yeek::held_by(state, p);
             if (limb == 0 && carried)
                 flag = true;
             if (flag && carried) {

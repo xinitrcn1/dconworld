@@ -12,6 +12,11 @@
 #include "player_graphics.hpp"
 #include "tube_worm.hpp"
 #include "needle_worm.hpp"
+#include "barnacle.hpp"
+#include "lantern_mouse.hpp"
+#include "moth_grub.hpp"
+#include "snail.hpp"
+#include "yeek.hpp"
 
 namespace shortcuts {
     using rw::ivec2;
@@ -46,9 +51,14 @@ namespace shortcuts {
                     w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             cicada::follow_player(state, p, room, false);
             jetfish::follow_player(state, p, room, false);
+            lantern_mouse::follow_player(state, p, room, false);
+            moth_grub::follow_player(state, p, room, false);
+            snail::follow_player(state, p, room, false);
+            yeek::follow_player(state, p, room, false);
             centipede::follow_player(state, p, room, false);
             tube_worm::follow_player(state, p, room, false);
             needle_worm::follow_player(state, p, room, false);
+            barnacle::follow_player(state, p, room, false);
             // the slugcat on its back (and on that one's) comes along
             if (auto const r = piggyback::rider(state, p))
                 move_to_room(state, r, room);
@@ -71,9 +81,14 @@ namespace shortcuts {
             player_graphics::reset(state, p);
             cicada::follow_player(state, p, room.id, true);
             jetfish::follow_player(state, p, room.id, true);
+            lantern_mouse::follow_player(state, p, room.id, true);
+            moth_grub::follow_player(state, p, room.id, true);
+            snail::follow_player(state, p, room.id, true);
+            yeek::follow_player(state, p, room.id, true);
             centipede::follow_player(state, p, room.id, true);
             tube_worm::follow_player(state, p, room.id, true);
             needle_worm::follow_player(state, p, room.id, true);
+            barnacle::follow_player(state, p, room.id, true);
             if (auto const r = piggyback::rider(state, p))
                 spit_out(state, r, tile);
         }

@@ -17,6 +17,13 @@ namespace scavenger {
     // 1, poles at 2.5 (its swimming on the surface comes on top)
     inline constexpr pathing::movement movement{{10, 10, 25, 0, 0, 0, 0}, 0};
 
+    // Which Scavenger template: the plain one, Downpour's (DLCShared)
+    // ScavengerElite, the Watcher's ScavengerDisciple (a Templar). The
+    // payload's `variant` (creature_types.hpp), template_of's offset from
+    // tmpl::scavenger
+    enum class variant : uint8_t { scavenger, elite, disciple };
+    inline constexpr uint32_t variant_count = 3;
+
     // ScavengerAI.Behavior, the ones kept (no Investigate, FindPackLeader,
     // LeaveRoom, GuardOutpost, CommunicateWithPlayer)
     enum class behavior : uint8_t {
@@ -33,10 +40,42 @@ namespace scavenger {
     enum class move_mode : uint8_t { run, stand_still, crawl, climb, swim };
 
     // Scavenger.ScavengerAnimation, the throwing ones (ThrowCharge, Throw)
-    enum class animation : uint8_t { none, throw_charge, throw_ };
+    // and DLCShared's jumps (PrepareToJump, Jumping)
+    enum class animation : uint8_t { none, throw_charge, throw_, prepare_to_jump, jumping };
 
-    // ScavengerAI.ViolenceType
-    enum class violence_type : uint8_t { none, warning, lethal };
+    // ScavengerAI.ViolenceType (no ForFun); NonLethal only for the
+    // Disciple (a Templar) without its blood lust
+    enum class violence_type : uint8_t { none, warning, lethal, non_lethal };
+
+    // Scavenger.JumpFinder.JumpInstruction (goalCell: a tile of the room's
+    // path field)
+    struct jump_instruction {
+        rw::vec2 start_pos{0.f, 0.f};
+        rw::vec2 init_vel{0.f, 0.f};
+        float power = 0.f;
+        int32_t tick = 0;
+        rw::ivec2 goal{-1, -1};
+        uint8_t has_goal = 0;
+        uint8_t grab_when_landing = 0;
+    };
+
+    // Scavenger.JumpFinder: throws test jumps from a tile of the path ahead,
+    // keeps the one landing closest to the destination
+    struct jump_finder {
+        rw::ivec2 start{-1, -1};
+        int32_t fade = 0;
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+        uint8_t ventured = 0;
+        // bestJump (has_best: not null); vanilla's bestJump is the same
+        // object as currentJump once a landing on it was found, so its tick
+        // keeps counting with the current one's (best_shares)
+        uint8_t has_best = 0;
+        uint8_t best_shares = 0;
+        jump_instruction current;
+        jump_instruction best;
+    };
 
     // MovementConnection, as far as the scavenger looks at one: a step of the
     // path field (MovementType Standard, OpenDiagonal, DropToFloor)
@@ -102,6 +141,24 @@ namespace scavenger {
         int32_t past_head = 0;
         // lookPoint (the AI moves it about)
         rw::vec2 look_point{0.f, 0.f};
+        // The Elite's and the Templar's jumps (JumpLogicUpdate): its
+        // jumpFinders, actOnJump (has_act), jumpCounter, addDelay, jumpCell
+        // (a tile of the path field), spin
+        static constexpr int32_t max_jump_finders = 4;
+        jump_finder finders[max_jump_finders];
+        uint8_t finder_count = 0;
+        uint8_t has_act = 0;
+        uint8_t has_jump_cell = 0;
+        int8_t spin = 0;
+        rw::ivec2 act_start{-1, -1};
+        int32_t act_fade = 0;
+        jump_instruction act;
+        int32_t jump_counter = 0;
+        int32_t add_delay = 0;
+        rw::ivec2 jump_cell{-1, -1};
+        // PrepareToJumpAnimation.animationLength, cycleTime
+        int32_t jump_anim_length = 30;
+        float jump_cycle = 0.f;
     };
 
     // ScavengerAI, simplified, and Scavenger.cs's combat (the animation
@@ -149,6 +206,45 @@ namespace scavenger {
         rw::vec2 aim_target{0.f, 0.f};
         float throw_flip = 1.f;
         dcon::item_id thrown_item;
+
+        // The Templar's (the Disciple's) ScavengerAI: bloodLust, PingCD,
+        // stunnedCreature, targetedBodyChunk, Scavenger.boomerangCharge; the
+        // spear it threw, watched for HitAnObjectWithWeapon
+        int32_t blood_lust = 0;
+        int32_t ping_cd = 0;
+        dcon::creature_id stunned_creature;
+        dcon::creature_id targeted;
+        uint8_t targeted_chunk = 0;
+        uint8_t boomerang_charge = 0;
+        dcon::item_id watched_throw;
+        // Scavenger.karmaLevels, karmicArmorTriggered, karmicArmorTimer,
+        // karmicArmorResetTime
+        int32_t karma_levels = 0;
+        uint8_t armor_triggered = 0;
+        int32_t armor_timer = 45;
+        int32_t armor_reset_time = 45;
+        // the KarmicArmor object (armor_alive: in the room): its karmaLevel
+        // and shakeAmount
+        uint8_t armor_alive = 0;
+        int32_t armor_level = 0;
+        float armor_shake = 0.f;
+        // KarmicShockwave (the armor exploding): frame (< 0: none), the
+        // creatures it hit
+        static constexpr int32_t max_hit = 16;
+        int32_t shock_frame = -1;
+        rw::vec2 shock_pos{0.f, 0.f};
+        uint8_t shock_hit_count = 0;
+        dcon::creature_id shock_hit[max_hit];
+        // DisciplePing (ping_frame < 0: none): where, rad, radIncrement,
+        // the objects it hit
+        int32_t ping_frame = -1;
+        rw::vec2 ping_pos{0.f, 0.f};
+        float ping_rad = 0.f;
+        float ping_inc = 0.f;
+        uint8_t ping_hit_count = 0;
+        dcon::creature_id ping_hit[max_hit];
+        // Scavenger.readyToReleaseMask (the Elite's VultureMask dropped)
+        uint8_t mask_released = 0;
     };
 
     // HSLColor
@@ -229,6 +325,10 @@ namespace scavenger {
         static constexpr int32_t max_teeth = 8;
         uint8_t teeth_count = 0;
         float teeth[max_teeth][2];
+        // the mask (VultureMaskGraphics, not drawn): 0 none, the Elite's
+        // 1 KrakenMask, 2 SpikeMask, 3 HornedMask, 4 SadMask, 5 the
+        // Templar's
+        uint8_t mask = 0;
     };
 
     // ScavengerHand (Limb), with its spearPosAdd and grabPos

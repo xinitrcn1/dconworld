@@ -9,6 +9,9 @@
 #include "dens.hpp"
 #include "centipede.hpp"
 #include "daddy.hpp"
+#include "garbage_worm.hpp"
+#include "sky_whale.hpp"
+#include "vulture.hpp"
 #include "leech.hpp"
 #include "lizard.hpp"
 #include "reports.hpp"
@@ -258,10 +261,46 @@ namespace spawns {
             return make(type::jetfish, 0);
         if (t == "scavenger" || t == "scav")
             return make(type::scavenger, 0);
+        if (t == "scavengerelite" || t == "elitescavenger")
+            return make(type::scavenger, uint8_t(scavenger::variant::elite));
+        if (t == "scavengerdisciple" || t == "disciple")
+            return make(type::scavenger, uint8_t(scavenger::variant::disciple));
         if (t == "deer" || t == "raindeer")
             return make(type::deer, 0);
         if (t == "mirosbird" || t == "miros")
             return make(type::miros, 0);
+        if (t == "barnacle")
+            return make(type::barnacle, 0);
+        if (t == "eggbug")
+            return make(type::egg_bug, uint8_t(egg_bug::variant::egg_bug));
+        if (t == "firebug")
+            return make(type::egg_bug, uint8_t(egg_bug::variant::fire_bug));
+        if (t == "garbageworm")
+            return make(type::garbage_worm, 0);
+        if (t == "lanternmouse" || t == "mouse")
+            return make(type::lantern_mouse, 0);
+        if (t == "loach")
+            return make(type::loach, uint8_t(loach::variant::loach));
+        if (t == "rotloach")
+            return make(type::loach, uint8_t(loach::variant::rot));
+        if (t == "mothgrub")
+            return make(type::moth_grub, 0);
+        if (t == "overseer")
+            return make(type::overseer, 0);
+        if (t == "snail")
+            return make(type::snail, 0);
+        if (t == "skywhale")
+            return make(type::sky_whale, 0);
+        if (t == "altskywhale")
+            return make(type::sky_whale, 1);
+        if (t == "yeek")
+            return make(type::yeek, 0);
+        if (t == "vulture")
+            return make(type::vulture, uint8_t(vulture::variant::vulture));
+        if (t == "kingvulture")
+            return make(type::vulture, uint8_t(vulture::variant::king));
+        if (t == "mirosvulture")
+            return make(type::vulture, uint8_t(vulture::variant::miros));
         // a cicada's size: 1 the white CicadaA
         if (t == "cicadaa")
             return make(type::cicada, 0, 1.f);
@@ -346,6 +385,36 @@ namespace spawns {
         };
         if (!room)
             return miss(r.no_room);
+        // GarbageWorm: its den is the room's GarbageHoles node, not a pipe
+        // (WorldLoader puts it there, GarbageWormAI.MoveAbstractCreatureToGarbage):
+        // made out in the room, each in a free garbage hole, never in a den
+        if (k->kind == creature::type::garbage_worm) {
+            auto const view = world::get_room_view(state, room);
+            if (garbage_worm::hole_count(view) == 0)
+                return miss(r.no_den);
+            auto const gdata = parse_data(s.data);
+            uint32_t made = 0;
+            int32_t const n = std::max(1, s.count);
+            for (int32_t i = 0; i < n; ++i) {
+                int32_t const number = ++state.next_issued_id;
+                int32_t const seed = gdata.seed >= 0 ? gdata.seed : number;
+                auto const saved = state.random;
+                state.random = rw::rng{uint32_t(seed) * 0x9E3779B1u ^ 0x5BD1E995u};
+                if (state.random.state == 0)
+                    state.random.state = 0x2545F491u;
+                state.spawn_seed = seed;
+                auto const c = garbage_worm::create(state, room, rw::vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f});
+                state.spawn_seed = -1;
+                state.random = saved;
+                if (!c)
+                    continue;
+                w.creature_set_spawn_flags(c, gdata.flags);
+                ++made;
+                ++r.made["garbage worm"];
+                ++r.creatures;
+            }
+            return made;
+        }
         auto const entrance = dens::den_entrance(state, room, uint8_t(s.den));
         if (!entrance)
             return miss(r.no_den);
@@ -359,6 +428,9 @@ namespace spawns {
         // a Daddy in its AlternateForm is the Mother's size
         if (d.kind == creature::type::daddy && d.variety == uint8_t(daddy::variant::daddy) && (flags & dens::flag_alternate_form))
             d.variety = uint8_t(daddy::variant::mother);
+        // a SkyWhale in its AlternateForm is the AltVariant
+        if (d.kind == creature::type::sky_whale && (flags & dens::flag_alternate_form))
+            d.variety = 1;
         uint32_t made = 0;
         int32_t const n = std::max(1, s.count);
         for (int32_t i = 0; i < n; ++i) {
@@ -377,7 +449,8 @@ namespace spawns {
             state.random = saved;
             if (!c)
                 continue;
-            w.creature_set_spawn_flags(c, flags);
+            // (keeping the TentacleImmune a loach gives itself in create)
+            w.creature_set_spawn_flags(c, uint8_t(flags | (d.kind == creature::type::loach ? dens::flag_tentacle_immune : 0)));
             if (d.kind == creature::type::lizard)
                 w.creature_get_payload(c).lizard.spawn_data_evil = data.mean;
             dens::set_home(state, c, room, uint8_t(s.den));
@@ -396,6 +469,7 @@ namespace spawns {
             case creature::type::daddy: key = std::string{daddy::to_string(daddy::variant(d.variety))} + " long legs"; break;
             case creature::type::cicada: key = d.size != 0.f ? "white squidcada (CicadaA)" : "dark squidcada (CicadaB)"; break;
             case creature::type::needle_worm: key = d.variety == uint8_t(needle_worm::variant::small) ? "baby noodlefly" : "noodlefly"; break;
+            case creature::type::vulture: key = vulture::to_string(vulture::variant(d.variety)); break;
             default: break;
             }
             ++r.made[key];
@@ -434,11 +508,33 @@ namespace spawns {
                         ++r.lineages;
                 }
                 if (s.room == "OFFSCREEN") {
-                    // the offscreen den: only kinds that aren't ported live there
-                    if (kind_of(s.type))
+                    // the offscreen den (there is none here)
+                    auto const k = kind_of(s.type);
+                    if (k && k->kind == creature::type::sky_whale) {
+                        // the Watcher's sky whales live off screen and fly into
+                        // the region's rooms with SkyWhalePathfinding nodes
+                        sky_whale::spawn_offscreen(state, region, s, r);
+                    } else if (k && k->kind == creature::type::vulture) {
+                        // a vulture gets a den of a room of its region with
+                        // open sky over it
+                        int32_t const n = std::max(1, s.count);
+                        for (int32_t i = 0; i < n; ++i) {
+                            if (auto const den = vulture::offscreen_den(state, region, state.next_issued_id + 1 + i * 7919)) {
+                                auto one = s;
+                                one.room = std::string{state.to_string_view(w.room_get_name(den->first))};
+                                one.den = den->second;
+                                one.count = 1;
+                                spawn_in_den(state, den->first, one, r);
+                            } else {
+                                ++r.no_room;
+                            }
+                        }
+                    } else if (k) {
+                        // the other ported kinds that live there are left out
                         ++r.no_room;
-                    else
+                    } else {
                         r.skipped[s.type] += uint32_t(std::max(1, s.count));
+                    }
                     continue;
                 }
                 spawn_in_den(state, state.find_room(text::to_lowercase_native(s.room)), s, r);

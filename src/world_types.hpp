@@ -64,6 +64,8 @@ namespace world {
         rotten_fruit,    // Watcher's RottenDangleFruit
         data_pearl,
         puff_ball,       // PuffBall: bursts into spores, rain deer eat it
+        egg_bug_egg,     // EggBugEgg: an egg bug's egg, edible (2 bites, 1 pip)
+        fire_egg,        // FireEgg: a fire bug's egg: edible, or tossed: sticks and blows up
         count
     };
 
@@ -285,6 +287,9 @@ namespace world {
         reliable_spear,   // ReliableSpear: always a spear
         multiplayer_item, // MultiplayerItem: name the item type, extra the chance
         puff_ball,
+        // SkyWhalePathfinding: a node of the sky whales' path (handle: the
+        // line's other end, from pos)
+        sky_whale_node,
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]

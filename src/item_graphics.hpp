@@ -24,6 +24,8 @@ namespace item_graphics {
         bool saint = false;
         // RoomPalette.texture.GetPixel(11, 4) (PuffBall.ApplyPalette)
         rw::vec3 texel_11_4{0.f, 0.f, 0.f};
+        // RoomPalette.fogColor (EggBugEgg/FireEgg.ApplyPalette)
+        rw::vec3 fog{0.f, 0.f, 0.f};
     };
 
     // the item's sprites in vanilla order (the Items container); false for

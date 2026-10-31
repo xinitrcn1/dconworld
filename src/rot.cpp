@@ -12,6 +12,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "pole_mimic.hpp"
+#include "sky_whale.hpp"
 
 namespace rot {
     using rw::ivec2;
@@ -1319,21 +1320,32 @@ namespace rot {
             struct vref {
                 dcon::rot_tube_id tube;
                 dcon::creature_id mimic;
+                // a sky whale's whisker + 1 (SkyWhaleWhisker; `mimic` the whale)
+                uint8_t whisker = 0;
                 bool operator==(vref const&) const = default;
             };
-            vref ref(position const& p) { return vref{p.vine, p.mimic}; }
-            position at(vref v, float f) { return position{v.tube, f, v.mimic}; }
+            vref ref(position const& p) { return vref{p.vine, p.mimic, p.whisker}; }
+            position at(vref v, float f) { return position{v.tube, f, v.mimic, v.whisker}; }
 
             // IClimbableVine: TotalPositions, Pos, Rad, Mass, Push
             uint32_t total_positions(sys::game_state const& state, vref v) {
+                if (v.whisker)
+                    return sky_whale::vine_positions(state, v.mimic, v.whisker - 1u);
                 return v.mimic ? pole_mimic::vine_positions(state, v.mimic) : state.world.rot_tube_get_segments(v.tube).size();
             }
             vec2 vpos(sys::game_state const& state, vref v, uint32_t i) {
+                if (v.whisker)
+                    return sky_whale::vine_pos(state, v.mimic, v.whisker - 1u, i);
                 return v.mimic ? pole_mimic::vine_pos(state, v.mimic, i) : state.world.rot_tube_get_segments(v.tube)[i].pos;
             }
             constexpr float vrad = 2.f;
-            float vmass(vref v) { return v.mimic ? pole_mimic::vine_mass : 0.25f; }
+            float vrad_of(vref v) { return v.whisker ? sky_whale::vine_rad : vrad; }
+            float vmass(vref v) { return v.whisker ? sky_whale::vine_mass : v.mimic ? pole_mimic::vine_mass : 0.25f; }
             void vpush(sys::game_state& state, vref v, uint32_t i, vec2 movement) {
+                if (v.whisker) {
+                    sky_whale::vine_push(state, v.mimic, v.whisker - 1u, i, movement);
+                    return;
+                }
                 if (v.mimic) {
                     pole_mimic::vine_push(state, v.mimic, i, movement);
                     return;
@@ -1423,6 +1435,13 @@ namespace rot {
                     if (pole_mimic::currently_climbable(state, c))
                         f(vref{dcon::rot_tube_id{}, c});
                 });
+                // and the sky whales' whiskers
+                rooms::for_each_creature(state, room, creature::type::sky_whale, [&](dcon::creature_id c) {
+                    uint32_t const n = sky_whale::whiskers(state, c);
+                    for (uint32_t i = 0; i < n; ++i)
+                        if (sky_whale::vine_climbable(state, c, i))
+                            f(vref{dcon::rot_tube_id{}, c, uint8_t(i + 1)});
+                });
             }
         }
 
@@ -1433,6 +1452,11 @@ namespace rot {
         }
 
         bool valid(sys::game_state const& state, dcon::room_id room, position const& p) noexcept {
+            if (p.whisker) {
+                auto const& w = state.world;
+                return w.creature_is_valid(p.mimic) && w.creature_get_type(p.mimic) == creature::type::sky_whale
+                    && rooms::room_of(state, p.mimic) == room && sky_whale::vine_climbable(state, p.mimic, p.whisker - 1u);
+            }
             if (p.mimic) {
                 auto const& w = state.world;
                 return w.creature_is_valid(p.mimic) && w.creature_get_type(p.mimic) == creature::type::pole_mimic && w.creature_get_away(p.mimic) == 0
@@ -1445,13 +1469,17 @@ namespace rot {
         float total_length(sys::game_state const& state, position const& p) { return length_of(state, ref(p)); }
 
         void being_climbed_on(sys::game_state& state, position const& p, dcon::creature_id by) {
+            if (p.whisker) {
+                sky_whale::being_climbed_on(state, p.mimic, p.whisker - 1u);
+                return;
+            }
             // (ClimbableCorruptionTube.BeingClimbedOn does nothing)
             if (p.mimic)
                 pole_mimic::being_climbed_on(state, p.mimic, by);
         }
 
         bool currently_climbable(sys::game_state const& state, position const& p) {
-            return !p.mimic || pole_mimic::currently_climbable(state, p.mimic);
+            return p.whisker ? sky_whale::vine_climbable(state, p.mimic, p.whisker - 1u) : (!p.mimic || pole_mimic::currently_climbable(state, p.mimic));
         }
 
         std::optional<position> overlap(sys::game_state const& state, dcon::room_id room, vec2 pos, float rad) {
@@ -1461,7 +1489,7 @@ namespace rot {
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t j = 0; j + 1 < n; ++j) {
                     vec2 const a = vpos(state, v, j), b = vpos(state, v, j + 1);
-                    if (!overlapping_segment(a, vrad, b, vrad, pos, rad))
+                    if (!overlapping_segment(a, vrad_of(v), b, vrad_of(v), pos, rad))
                         continue;
                     vec2 const c = closest_point_on_segment(a, b, pos);
                     float const d = rw::distance(pos, c);
@@ -1480,7 +1508,7 @@ namespace rot {
             return rw::lerp(vpos(state, ref(p), s.a), vpos(state, ref(p), s.b), s.t);
         }
 
-        float vine_rad(sys::game_state const&, position) { return vrad; }
+        float vine_rad(sys::game_state const&, position p) { return vrad_of(ref(p)); }
 
         vec2 vine_dir(sys::game_state const& state, position p) {
             span const s = span_at(state, p);
@@ -1516,7 +1544,7 @@ namespace rot {
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t j = 0; j + 1 < n; ++j) {
                     vec2 const a = vpos(state, v, j), b = vpos(state, v, j + 1);
-                    if (!overlapping_segment(a, vrad, b, vrad, here, rad))
+                    if (!overlapping_segment(a, vrad_of(v), b, vrad_of(v), here, rad))
                         continue;
                     vec2 const c = closest_point_on_segment(a, b, here);
                     float d = rw::distance(c, goal);

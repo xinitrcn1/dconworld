@@ -16,6 +16,7 @@
 
 #include "selftest.hpp"
 #include "tracker.hpp"
+#include "gates.hpp"
 #include "audio.hpp"
 #include "physics.hpp"
 #include "centipede.hpp"
@@ -30,6 +31,17 @@
 #include "scavenger.hpp"
 #include "deer.hpp"
 #include "miros.hpp"
+#include "barnacle.hpp"
+#include "egg_bug.hpp"
+#include "garbage_worm.hpp"
+#include "lantern_mouse.hpp"
+#include "loach.hpp"
+#include "moth_grub.hpp"
+#include "overseer.hpp"
+#include "snail.hpp"
+#include "sky_whale.hpp"
+#include "yeek.hpp"
+#include "vulture.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
@@ -1850,8 +1862,9 @@ namespace selftest {
         }
         {
             // the failsafe: a slugcat that stays in the open airlock (never
-            // past the far door) doesn't keep it shut; 5 s on, the middle
-            // closes on it and the sides open again
+            // past the far door) doesn't keep it shut; 2.5 s on (the gate
+            // runs twice as fast), the middle closes on it and the sides
+            // open again
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t x, int32_t y) {
                 if (y < 8) return '#';
                 if ((x == 23 || x == 24) && y <= 16) return '#';
@@ -1867,15 +1880,17 @@ namespace selftest {
             w.try_create_gate_location(g, gate_room);
             sim s(gs, gate_room, feet_at(19, 8));
             bool const opened = s.until(1200, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_open; });
-            // it stays where it is: held open for 5 s, no longer
-            bool const held = s.until(5 * 40 - 10, [&] { return w.gate_get_mode(g) != world::gate_mode::middle_open; }) == false;
+            // it stays where it is: held open for 2.5 s, no longer
+            bool const held = s.until(5 * 40 / 2 - 10, [&] { return w.gate_get_mode(g) != world::gate_mode::middle_open; }) == false;
             bool const gave_up = s.until(20, [&] { return w.gate_get_mode(g) == world::gate_mode::closing_middle; });
             bool const reset = s.until(1000, [&] { return w.gate_get_mode(g) == world::gate_mode::middle_closed; });
             auto const view = world::get_room_view(gs, gate_room);
             bool const sides_open = view.get_tile(14, 9).t == terrain::air && view.get_tile(32, 9).t == terrain::air;
-            // and it doesn't cycle again with the slugcat still in the middle
-            s.run(400);
-            bool const stays = w.gate_get_mode(g) == world::gate_mode::middle_closed;
+            // and with the slugcat still over the middle (a living creature
+            // on the gate) the failsafe starts it again, after 2.5 s
+            bool const early_again = s.until(5 * 40 / 2 - 10, [&] { return w.gate_get_mode(g) != world::gate_mode::middle_closed; });
+            bool const again = !early_again && s.until(60, [&] { return w.gate_get_mode(g) == world::gate_mode::closing_air_lock; });
+            bool const stays = again;
             char d[128];
             std::snprintf(d, sizeof(d), " opened=%d held=%d gave_up=%d reset=%d sides_open=%d stays=%d", int(opened), int(held), int(gave_up), int(reset),
                 int(sides_open), int(stays));
@@ -1883,7 +1898,7 @@ namespace selftest {
         }
         {
             // the failsafe for a contested gate: something on both sides of
-            // the middle (vanilla waits for good) starts the cycle after 5 s
+            // the middle (vanilla waits for good) starts the cycle after 2.5 s
             auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t, int32_t y) { return y < 8 ? '#' : ' '; }));
             auto& w = gs.world;
             w.room_set_is_gate(gate_room, true);
@@ -1898,12 +1913,33 @@ namespace selftest {
                 w.creature_set_stun(liz, 10);
                 s.run(1);
                 started = w.gate_get_mode(g) == world::gate_mode::closing_air_lock;
-                early = early || (started && t < 190);
+                early = early || (started && t < 90);
             }
             char d[96];
             std::snprintf(d, sizeof(d), " started=%d after %u ticks early=%d", int(started), t, int(early));
             r.check("region gate cycles when contested", started && !early, s.describe() + d);
             creature::destroy(gs, liz);
+        }
+        {
+            // a closing door is solid only where its slab has come down to:
+            // half shut, its top rows are walls and its bottom rows still air
+            auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t, int32_t y) { return y < 8 ? '#' : ' '; }));
+            auto& w = gs.world;
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::closing_air_lock);
+            w.gate_set_door_goal(g, rw::vec3{1.f, 0.f, 0.f});
+            w.try_create_gate_location(g, gate_room);
+            sim s(gs, gate_room, feet_at(8, 8));
+            bool const half = s.until(400, [&] { return w.gate_get_door_closed(g)[0] >= 0.5f; });
+            auto const view = world::get_room_view(gs, gate_room);
+            bool const top = view.get_tile(14, gates::door_top_y).t == terrain::solid && view.get_tile(15, gates::door_top_y).t == terrain::solid;
+            bool const bottom = view.get_tile(14, gates::door_bottom_y).t == terrain::air && view.get_tile(14, gates::door_bottom_y + 2).t == terrain::air;
+            bool const shut = s.until(400, [&] { return w.gate_get_door_closed(g)[0] >= 1.f; })
+                && world::get_room_view(gs, gate_room).get_tile(14, gates::door_bottom_y).t == terrain::solid;
+            char d[96];
+            std::snprintf(d, sizeof(d), " half=%d top=%d bottom=%d shut=%d", int(half), int(top), int(bottom), int(shut));
+            r.check("region gate door follows its slab", half && top && bottom && shut, s.describe() + d);
         }
 
         // a placed object from the room's settings, spawned on the first visit
@@ -2716,14 +2752,14 @@ namespace selftest {
             // campaign filters, spawn data
             std::string const text = "ROOMS\nTEST_A : DISCONNECTED\nEND ROOMS\n\nCREATURES\n"
                 "//all\n"
-                "TEST_A : 3-Green, 3-CicadaA-2, 3-Vulture\n"
+                "TEST_A : 3-Green, 3-CicadaA-2, 3-TempleGuard\n"
                 "(White,Yellow)TEST_A : 3-Pink-{Seed:1234}\n"
                 "(Red)TEST_A : 3-Red\n"
                 "(X-White)TEST_A : 3-Black\n"
                 "LINEAGE : TEST_A : 3 : NONE-0.1, Blue-0.5, Red-0\n"
                 "LINEAGE : TEST_A : 3 : Centipede-{0.7}-0.5, Red-0\n"
                 "TEST_A : 3-Small Centipede-{Night,Seed:55}-3\n"
-                "OFFSCREEN : 0-Vulture-2\n"
+                "OFFSCREEN : 0-TempleGuard-2\n"
                 "END CREATURES\n";
             auto const white = spawns::parse(text, player::slugcat_name::white);
             auto const red = spawns::parse(text, player::slugcat_name::red);
@@ -2738,7 +2774,7 @@ namespace selftest {
             bool const data = (night.flags & dens::flag_night) && night.seed == 55 && size.size == 0.7f && spawns::parse_data("{PreCycle,Lavasafe}").flags == (dens::flag_pre_cycle | dens::flag_lava_safe);
             bool const kinds = spawns::kind_of("Small Centipede") && spawns::kind_of("Small Centipede")->variety == uint8_t(centipede::variant::small)
                 && spawns::kind_of("Caramel")->variety == uint8_t(lizard::breed::caramel) && spawns::kind_of("CicadaA")->size == 1.f
-                && spawns::kind_of("TerrorLongLegs")->variety == uint8_t(daddy::variant::mother) && !spawns::kind_of("Vulture") && !spawns::kind_of("NONE");
+                && spawns::kind_of("TerrorLongLegs")->variety == uint8_t(daddy::variant::mother) && !spawns::kind_of("TempleGuard") && spawns::kind_of("KingVulture")->variety == uint8_t(vulture::variant::king) && !spawns::kind_of("NONE");
             // made in a room's den: the count, the skipped kind, NONE, the seed
             auto const st_ptr = sys::make_game_state();
             auto& st = *st_ptr;
@@ -2762,7 +2798,7 @@ namespace selftest {
                 in_den += dens::where_is(st, c) == dens::where::den ? 1 : 0;
                 nights += st.world.creature_get_spawn_flags(c) & dens::flag_night ? 1 : 0;
             });
-            bool const spawned = made == 8 && in_den == 8 && nights == 3 && rep.skipped["Vulture"] == 1;
+            bool const spawned = made == 8 && in_den == 8 && nights == 3 && rep.skipped["TempleGuard"] == 1;
             char d[200];
             std::snprintf(d, sizeof(d), " parsed=%d (%zu lines) filters=%d data=%d kinds=%d made=%u in_den=%u night=%u", int(parsed), white.size(), int(filters),
                 int(data), int(kinds), made, in_den, nights);
@@ -3728,12 +3764,48 @@ namespace selftest {
                     break;
                 case creature::type::scavenger:
                     ok = scavenger::spawn_spot(room, tile);
+                    d.variety = uint8_t(std::min(uint32_t(rng.value() * float(scavenger::variant_count)), scavenger::variant_count - 1));
                     break;
                 case creature::type::deer:
                     ok = deer::spawn_spot(room, tile);
                     break;
                 case creature::type::miros:
                     ok = miros::spawn_spot(room, tile);
+                    break;
+                case creature::type::barnacle:
+                    ok = barnacle::spawn_spot(room, tile);
+                    break;
+                case creature::type::egg_bug:
+                    ok = egg_bug::spawn_spot(room, tile);
+                    d.variety = uint8_t(rng.value() < 0.5f ? egg_bug::variant::egg_bug : egg_bug::variant::fire_bug);
+                    break;
+                case creature::type::garbage_worm:
+                    ok = garbage_worm::spawn_spot(room, tile);
+                    break;
+                case creature::type::lantern_mouse:
+                    ok = lantern_mouse::spawn_spot(room, tile);
+                    break;
+                case creature::type::loach:
+                    ok = loach::spawn_spot(room, tile);
+                    break;
+                case creature::type::moth_grub:
+                    ok = moth_grub::spawn_spot(room, tile);
+                    break;
+                case creature::type::overseer:
+                    ok = overseer::spawn_spot(room, tile);
+                    break;
+                case creature::type::snail:
+                    ok = snail::spawn_spot(room, tile);
+                    break;
+                case creature::type::sky_whale:
+                    ok = sky_whale::spawn_spot(room, tile);
+                    break;
+                case creature::type::yeek:
+                    ok = yeek::spawn_spot(room, tile);
+                    break;
+                case creature::type::vulture:
+                    ok = vulture::spawn_spot(room, tile);
+                    d.variety = uint8_t(rng.range(0, int32_t(vulture::variant_count)));
                     break;
                 case creature::type::count:
                     break;

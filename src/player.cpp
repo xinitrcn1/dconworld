@@ -8,6 +8,7 @@
 #include "physics.hpp"
 #include "cicada.hpp"
 #include "jetfish.hpp"
+#include "lantern_mouse.hpp"
 #include "creature.hpp"
 #include "items.hpp"
 #include "rot.hpp"
@@ -537,6 +538,7 @@ namespace player {
             w.creature_set_vessel_shortcut(p.cr, dcon::shortcut_id{});
             p.state.world.player_set_vine(p.id, dcon::rot_tube_id{});
             p.state.world.player_set_vine_mimic(p.id, dcon::creature_id{});
+            p.state.world.player_set_vine_whisker(p.id, 0);
             p.air_in_lungs() = 1.f;
             p.levitation_gravity() = 0.9f;
             p.levitation_air_resistance() = 0.999f;
@@ -1353,6 +1355,7 @@ namespace player {
                         p.animation() = animation_index::vine_grab;
                         x.state.world.player_set_vine(p.id, vp->vine);
                         x.state.world.player_set_vine_mimic(p.id, vp->mimic);
+                        x.state.world.player_set_vine_whisker(p.id, vp->whisker);
                         p.vine_float_pos() = vp->float_pos;
                         p.want_to_grab() = 0;
                         break;
@@ -1360,7 +1363,7 @@ namespace player {
                 }
             }
             if (p.animation() == animation_index::vine_grab
-            && !rot::vines::valid(x.state, x.room.id, rot::vines::position{x.state.world.player_get_vine(p.id), 0.f, x.state.world.player_get_vine_mimic(p.id)}))
+            && !rot::vines::valid(x.state, x.room.id, rot::vines::position{x.state.world.player_get_vine(p.id), 0.f, x.state.world.player_get_vine_mimic(p.id), x.state.world.player_get_vine_whisker(p.id)}))
                 p.animation() = animation_index::none;
 
             p.dynamic_run_speed()[0] = 3.6f;
@@ -1454,6 +1457,12 @@ namespace player {
                     mass += x.state.world.body_chunk_get_mass(cicada::chunk(x.state, cc, i));
                 float slow = 1.f + mathf::max(0.f, mass - 0.2f) * 1.5f;
                 slow = mathf::lerp(slow, 1.f, mathf::pow(mathf::inverse_lerp(0.1f, 0.5f, lift), 0.2f));
+                p.dynamic_run_speed()[0] /= slow;
+                p.dynamic_run_speed()[1] /= slow;
+            }
+            // carrying a lantern mouse (HeavyCarry): slowed by its weight
+            if (auto const lm = lantern_mouse::held_by(x.state, p.id)) {
+                float const slow = lantern_mouse::carry_slowdown(x.state, lm);
                 p.dynamic_run_speed()[0] /= slow;
                 p.dynamic_run_speed()[1] /= slow;
             }
@@ -2649,7 +2658,7 @@ namespace player {
                 p.dynamic_run_speed()[0] = 0.f;
                 p.dynamic_run_speed()[1] = 0.f;
                 p.body_mode() = body_mode_index::default_;
-                vines::position vp{x.state.world.player_get_vine(p.id), p.vine_float_pos(), x.state.world.player_get_vine_mimic(p.id)};
+                vines::position vp{x.state.world.player_get_vine(p.id), p.vine_float_pos(), x.state.world.player_get_vine_mimic(p.id), x.state.world.player_get_vine_whisker(p.id)};
                 vec2 const dir = swim_dir(x, true);
                 vines::being_climbed_on(x.state, vp, p.cr);
                 if (rw::magnitude(dir) > 0.f) {
@@ -2672,6 +2681,7 @@ namespace player {
                 }
                 x.state.world.player_set_vine(p.id, vp.vine);
                 x.state.world.player_set_vine_mimic(p.id, vp.mimic);
+                x.state.world.player_set_vine_whisker(p.id, vp.whisker);
                 p.vine_float_pos() = vp.float_pos;
                 x.vel(0) += p.vine_climb_cursor() / 190.f;
                 x.vel(1) -= p.vine_climb_cursor() / 190.f;

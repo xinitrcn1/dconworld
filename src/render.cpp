@@ -22,6 +22,17 @@
 #include "pole_mimic_graphics.hpp"
 #include "tentacle_plant_graphics.hpp"
 #include "jetfish_graphics.hpp"
+#include "barnacle_graphics.hpp"
+#include "egg_bug_graphics.hpp"
+#include "garbage_worm_graphics.hpp"
+#include "lantern_mouse_graphics.hpp"
+#include "loach_graphics.hpp"
+#include "moth_grub_graphics.hpp"
+#include "overseer_graphics.hpp"
+#include "snail_graphics.hpp"
+#include "sky_whale_graphics.hpp"
+#include "yeek_graphics.hpp"
+#include "vulture_graphics.hpp"
 #include "scavenger_graphics.hpp"
 #include "deer_graphics.hpp"
 #include "miros_graphics.hpp"
@@ -759,6 +770,7 @@ namespace render {
             // the story's timeline
             pal.saint = s.story_slugcat == player::slugcat_name::saint;
             pal.texel_11_4 = palette_texel(r, s, room, 11, 4);
+            pal.fog = palette_texel(r, s, room, 1, 7);
             return pal;
         }
 
@@ -845,6 +857,21 @@ namespace render {
                 if (!item_graphics::pearl_light(s, it, alpha, pal, l) || l.rad < 0.5f)
                     return;
                 p.glow(l.pos, l.rad, to_rgba(l.color, l.alpha), to_rgba(l.color, 0.f));
+            });
+        }
+
+        // MouseGraphics' LightSource (vanilla's ForegroundLights container): a
+        // soft disc of the mouse's colour while the room is dark, wherever the
+        // mouse is (hanging, running, or in the slugcat's hands: the light it
+        // carries). The LightSource lighting the level itself (the room
+        // shader's lights) isn't reproduced
+        void build_mouse_lights(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            painter p{r.batch};
+            float const darkness = palette_darkness(r, s, room.id);
+            rooms::for_each_creature(s, room.id, creature::type::lantern_mouse, [&](dcon::creature_id c) {
+                lantern_mouse_graphics::light l;
+                if (lantern_mouse_graphics::light_of(s, c, alpha, darkness, l) && l.rad >= 0.5f)
+                    p.glow(l.pos, l.rad, to_rgba(l.color, l.alpha), to_rgba(l.color, 0.f));
             });
         }
         void dangle_fruit_cmds(sys::game_state const& s, dcon::item_id it, bool rotted, vec2 pos, float alpha, rw::vec3 black, float darkness,
@@ -2231,6 +2258,39 @@ namespace render {
                 case creature::type::miros:
                     build_kind_sprites(r, s, room, t, alpha, atlas, miros_graphics::build);
                     break;
+                case creature::type::barnacle:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, barnacle_graphics::build);
+                    break;
+                case creature::type::egg_bug:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, egg_bug_graphics::build);
+                    break;
+                case creature::type::garbage_worm:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, garbage_worm_graphics::build);
+                    break;
+                case creature::type::lantern_mouse:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, lantern_mouse_graphics::build);
+                    break;
+                case creature::type::loach:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, loach_graphics::build);
+                    break;
+                case creature::type::moth_grub:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, moth_grub_graphics::build);
+                    break;
+                case creature::type::overseer:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, overseer_graphics::build);
+                    break;
+                case creature::type::snail:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, snail_graphics::build);
+                    break;
+                case creature::type::sky_whale:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, sky_whale_graphics::build);
+                    break;
+                case creature::type::yeek:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, yeek_graphics::build);
+                    break;
+                case creature::type::vulture:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, vulture_graphics::build);
+                    break;
                 case creature::type::count:
                     break;
                 }
@@ -3049,6 +3109,8 @@ namespace render {
         }
         // the Foreground container: the pearls' glimmer
         draw_flat([&] { build_pearl_lights(r, s, room, alpha); });
+        // the lantern mice's glow
+        draw_flat([&] { build_mouse_lights(r, s, room, alpha); });
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 

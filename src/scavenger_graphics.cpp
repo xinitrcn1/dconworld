@@ -413,12 +413,15 @@ namespace scavenger_graphics {
             }
         }
 
-        // ScavengerGraphics.GenerateColors (a plain scavenger's)
-        void generate_colors(looks& lk, scavenger::personality const& p, rw::unity_random& r) {
+        // ScavengerGraphics.GenerateColors (the Elite's body hue and red
+        // eyes in)
+        void generate_colors(looks& lk, scavenger::personality const& p, rw::unity_random& r, bool elite) {
             float const mel = lk.general_melanin;
             float num = r.value() * 0.1f;
             if (r.value() < 0.025f)
                 num = mathf::pow(r.value(), 0.4f);
+            if (elite)
+                num = mathf::pow(r.value(), 5.f);
             float num2;
             {
                 float const a = mathf::lerp(-1.f, 1.f, r.value());
@@ -510,7 +513,7 @@ namespace scavenger_graphics {
             deco.lightness *= mathf::lerp(mel, r.value(), 0.5f);
             {
                 float const l = r.value() < 0.2f ? 0.5f + r.value() * 0.5f : 0.5f;
-                lk.eye_color = scavenger::hsl{num3, 1.f, l};
+                lk.eye_color = scavenger::hsl{elite ? 0.f : num3, 1.f, l};
             }
             if (lk.colored_pupils > 0)
                 lk.eye_color.lightness = mathf::lerp(lk.eye_color.lightness, 1.f, 0.3f);
@@ -528,7 +531,7 @@ namespace scavenger_graphics {
         }
 
         // ScavengerGraphics.IndividualVariations
-        void individual_variations(looks& lk, scavenger::personality const& p, rw::unity_random& r) {
+        void individual_variations(looks& lk, scavenger::personality const& p, rw::unity_random& r, bool elite) {
             lk.general_melanin = push_from_half(r.value(), 2.f);
             lk.head_size = custom::clamped_random_variation(0.5f, 0.5f, 0.1f, r);
             lk.eartler_width = r.value();
@@ -538,6 +541,8 @@ namespace scavenger_graphics {
                 lk.eye_size = mathf::pow(mathf::max(0.f, mathf::lerp(a, mathf::pow(lk.head_size, 0.5f), t)), mathf::lerp(0.95f, 0.55f, p.sympathy));
             }
             lk.narrow_eyes = r.value() < mathf::lerp(0.3f, 0.7f, p.sympathy) ? 0.f : mathf::pow(r.value(), mathf::lerp(0.5f, 1.5f, p.sympathy));
+            if (elite)
+                lk.narrow_eyes = 1.f;
             lk.eyes_angle = mathf::pow(r.value(), mathf::lerp(2.5f, 0.5f, mathf::pow(p.energy, 0.03f)));
             {
                 float const a = r.value();
@@ -903,10 +908,13 @@ namespace scavenger_graphics {
         auto const& p = w.scavenger_data_get_personality(d);
         looks lk;
         rw::unity_random r{w.scavenger_data_get_seed(d)};
-        individual_variations(lk, p, r);
-        generate_colors(lk, p, r);
-        // the back cosmetic
-        lk.hard_spikes = r.value() < 0.1f;
+        auto const var = scavenger::variant_of(state, c);
+        bool const elite = var == scavenger::variant::elite;
+        individual_variations(lk, p, r, elite);
+        generate_colors(lk, p, r, elite);
+        // (the Templar's TemplarCloak rolls from its own seed)
+        // the back cosmetic (the Elite's always HardBackSpikes)
+        lk.hard_spikes = r.value() < 0.1f || elite;
         // BackTuftsAndRidges
         lk.scale_graf = uint8_t(r.range(0, 7));
         lk.x_flip = lk.scale_graf == 3 ? 1.f : -1.f;
@@ -1011,6 +1019,13 @@ namespace scavenger_graphics {
                 lk.teeth[l][0] = 0.f;
             lk.teeth[l][1] = mathf::lerp(0.5f, 1.f, std::sin(f * mathf::pi)) * num3;
         }
+        // the mask (VultureMaskGraphics isn't drawn): the Elite's overrideSprite
+        // roll, the Templar's own
+        lk.mask = 0;
+        if (elite)
+            lk.mask = uint8_t(1 + r.range(0, 4));
+        if (var == scavenger::variant::disciple)
+            lk.mask = 5;
         w.scavenger_data_set_looks(d, lk);
     }
 
@@ -1309,6 +1324,8 @@ namespace scavenger_graphics {
         vec3 const body = mix(rgb(lk.body_color), black, mathf::lerp(lk.body_color_black, 1.f, darkness));
         vec3 const headc = mix(rgb(lk.head_color), black, mathf::lerp(lk.head_color_black, 1.f, darkness));
         vec3 const deco = mix(rgb(lk.decoration_color), black, darkness * 0.9f);
+        // the eartlers' tips: the Templar's RainWorld.GoldRGB
+        vec3 const eartler_tips = scavenger::variant_of(state, c) == scavenger::variant::disciple ? vec3{0.529f, 0.365f, 0.184f} : deco;
         vec3 const eye = darkness < 0.5f ? rgb(lk.eye_color) : saturate(rgb(lk.eye_color), mathf::inverse_lerp(0.5f, 1.f, darkness));
         vec3 const belly = mix(rgb(lk.belly_color), black, mathf::lerp(lk.belly_color_black, 1.f, darkness));
         vec3 eye_white = eye, pupil = headc;
@@ -1677,7 +1694,7 @@ namespace scavenger_graphics {
                 }
                 if (lk.colored_eartler_tips)
                     for (int k = 0; k < 2; ++k)
-                        col[(len - 1) * 4 + 3 - k] = rgba(deco);
+                        col[(len - 1) * 4 + 3 - k] = rgba(eartler_tips);
                 sprites::long_mesh(out, strip, v, col, size_t(len * 4));
             }
         }

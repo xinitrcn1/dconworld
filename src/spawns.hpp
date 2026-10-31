@@ -10,8 +10,9 @@
 // den : Type[-{data}]-chance, ...`), each line possibly for some campaigns
 // only (`(White,Yellow)ROOM...`, `(X-Saint)` for all but those). A fresh
 // save's lineage spawns its first step (NONE: nothing). OFFSCREEN spawns go
-// to the world's offscreen den (scavengers, vultures...: none of them is
-// ported). At world load every spawn of a ported kind is made in its den,
+// to the world's offscreen den, which isn't here: a vulture gets a den of a
+// sky room of its region, sky whales are parked above their region, the
+// other kinds that live there are left out. At world load every spawn of a ported kind is made in its den,
 // all regions and rooms at once, with an EntityID-like number for its seed
 // ({Seed:N} replaces it); creatures leave their dens as their
 // remainInDenCounter runs out.

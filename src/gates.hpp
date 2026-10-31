@@ -1,10 +1,13 @@
 #pragma once
 
 // RegionGate: the three door airlock of gate rooms. Doors are tile columns
-// 14+9k (two wide), rows 8..16, solid while a door is closed. The creatures
-// in the room (the slugcats included) work it: it cycles when they all wait
-// in one middle zone. Karma locks are not enforced yet (karma isn't
-// tracked), every gate opens.
+// 14+9k (two wide), rows 8..16; a door's rows go solid from the top as its
+// slab comes down (not vanilla: the whole opening goes solid at once there).
+// The creatures in the room (the slugcats included) work it: it cycles when
+// they all wait in one middle zone, or when any living creature stays over
+// the middle long enough (the failsafe). The cycle runs twice as fast as
+// vanilla's. Karma locks are not enforced yet (karma isn't tracked), every
+// gate opens.
 
 #include <cstdint>
 #include <optional>

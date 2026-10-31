@@ -145,6 +145,31 @@ add_executable(rwcpp
     src/puff_ball.cpp
     src/miros.cpp
     src/miros_graphics.cpp
+    src/barnacle.cpp
+    src/barnacle_graphics.cpp
+    src/egg_bug.cpp
+    src/egg_bug_graphics.cpp
+    src/garbage_worm.cpp
+    src/garbage_worm_graphics.cpp
+    src/lantern_mouse.cpp
+    src/lantern_mouse_graphics.cpp
+    src/loach.cpp
+    src/loach_graphics.cpp
+    src/moth_grub.cpp
+    src/moth_grub_graphics.cpp
+    src/overseer.cpp
+    src/overseer_graphics.cpp
+    src/snail.cpp
+    src/snail_graphics.cpp
+    src/sky_whale.cpp
+    src/sky_whale_graphics.cpp
+    src/yeek.cpp
+    src/yeek_graphics.cpp
+    src/egg_bug_egg.cpp
+    src/vulture.cpp
+    src/vulture_tentacle.cpp
+    src/vulture_tusks.cpp
+    src/vulture_graphics.cpp
     src/worm_grass.cpp
     src/rot.cpp
     src/warps.cpp

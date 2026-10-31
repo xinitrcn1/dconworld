@@ -16,6 +16,7 @@
 #include "gates.hpp"
 #include "items.hpp"
 #include "outposts.hpp"
+#include "overseer.hpp"
 #include "pathing.hpp"
 #include "piggyback.hpp"
 #include "player.hpp"
@@ -138,6 +139,10 @@ namespace simulation {
             auto const r = spawns::spawn_world(state);
             if (game_world)
                 reports::add_log(spawns::to_string(r));
+            // WorldLoader.GeneratePopulation's overseers and the player guide
+            uint32_t const overseers = overseer::spawn_world(state);
+            if (game_world)
+                reports::add_log(std::to_string(overseers) + " overseers");
         }
         // the NPC slugcats in their shelters
         if (state.npc_shelter_chance > 0.f && !state.npcs_populated) {

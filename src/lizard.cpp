@@ -13,6 +13,7 @@
 #include "physics.hpp"
 #include "player.hpp"
 #include "tracker.hpp"
+#include "barnacle.hpp"
 
 namespace lizard {
     using rw::ivec2;
@@ -238,6 +239,11 @@ namespace lizard {
                 if (x.is(breed::red)) {
                     // Creature.LoseAllGrasps of what it bit
                     creature::lose_all_grasps(x.state, t);
+                }
+                // Barnacle.LoseShell, the bitten chunk pulled halfway to the jaws
+                if (creature::is(w, t, ::creature::type::barnacle)) {
+                    barnacle::lose_shell(x.state, t);
+                    w.body_chunk_get_pos(kc) = rw::lerp(w.body_chunk_get_pos(kc), x.pos(0), 0.5f);
                 }
                 ai::bit_creature(x.state, x.id, x.room);
                 // no Remix: a killing bite at the breed's chance, a slugcat's

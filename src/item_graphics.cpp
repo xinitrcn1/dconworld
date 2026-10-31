@@ -5,6 +5,7 @@
 #include "items.hpp"
 #include "outposts.hpp"
 #include "puff_ball.hpp"
+#include "egg_bug_egg.hpp"
 #include "physics.hpp"
 
 namespace item_graphics {
@@ -248,6 +249,10 @@ namespace item_graphics {
             return true;
         case item_type::puff_ball:
             puff_ball::build(state, it, alpha, pal.black, pal.texel_11_4, out);
+            return true;
+        case item_type::egg_bug_egg:
+        case item_type::fire_egg:
+            egg_bug_egg::build(state, it, alpha, pal.black, pal.fog, pal.darkness, out);
             return true;
         default:
             return false;

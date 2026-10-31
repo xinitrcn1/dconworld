@@ -32,12 +32,16 @@
 //   daddy long legs: up to 15 chunks with a connection between every
 //     pair (105), 12 tentacles each -> 65536, 12 leg graphics and 14 dead
 //     legs and danglers each -> 65536 tubes (enough for ~2500), so
-//     creature parts -> 131072; their segments, grab paths, tentacle
+//     creature parts -> 131072 (262144 with the loaches' 11 limbs each);
+//     their segments, grab paths, tentacle
 //     chunks and graphic segments pooled
 //   leeches: 1 chunk
 //   grapple worms: 2 chunks, 1 connection each
 //   noodleflies, pole plants, monster kelp, jetfish, scavengers, rain
-//     deer, miros birds: a data object each, 4096 of a kind
+//     deer, miros birds, barnacles, egg bugs, lantern mice, loaches,
+//     overseers, snails, yeeks: a data object each, 4096 of a kind
+//     (garbage worms, moth grubs 1024; vultures 2048; sky whales 512; loach
+//     limbs 32768, vulture wings 16384)
 //   worm grass: patches and worms of the rooms that have them
 //   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
@@ -74,6 +78,17 @@ include{"scavenger_types.hpp"}
 include{"deer_types.hpp"}
 include{"puff_ball_types.hpp"}
 include{"miros_types.hpp"}
+include{"barnacle_types.hpp"}
+include{"egg_bug_types.hpp"}
+include{"garbage_worm_types.hpp"}
+include{"lantern_mouse_types.hpp"}
+include{"loach_types.hpp"}
+include{"moth_grub_types.hpp"}
+include{"overseer_types.hpp"}
+include{"snail_types.hpp"}
+include{"sky_whale_types.hpp"}
+include{"yeek_types.hpp"}
+include{"vulture_types.hpp"}
 include{"worm_grass_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
@@ -731,6 +746,8 @@ object{
 	property{ name{vine} type{rot_tube_id} }
 	// ...or a pole plant's stalk (a PoleMimic vine)
 	property{ name{vine_mimic} type{creature_id} }
+	// ...or a sky whale's whisker (vine_mimic the whale): the whisker + 1
+	property{ name{vine_whisker} type{uint8_t} }
 	property{ name{vine_float_pos} type{float} }
 	property{ name{vine_grab_delay} type{int32_t} }
 	property{ name{vine_climb_cursor} type{rw::vec2} }
@@ -1440,6 +1457,254 @@ object{
 	property{ name{graphics} type{::miros::graphics_state} }
 }
 
+// Barnacles (the Watcher's Barnacle.cs + BarnacleAI + BarnacleGraphics): two
+// chunks, the shell (mainBodyChunk) and the underside
+object{
+	name{barnacle_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// Barnacle.CreatureParams (rolled from the seed)
+	property{ name{params} type{::barnacle::creature_params} }
+	// Barnacle.cs's movement state the payload has no room for, bites left
+	property{ name{body} type{::barnacle::body_state} }
+	// BarnacleAI: sub behaviours, idle/water/panic spots, the leader's idle spot
+	property{ name{ai} type{::barnacle::ai_state} }
+	// the graphics module (purely cosmetic: legs, cones)
+	property{ name{graphics} type{::barnacle::graphics_state} }
+}
+
+// Egg bugs and fire bugs (EggBug.cs + a simpler EggBugAI + EggBugGraphics):
+// two chunks, the head (mainBodyChunk) and the body
+object{
+	name{egg_bug_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed (the hue)
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality.dominance (CollideWithKin)
+	property{ name{dominance} type{float} }
+	// EggBug's movement state the payload has no room for
+	property{ name{move} type{::egg_bug::move_state} }
+	// EggBugAI: idle wandering, walkWithBug, the smoothed utilities
+	property{ name{ai} type{::egg_bug::ai_state} }
+	// the fire bug's spines and stabbing (CarryObject)
+	property{ name{fire} type{::egg_bug::fire_state} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::egg_bug::graphics_state} }
+}
+
+// EggBugEgg / FireEgg: hue, swell, tail, bites, a FireEgg's fuse and where
+// it is stuck, for every egg item
+object{
+	name{egg_bug_egg_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{s} type{::egg_bug::egg_state} }
+}
+relationship{
+	name{egg_bug_egg_of}
+	tag{save}
+	link{ object{egg_bug_egg_data} name{data} type{unique} }
+	link{ object{item} name{item} type{unique} }
+	primary_key{data}
+}
+
+// Garbage worm (GarbageWorm.cs + GarbageWormAI + GarbageWormState)
+object{
+	name{garbage_worm_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// GarbageWorm.tentacle (its chunks, idealLength, retractFac, grab dest)
+	property{ name{tentacle} type{::garbage_worm::tentacle_state} }
+	// GarbageWormAI: the creature interests, floor tiles, stress, counters
+	property{ name{ai} type{::garbage_worm::ai_state} }
+	// GarbageWormState.angryAt (the slugcats)
+	property{ name{angry} type{::garbage_worm::angry_list} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::garbage_worm::graphics_state} }
+}
+
+// Lantern mice (LanternMouse.cs + MouseAI + MouseGraphics)
+object{
+	name{lantern_mouse_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// LanternMouse.iVars (GenerateIVars: dominance, hue)
+	property{ name{ivars} type{::lantern_mouse::individual_variations} }
+	// ropeAttatchedPos, lastRopeClearPos, ropeBends
+	property{ name{rope} type{::lantern_mouse::rope_state} }
+	// MouseAI (fear, pullUp, dangle, walkWithMouse, counters) and the
+	// movement bookkeeping (specialMoveDestination, lastFollowedConnection,
+	// struggle countdowns)
+	property{ name{ai} type{::lantern_mouse::ai_state} }
+	// the graphics module (cosmetic; its light is drawn as a glow)
+	property{ name{graphics} type{::lantern_mouse::graphics_state} }
+}
+
+// Loach (Watcher's Loach.cs + LoachAI): six chunks, the head
+// (mainBodyChunk) to the sac; its six legs (LoachLeg) and five mouth
+// tentacles (LoachTentacle) are creature_parts with a loach_limb each
+object{
+	name{loach_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// CreatureParams.dominance
+	property{ name{dominance} type{float} }
+	// LoachAI, its StuckTracker, LoachState's interest, Loach.eatObjects
+	property{ name{ai} type{::loach::ai_state} }
+	// LoachGraphics' danglers, every segment of every dangler in order
+	property{ name{danglers} type{vector_pool{1048576}{::loach::dangler_segment}} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::loach::graphics_state} }
+}
+
+// LoachLeg / LoachTentacle (Tentacle): a loach's limb, the creature_part's data
+object{
+	name{loach_limb}
+	storage_type{erasable}
+	size{32768}
+	tag{save}
+	property{ name{t} type{::loach::limb} }
+	property{ name{segments} type{vector_pool{1048576}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{1048576}{rw::ivec2}} }
+}
+
+// Moth grub (Watcher's MothGrub.cs + MothGrubAI)
+object{
+	name{moth_grub_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// MothGrubAI's CreatureLooker
+	property{ name{ai} type{::moth_grub::ai_state} }
+	// the graphics module (purely cosmetic): the body wrapping, the limbs
+	property{ name{graphics} type{::moth_grub::graphics_state} }
+}
+
+// Overseers (Overseer.cs + OverseerAI + the parts of OverseerAbstractAI a
+// realized overseer needs + OverseerGraphics)
+object{
+	name{overseer_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// Overseer: root, zip progress, zip path (fixed array), conversation partner
+	property{ name{body} type{::overseer::body_state} }
+	// OverseerAI + OverseerAbstractAI (target creature, destination, guide)
+	property{ name{ai} type{::overseer::ai_state} }
+	// the graphics module (purely cosmetic): mycelia, lens
+	property{ name{graphics} type{::overseer::graphics_state} }
+}
+
+// Snail (Snail.cs + SnailAI + SnailGraphics): two chunks, the body
+// (mainBodyChunk) and the shell
+object{
+	name{snail_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// the constructor's rolls: Snail.miniClicks, shellColor
+	property{ name{looks} type{::snail::looks} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::snail::graphics_state} }
+}
+
+// Sky whales (the Watcher's SkyWhale.cs + SkyWhaleAI + SkyWhaleGraphics):
+// six chunks (mainBodyChunk 1), the whiskers the slugcat climbs. Few of
+// them: the world spawns ~13, the tests only in rooms with nodes
+object{
+	name{sky_whale_data}
+	storage_type{erasable}
+	size{512}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// SkyWhale.CreatureParams (GenerateIVars), the abstract AI's timeToTire
+	property{ name{params} type{::sky_whale::creature_params} }
+	// SkyWhaleAI: the nodes used, idle spot, stuck tracker, field goal
+	property{ name{ai} type{::sky_whale::ai_state} }
+	// SkyWhale.whiskers (SkyWhaleWhisker: the vines the slugcat climbs)
+	property{ name{whiskers} type{::sky_whale::whisker_set} }
+	// SkyWhale.GasJet out of stab wounds (particles only)
+	property{ name{jets} type{::sky_whale::gas_jets} }
+	// the graphics module's constructor layout and its moving parts
+	// (purely cosmetic; the simulation never reads them)
+	property{ name{layout} type{::sky_whale::graphics_layout} }
+	property{ name{graphics} type{::sky_whale::graphics_state} }
+}
+
+// Yeeks (Yeek.cs + YeekAI + YeekState + YeekGraphics)
+object{
+	name{yeek_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality; YeekGraphics.CreateCosmeticAppearance's colours
+	property{ name{personality} type{::yeek::personality} }
+	property{ name{looks} type{::yeek::looks} }
+	// YeekAI.yeekSquad; CurrentIdlePos, idleBordomCountdown, roomInterest,
+	// focusCreature, Yeek.lastSafeClimb
+	property{ name{squad} type{::yeek::squad} }
+	property{ name{idle} type{::yeek::idle_state} }
+	// the graphics module and the YeekTails (purely cosmetic)
+	property{ name{graphics} type{::yeek::graphics_state} }
+}
+
+// Vultures (Vulture.cs + a simpler VultureAI, KingTusks) in their three
+// templates (the payload's variant): five chunks; the wings (VultureTentacle)
+// are creature_parts with a vulture_wing each. ~17 KB each: 2048 of them
+object{
+	name{vulture_data}
+	storage_type{erasable}
+	size{2048}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// Vulture's state the payload has no room for, its thrusters
+	property{ name{body} type{::vulture::body_state} }
+	// VultureAI (simplified) with its DisencouragedTracker
+	property{ name{ai} type{::vulture::ai_state} }
+	// Vulture.neck (a Tentacle) with its tile lists
+	property{ name{neck} type{::vulture::neck_state} }
+	// KingTusks (the king's; unused by the others)
+	property{ name{tusks} type{::vulture::king_tusks} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::vulture::graphics_state} }
+}
+
+// VultureTentacle (Tentacle): a vulture's wing, the creature_part's data
+object{
+	name{vulture_wing}
+	storage_type{erasable}
+	size{16384}
+	tag{save}
+	property{ name{t} type{::vulture::wing} }
+	property{ name{segments} type{vector_pool{524288}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{524288}{rw::ivec2}} }
+}
+
 // Worm grass (WormGrass): a room's patches (WormGrass.WormGrassPatch), made
 // on the room's first visit from its worm grass tiles and kept, like the rot
 object{
@@ -1516,7 +1781,7 @@ relationship{
 object{
 	name{creature_part}
 	storage_type{erasable}
-	size{131072}
+	size{262144}
 	tag{save}
 	property{ name{kind} type{::creature::part_kind} }
 	// its number among its owner's parts of its kind (Tentacle.tentacleNumber,

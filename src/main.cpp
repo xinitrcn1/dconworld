@@ -122,9 +122,14 @@ namespace {
             "  --tubeworm <x,y>    spawn a grapple worm (repeatable)\n"
             "  --creature <kind,x,y>  spawn any creature by its world file name (repeatable):\n"
             "                      BigNeedleWorm SmallNeedleWorm PoleMimic TentaclePlant JetFish\n"
-            "                      Scavenger Deer MirosBird, and the kinds above\n"
+            "                      Scavenger ScavengerElite ScavengerDisciple Deer MirosBird\n"
+            "                      Barnacle EggBug FireBug GarbageWorm LanternMouse Loach\n"
+            "                      RotLoach MothGrub Overseer Snail SkyWhale AltSkyWhale Yeek\n"
+            "                      Vulture KingVulture MirosVulture,\n"
+            "                      and the kinds above\n"
             "  --item <x,y,kind[,pearl]>  place an item (repeatable): rock spear explosive\n"
             "                      electric pearl (with a DataPearl type, e.g. cc) puffball\n"
+            "                      eggbugegg fireegg\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -789,6 +794,8 @@ int main(int argc, char* argv[]) {
                 else if (k == "electric") t = world::item_type::electric_spear;
                 else if (k == "pearl") t = world::item_type::data_pearl;
                 else if (k == "puffball") t = world::item_type::puff_ball;
+                else if (k == "eggbugegg") t = world::item_type::egg_bug_egg;
+                else if (k == "fireegg") t = world::item_type::fire_egg;
                 else if (k != "rock") std::fprintf(stderr, "unknown item %s, a rock instead\n", kind);
                 spawn_items.push_back({vec2{x, y}, t, pearl});
             }

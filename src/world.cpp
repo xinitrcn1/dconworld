@@ -1190,6 +1190,7 @@ namespace world {
                         {"ScavengerOutpost", thing_kind::scav_outpost}, {"ScavengerTreasury", thing_kind::scav_treasury},
                         {"ReliableSpear", thing_kind::reliable_spear}, {"MultiplayerItem", thing_kind::multiplayer_item},
                         {"PuffBall", thing_kind::puff_ball},
+                        {"SkyWhalePathfinding", thing_kind::sky_whale_node},
                     };
                     auto const it = std::find_if(std::begin(kinds), std::end(kinds), [&](auto const& k) { return k.first == parts[0]; });
                     if (it != std::end(kinds)) {

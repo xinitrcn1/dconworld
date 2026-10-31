@@ -6,7 +6,9 @@
 // comments in dcon_generated.txt) whose `type` says which kind's code runs
 // it: player.* (the slugcat), centipede.*, dropbug.*, cicada.*, lizard.*,
 // daddy.*, leech.*, tube_worm.*, needle_worm.*, pole_mimic.*,
-// tentacle_plant.*, jetfish.*, scavenger.*, deer.*, miros.*. Whatever doesn't depend on the kind is here and runs the
+// tentacle_plant.*, jetfish.*, scavenger.*, deer.*, miros.*, barnacle.*,
+// egg_bug.*, garbage_worm.*, lantern_mouse.*, loach.*, moth_grub.*,
+// overseer.*, snail.*, sky_whale.*, yeek.*, vulture.*. Whatever doesn't depend on the kind is here and runs the
 // same for all of them: the body and its chunks, Creature.Update's stun
 // countdown, being conscious, grasps, the other creatures it refers to (by
 // id: a tracked prey, a grasp, a bite), the projectile trace and Violence's
@@ -86,6 +88,39 @@ namespace creature {
     }
     inline dcon::miros_data_id miros_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::miros_data_id{dcon::miros_data_id::value_base_t(w.creature_get_payload(c).miros.data)};
+    }
+    inline dcon::barnacle_data_id barnacle_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::barnacle_data_id{dcon::barnacle_data_id::value_base_t(w.creature_get_payload(c).barnacle.data)};
+    }
+    inline dcon::egg_bug_data_id egg_bug_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::egg_bug_data_id{dcon::egg_bug_data_id::value_base_t(w.creature_get_payload(c).egg_bug.data)};
+    }
+    inline dcon::garbage_worm_data_id garbage_worm_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::garbage_worm_data_id{dcon::garbage_worm_data_id::value_base_t(w.creature_get_payload(c).garbage_worm.data)};
+    }
+    inline dcon::lantern_mouse_data_id lantern_mouse_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::lantern_mouse_data_id{dcon::lantern_mouse_data_id::value_base_t(w.creature_get_payload(c).lantern_mouse.data)};
+    }
+    inline dcon::loach_data_id loach_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::loach_data_id{dcon::loach_data_id::value_base_t(w.creature_get_payload(c).loach.data)};
+    }
+    inline dcon::moth_grub_data_id moth_grub_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::moth_grub_data_id{dcon::moth_grub_data_id::value_base_t(w.creature_get_payload(c).moth_grub.data)};
+    }
+    inline dcon::overseer_data_id overseer_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::overseer_data_id{dcon::overseer_data_id::value_base_t(w.creature_get_payload(c).overseer.data)};
+    }
+    inline dcon::snail_data_id snail_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::snail_data_id{dcon::snail_data_id::value_base_t(w.creature_get_payload(c).snail.data)};
+    }
+    inline dcon::sky_whale_data_id sky_whale_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::sky_whale_data_id{dcon::sky_whale_data_id::value_base_t(w.creature_get_payload(c).sky_whale.data)};
+    }
+    inline dcon::yeek_data_id yeek_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::yeek_data_id{dcon::yeek_data_id::value_base_t(w.creature_get_payload(c).yeek.data)};
+    }
+    inline dcon::vulture_data_id vulture_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::vulture_data_id{dcon::vulture_data_id::value_base_t(w.creature_get_payload(c).vulture.data)};
     }
 
     // every creature of kind `t`, in id order (setup, tests, the serial phases)

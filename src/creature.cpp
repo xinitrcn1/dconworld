@@ -31,6 +31,28 @@
 #include "deer_graphics.hpp"
 #include "miros.hpp"
 #include "miros_graphics.hpp"
+#include "barnacle.hpp"
+#include "barnacle_graphics.hpp"
+#include "egg_bug.hpp"
+#include "egg_bug_graphics.hpp"
+#include "garbage_worm.hpp"
+#include "garbage_worm_graphics.hpp"
+#include "lantern_mouse.hpp"
+#include "lantern_mouse_graphics.hpp"
+#include "loach.hpp"
+#include "loach_graphics.hpp"
+#include "moth_grub.hpp"
+#include "moth_grub_graphics.hpp"
+#include "overseer.hpp"
+#include "overseer_graphics.hpp"
+#include "snail.hpp"
+#include "snail_graphics.hpp"
+#include "sky_whale.hpp"
+#include "sky_whale_graphics.hpp"
+#include "yeek.hpp"
+#include "yeek_graphics.hpp"
+#include "vulture.hpp"
+#include "vulture_graphics.hpp"
 #include "migrate.hpp"
 #include "physics.hpp"
 #include "piggyback.hpp"
@@ -61,6 +83,17 @@ namespace creature {
         case type::scavenger: return "scavenger";
         case type::deer: return "rain deer";
         case type::miros: return "miros bird";
+        case type::barnacle: return "barnacle";
+        case type::egg_bug: return "egg bug";
+        case type::garbage_worm: return "garbage worm";
+        case type::lantern_mouse: return "lantern mouse";
+        case type::loach: return "loach";
+        case type::moth_grub: return "moth grub";
+        case type::overseer: return "overseer";
+        case type::snail: return "snail";
+        case type::sky_whale: return "sky whale";
+        case type::yeek: return "yeek";
+        case type::vulture: return "vulture";
         case type::count: break;
         }
         return "creature";
@@ -153,6 +186,50 @@ namespace creature {
             pl.miros = miros_payload{};
             pl.miros.data = uint16_t(w.create_miros_data().index());
             break;
+        case type::barnacle:
+            pl.barnacle = barnacle_payload{};
+            pl.barnacle.data = uint16_t(w.create_barnacle_data().index());
+            break;
+        case type::egg_bug:
+            pl.egg_bug = egg_bug_payload{};
+            pl.egg_bug.data = uint16_t(w.create_egg_bug_data().index());
+            break;
+        case type::garbage_worm:
+            pl.garbage_worm = garbage_worm_payload{};
+            pl.garbage_worm.data = uint16_t(w.create_garbage_worm_data().index());
+            break;
+        case type::lantern_mouse:
+            pl.lantern_mouse = lantern_mouse_payload{};
+            pl.lantern_mouse.data = uint16_t(w.create_lantern_mouse_data().index());
+            break;
+        case type::loach:
+            pl.loach = loach_payload{};
+            pl.loach.data = uint16_t(w.create_loach_data().index());
+            break;
+        case type::moth_grub:
+            pl.moth_grub = moth_grub_payload{};
+            pl.moth_grub.data = uint16_t(w.create_moth_grub_data().index());
+            break;
+        case type::overseer:
+            pl.overseer = overseer_payload{};
+            pl.overseer.data = uint16_t(w.create_overseer_data().index());
+            break;
+        case type::snail:
+            pl.snail = snail_payload{};
+            pl.snail.data = uint16_t(w.create_snail_data().index());
+            break;
+        case type::sky_whale:
+            pl.sky_whale = sky_whale_payload{};
+            pl.sky_whale.data = uint16_t(w.create_sky_whale_data().index());
+            break;
+        case type::yeek:
+            pl.yeek = yeek_payload{};
+            pl.yeek.data = uint16_t(w.create_yeek_data().index());
+            break;
+        case type::vulture:
+            pl.vulture = vulture_payload{};
+            pl.vulture.data = uint16_t(w.create_vulture_data().index());
+            break;
         case type::count:
             break;
         }
@@ -177,6 +254,17 @@ namespace creature {
         case type::scavenger: w.delete_scavenger_data(scavenger_data(w, c)); break;
         case type::deer: w.delete_deer_data(deer_data(w, c)); break;
         case type::miros: w.delete_miros_data(miros_data(w, c)); break;
+        case type::barnacle: w.delete_barnacle_data(barnacle_data(w, c)); break;
+        case type::egg_bug: w.delete_egg_bug_data(egg_bug_data(w, c)); break;
+        case type::garbage_worm: w.delete_garbage_worm_data(garbage_worm_data(w, c)); break;
+        case type::lantern_mouse: w.delete_lantern_mouse_data(lantern_mouse_data(w, c)); break;
+        case type::loach: w.delete_loach_data(loach_data(w, c)); break;
+        case type::moth_grub: w.delete_moth_grub_data(moth_grub_data(w, c)); break;
+        case type::overseer: w.delete_overseer_data(overseer_data(w, c)); break;
+        case type::snail: w.delete_snail_data(snail_data(w, c)); break;
+        case type::sky_whale: w.delete_sky_whale_data(sky_whale_data(w, c)); break;
+        case type::yeek: w.delete_yeek_data(yeek_data(w, c)); break;
+        case type::vulture: w.delete_vulture_data(vulture_data(w, c)); break;
         case type::count: break;
         }
         // its parts and their data objects
@@ -194,6 +282,13 @@ namespace creature {
                 break;
             case part_kind::deer_leg:
                 w.delete_deer_leg(dcon::deer_leg_id{dcon::deer_leg_id::value_base_t(pp.deer_leg.data)});
+                break;
+            case part_kind::loach_leg:
+            case part_kind::loach_tentacle:
+                w.delete_loach_limb(dcon::loach_limb_id{dcon::loach_limb_id::value_base_t(pp.loach_limb.data)});
+                break;
+            case part_kind::vulture_wing:
+                w.delete_vulture_wing(dcon::vulture_wing_id{dcon::vulture_wing_id::value_base_t(pp.vulture_wing.data)});
                 break;
             }
             w.delete_creature_part(p);
@@ -238,7 +333,9 @@ namespace creature {
     }
 
     uint32_t main_chunk(sys::game_state const& state, dcon::creature_id c) noexcept {
-        return state.world.creature_get_type(c) == type::centipede ? centipede::head_index(state, c) : 0;
+        auto const t = state.world.creature_get_type(c);
+        // (a sky whale's mainBodyChunkIndex is 1)
+        return t == type::centipede ? centipede::head_index(state, c) : t == type::sky_whale ? 1u : 0u;
     }
 
     //
@@ -394,9 +491,20 @@ namespace creature {
         case type::pole_mimic: return pole_mimic::create(state, room, pos);
         case type::tentacle_plant: return tentacle_plant::create(state, room, pos);
         case type::jetfish: return jetfish::create(state, room, pos);
-        case type::scavenger: return scavenger::create(state, room, pos);
+        case type::scavenger: return scavenger::create(state, room, pos, scavenger::variant(d.variety % scavenger::variant_count));
         case type::deer: return deer::create(state, room, pos);
         case type::miros: return miros::create(state, room, pos);
+        case type::barnacle: return barnacle::create(state, room, pos);
+        case type::egg_bug: return egg_bug::create(state, room, pos, egg_bug::variant(d.variety % egg_bug::variant_count));
+        case type::garbage_worm: return garbage_worm::create(state, room, pos);
+        case type::lantern_mouse: return lantern_mouse::create(state, room, pos);
+        case type::loach: return loach::create(state, room, pos, loach::variant(d.variety % loach::variant_count));
+        case type::moth_grub: return moth_grub::create(state, room, pos);
+        case type::overseer: return overseer::create(state, room, pos);
+        case type::snail: return snail::create(state, room, pos);
+        case type::sky_whale: return sky_whale::create(state, room, pos, d.variety != 0);
+        case type::yeek: return yeek::create(state, room, pos);
+        case type::vulture: return vulture::create(state, room, pos, vulture::variant(d.variety % vulture::variant_count));
         case type::count: break;
         }
         return dcon::creature_id{};
@@ -419,6 +527,17 @@ namespace creature {
         case type::scavenger: scavenger::destroy(state, c); return;
         case type::deer: deer::destroy(state, c); return;
         case type::miros: miros::destroy(state, c); return;
+        case type::barnacle: barnacle::destroy(state, c); return;
+        case type::egg_bug: egg_bug::destroy(state, c); return;
+        case type::garbage_worm: garbage_worm::destroy(state, c); return;
+        case type::lantern_mouse: lantern_mouse::destroy(state, c); return;
+        case type::loach: loach::destroy(state, c); return;
+        case type::moth_grub: moth_grub::destroy(state, c); return;
+        case type::overseer: overseer::destroy(state, c); return;
+        case type::snail: snail::destroy(state, c); return;
+        case type::sky_whale: sky_whale::destroy(state, c); return;
+        case type::yeek: yeek::destroy(state, c); return;
+        case type::vulture: vulture::destroy(state, c); return;
         case type::count: return;
         }
     }
@@ -488,6 +607,28 @@ namespace creature {
             return deer::describe(state, c) + dead;
         case type::miros:
             return miros::describe(state, c) + dead;
+        case type::barnacle:
+            return barnacle::describe(state, c) + dead;
+        case type::egg_bug:
+            return egg_bug::describe(state, c) + dead;
+        case type::garbage_worm:
+            return garbage_worm::describe(state, c) + dead;
+        case type::lantern_mouse:
+            return lantern_mouse::describe(state, c) + dead;
+        case type::loach:
+            return loach::describe(state, c) + dead;
+        case type::moth_grub:
+            return moth_grub::describe(state, c) + dead;
+        case type::overseer:
+            return overseer::describe(state, c) + dead;
+        case type::snail:
+            return snail::describe(state, c) + dead;
+        case type::sky_whale:
+            return sky_whale::describe(state, c) + dead;
+        case type::yeek:
+            return yeek::describe(state, c) + dead;
+        case type::vulture:
+            return vulture::describe(state, c) + dead;
         case type::count:
             break;
         }
@@ -603,6 +744,61 @@ namespace creature {
                 if (viewed)
                     miros_graphics::update(state, c, room);
                 return;
+            case type::barnacle:
+                barnacle::update(state, c, room);
+                if (viewed)
+                    barnacle_graphics::update(state, c, room);
+                return;
+            case type::egg_bug:
+                egg_bug::update(state, c, room);
+                if (viewed)
+                    egg_bug_graphics::update(state, c, room);
+                return;
+            case type::garbage_worm:
+                garbage_worm::update(state, c, room);
+                if (viewed)
+                    garbage_worm_graphics::update(state, c, room);
+                return;
+            case type::lantern_mouse:
+                lantern_mouse::update(state, c, room);
+                if (viewed)
+                    lantern_mouse_graphics::update(state, c, room);
+                return;
+            case type::loach:
+                loach::update(state, c, room);
+                if (viewed)
+                    loach_graphics::update(state, c, room);
+                return;
+            case type::moth_grub:
+                moth_grub::update(state, c, room);
+                if (viewed)
+                    moth_grub_graphics::update(state, c, room);
+                return;
+            case type::overseer:
+                overseer::update(state, c, room);
+                if (viewed)
+                    overseer_graphics::update(state, c, room);
+                return;
+            case type::snail:
+                snail::update(state, c, room);
+                if (viewed)
+                    snail_graphics::update(state, c, room);
+                return;
+            case type::sky_whale:
+                sky_whale::update(state, c, room);
+                if (viewed)
+                    sky_whale_graphics::update(state, c, room);
+                return;
+            case type::yeek:
+                yeek::update(state, c, room);
+                if (viewed)
+                    yeek_graphics::update(state, c, room);
+                return;
+            case type::vulture:
+                vulture::update(state, c, room);
+                if (viewed)
+                    vulture_graphics::update(state, c, room);
+                return;
             case type::count:
                 return;
             }
@@ -632,6 +828,17 @@ namespace creature {
             case type::scavenger: return scavenger::collides(state, c, t);
             case type::deer: return deer::collides(state, c, t);
             case type::miros: return miros::collides(state, c, t);
+            case type::barnacle: return barnacle::collides(state, c, t);
+            case type::egg_bug: return egg_bug::collides(state, c, t);
+            case type::garbage_worm: return garbage_worm::collides(state, c, t);
+            case type::lantern_mouse: return lantern_mouse::collides(state, c, t);
+            case type::loach: return loach::collides(state, c, t);
+            case type::moth_grub: return moth_grub::collides(state, c, t);
+            case type::overseer: return overseer::collides(state, c, t);
+            case type::snail: return snail::collides(state, c, t);
+            case type::sky_whale: return sky_whale::collides(state, c, t);
+            case type::yeek: return yeek::collides(state, c, t);
+            case type::vulture: return vulture::collides(state, c, t);
             case type::count: break;
             }
             return false;
@@ -655,6 +862,17 @@ namespace creature {
             case type::scavenger: scavenger::collide(state, c, room, i, t, j); return;
             case type::deer: deer::collide(state, c, room, i, t, j); return;
             case type::miros: miros::collide(state, c, room, i, t, j); return;
+            case type::barnacle: barnacle::collide(state, c, room, i, t, j); return;
+            case type::egg_bug: egg_bug::collide(state, c, room, i, t, j); return;
+            case type::garbage_worm: garbage_worm::collide(state, c, room, i, t, j); return;
+            case type::lantern_mouse: lantern_mouse::collide(state, c, room, i, t, j); return;
+            case type::loach: loach::collide(state, c, room, i, t, j); return;
+            case type::moth_grub: moth_grub::collide(state, c, room, i, t, j); return;
+            case type::overseer: overseer::collide(state, c, room, i, t, j); return;
+            case type::snail: snail::collide(state, c, room, i, t, j); return;
+            case type::sky_whale: sky_whale::collide(state, c, room, i, t, j); return;
+            case type::yeek: yeek::collide(state, c, room, i, t, j); return;
+            case type::vulture: vulture::collide(state, c, room, i, t, j); return;
             case type::count: return;
             }
         }
@@ -667,6 +885,10 @@ namespace creature {
             case type::centipede: centipede::collide_kin(state, c, i, other, j); return;
             case type::dropbug: dropbug::collide_kin(state, c, i, other, j); return;
             case type::cicada: cicada::collide_kin(state, c, i, other, j); return;
+            case type::barnacle: barnacle::collide_kin(state, c, i, other, j); return;
+            case type::egg_bug: egg_bug::collide_kin(state, c, i, other, j); return;
+            case type::lantern_mouse: lantern_mouse::collide_kin(state, c, i, other, j); return;
+            case type::snail: snail::collide_kin(state, c, i, other, j); return;
             case type::tube_worm:
                 tube_worm::collide(state, c);
                 tube_worm::collide(state, other);
@@ -678,6 +900,8 @@ namespace creature {
         void touched_kin(sys::game_state& state, dcon::creature_id c, dcon::creature_id other) {
             if (state.world.creature_get_type(c) == type::dropbug)
                 dropbug::touched_kin(state, c, other);
+            if (state.world.creature_get_type(c) == type::egg_bug)
+                egg_bug::touched_kin(state, c, other);
         }
 
         // a creature's reach from its chunk 0: whether two can touch at all
@@ -701,7 +925,8 @@ namespace creature {
             auto const& w = state.world;
             uint32_t const n = chunk_count(state, c);
             auto const t = w.creature_get_type(c);
-            if (t == type::leech || t == type::slugcat)
+            // (overseers are in collision layer 0: they touch nothing, kin included)
+            if (t == type::leech || t == type::slugcat || t == type::overseer)
                 return;
             float const rc = reach(state, c, n);
             vec2 const oc = w.body_chunk_get_pos(chunk(state, c, 0));
@@ -720,7 +945,7 @@ namespace creature {
                 }
                 if (other.index() <= c.index())
                     return;
-                if (ot == type::leech || (ot == t && !pushes_kin(t)) || w.creature_get_away(other) != 0)
+                if (ot == type::leech || ot == type::overseer || (ot == t && !pushes_kin(t)) || w.creature_get_away(other) != 0)
                     return;
                 uint32_t const m = chunk_count(state, other);
                 if (!custom::dist_less(oc, w.body_chunk_get_pos(chunk(state, other, 0)), rc + reach(state, other, m)))
@@ -813,6 +1038,17 @@ namespace creature {
         case type::scavenger: scavenger_graphics::reset_positions(state, c); return;
         case type::deer: deer_graphics::reset_positions(state, c); return;
         case type::miros: miros_graphics::reset_positions(state, c); return;
+        case type::barnacle: barnacle_graphics::reset_positions(state, c); return;
+        case type::egg_bug: egg_bug_graphics::reset_positions(state, c); return;
+        case type::garbage_worm: garbage_worm_graphics::reset_positions(state, c); return;
+        case type::lantern_mouse: lantern_mouse_graphics::reset_positions(state, c); return;
+        case type::loach: loach_graphics::reset_positions(state, c); return;
+        case type::moth_grub: moth_grub_graphics::reset_positions(state, c); return;
+        case type::overseer: overseer_graphics::reset_positions(state, c); return;
+        case type::snail: snail_graphics::reset_positions(state, c); return;
+        case type::sky_whale: sky_whale_graphics::reset_positions(state, c); return;
+        case type::yeek: yeek_graphics::reset_positions(state, c); return;
+        case type::vulture: vulture_graphics::reset_positions(state, c); return;
         case type::count: return;
         }
     }
@@ -837,6 +1073,17 @@ namespace creature {
         case type::scavenger: scavenger::place_in_room(state, c, room, at); break;
         case type::deer: deer::place_in_room(state, c, room, at); break;
         case type::miros: miros::place_in_room(state, c, room, at); break;
+        case type::barnacle: barnacle::place_in_room(state, c, room, at); break;
+        case type::egg_bug: egg_bug::place_in_room(state, c, room, at); break;
+        case type::garbage_worm: garbage_worm::place_in_room(state, c, room, at); break;
+        case type::lantern_mouse: lantern_mouse::place_in_room(state, c, room, at); break;
+        case type::loach: loach::place_in_room(state, c, room, at); break;
+        case type::moth_grub: moth_grub::place_in_room(state, c, room, at); break;
+        case type::overseer: overseer::place_in_room(state, c, room, at); break;
+        case type::snail: snail::place_in_room(state, c, room, at); break;
+        case type::sky_whale: sky_whale::place_in_room(state, c, room, at); break;
+        case type::yeek: yeek::place_in_room(state, c, room, at); break;
+        case type::vulture: vulture::place_in_room(state, c, room, at); break;
         default: break;
         }
         // a leech out of the den is done fleeing the rain
@@ -881,6 +1128,17 @@ namespace creature {
         case type::scavenger: scavenger::died(state, c); break;
         case type::deer: deer::died(state, c); break;
         case type::miros: miros::died(state, c); break;
+        case type::barnacle: barnacle::died(state, c); break;
+        case type::egg_bug: egg_bug::died(state, c); break;
+        case type::garbage_worm: garbage_worm::died(state, c); break;
+        case type::lantern_mouse: lantern_mouse::died(state, c); break;
+        case type::loach: loach::died(state, c); break;
+        case type::moth_grub: moth_grub::died(state, c); break;
+        case type::overseer: overseer::died(state, c); break;
+        case type::snail: snail::died(state, c); break;
+        case type::sky_whale: sky_whale::died(state, c); break;
+        case type::yeek: yeek::died(state, c); break;
+        case type::vulture: vulture::died(state, c); break;
         default: break;
         }
     }
@@ -929,6 +1187,12 @@ namespace creature {
             // nor a slugcat on another's back (SlugOnBack.ChangeOverlap)
             if (w.creature_get_type(c) == type::tube_worm && held(state, c))
                 return;
+            // a garbage worm drawn into its hole (GarbageWorm.canBeHitByWeapons)
+            if (w.creature_get_type(c) == type::garbage_worm && !garbage_worm::can_be_hit(state, c))
+                return;
+            // an overseer in its wall (Overseer.canBeHitByWeapons: extended > 0.2)
+            if (w.creature_get_type(c) == type::overseer && !overseer::can_be_hit(state, c))
+                return;
             if (is_slugcat(w, c) && piggyback::riding(state, player_of(state, c)))
                 return;
             // (nor the one it rides on, or anyone in its stack: Spearmaster
@@ -968,6 +1232,17 @@ namespace creature {
                 best = pf;
                 hit = ph;
                 part = pp;
+            }
+        }
+        // a vulture's neck or wing (IHaveAppendages) when closer
+        {
+            dcon::creature_id vh;
+            hit_part vp;
+            float vf = 2.f;
+            if (vulture::trace_appendages(state, room, from, to, thrown_by, vh, vp, vf) && vf < best) {
+                best = vf;
+                hit = vh;
+                part = vp;
             }
         }
         dcon::creature_id th;
@@ -1011,6 +1286,18 @@ namespace creature {
         case type::scavenger: scavenger::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::deer: deer::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::miros: miros::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::barnacle: barnacle::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::egg_bug: egg_bug::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::garbage_worm: garbage_worm::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::lantern_mouse: lantern_mouse::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::loach: loach::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::moth_grub: moth_grub::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::overseer: overseer::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::snail: snail::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::sky_whale: sky_whale::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::yeek: yeek::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        // (the chunk or an appendage: the neck, a wing)
+        case type::vulture: vulture::violence(state, c, part, momentum, damage, stun_bonus, type); return;
         case type::count: return;
         }
     }
@@ -1072,6 +1359,17 @@ namespace creature {
         case type::scavenger: scavenger::release(state, c, t); break;
         case type::deer: deer::release(state, c, t); break;
         case type::miros: miros::release(state, c, t); break;
+        case type::barnacle: barnacle::release(state, c, t); break;
+        case type::egg_bug: egg_bug::release(state, c, t); break;
+        case type::garbage_worm: garbage_worm::release(state, c, t); break;
+        case type::lantern_mouse: lantern_mouse::release(state, c, t); break;
+        case type::loach: loach::release(state, c, t); break;
+        case type::moth_grub: moth_grub::release(state, c, t); break;
+        case type::overseer: overseer::release(state, c, t); break;
+        case type::snail: snail::release(state, c, t); break;
+        case type::sky_whale: sky_whale::release(state, c, t); break;
+        case type::yeek: yeek::release(state, c, t); break;
+        case type::vulture: vulture::release(state, c, t); break;
         case type::count: break;
         }
         // the generic grasps on it
@@ -1098,5 +1396,8 @@ namespace creature {
     void flying_weapon(sys::game_state& state, dcon::room_id room, vec2 pos, vec2 vel, vec2 thrown_pos) {
         rooms::for_each_creature(state, room, type::dropbug, [&](dcon::creature_id c) { dropbug::flying_weapon(state, c, pos, vel, thrown_pos); });
         rooms::for_each_creature(state, room, type::needle_worm, [&](dcon::creature_id c) { needle_worm::flying_weapon(state, c, pos, vel); });
+        rooms::for_each_creature(state, room, type::egg_bug, [&](dcon::creature_id c) { egg_bug::flying_weapon(state, c, pos, vel); });
+        rooms::for_each_creature(state, room, type::overseer, [&](dcon::creature_id c) { overseer::flying_weapon(state, c, pos, vel); });
+        rooms::for_each_creature(state, room, type::yeek, [&](dcon::creature_id c) { yeek::flying_weapon(state, c, pos); });
     }
 }

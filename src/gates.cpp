@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -15,33 +16,60 @@ namespace gates {
     namespace mathf = rw::mathf;
 
     namespace {
+        // not vanilla: the whole cycle runs twice as fast as the game's
+        // (the doors' speeds, the start wait, the washing, the failsafes)
+        constexpr int32_t speed_up = 2;
         // Door.closeSpeed / openSpeed
-        constexpr float close_speed = 0.0055555557f;
-        constexpr float open_speed = 0.0045454544f;
+        constexpr float close_speed = 0.0055555557f * speed_up;
+        constexpr float open_speed = 0.0045454544f * speed_up;
         // ticks something has to stay over the gate's middle before it
         // cycles (vanilla's startCounter, without its stand-still wait)
-        constexpr int32_t trigger_ticks = 60;
+        constexpr int32_t trigger_ticks = 60 / speed_up;
+        // RegionGate's washing wait before the middle door opens
+        constexpr int32_t washing_ticks = 400 / speed_up;
         // not vanilla: a failsafe for creatures that stay in the airlock
         // (a lizard sitting in it, an NPC that can't find its way out): 5 s
-        // with its sides shut and it goes back to open, the middle door
-        // shutting on whatever is still in the way
-        constexpr int32_t held_ticks = 5 * 40;
+        // (2.5 s sped up) with its sides shut and it goes back to open, the
+        // middle door shutting on whatever is still in the way. The same
+        // span with any living creature over the middle starts the cycle
+        constexpr int32_t held_ticks = 5 * 40 / speed_up;
+        // the door's tile rows (door_bottom_y..door_top_y)
+        constexpr int32_t door_rows = door_top_y - door_bottom_y + 1;
 
-        // RegionGate.ChangeDoorStatus: rewrites the door's tiles
-        void change_door_status(sys::game_state& state, dcon::room_id room, int32_t door, bool open) {
+        // the door's rows that are solid while it is `closed` (0..1) shut:
+        // the slab comes down from the top of its opening (as drawn), so
+        // the rows it reaches into, from the top
+        int32_t solid_rows(float closed) noexcept {
+            if (closed <= 0.f)
+                return 0;
+            return std::clamp(int32_t(std::ceil(closed * float(door_rows) - 0.001f)), 1, door_rows);
+        }
+
+        // RegionGate.ChangeDoorStatus, not vanilla: rather than the whole
+        // opening going solid the moment the door starts closing (an
+        // invisible wall under a door still high up), the door's tiles
+        // follow its slab: the top `rows` rows solid, the rest air.
+        // Rewrites only what changed
+        void change_door_rows(sys::game_state& state, dcon::room_id room, int32_t door, int32_t rows) {
             auto& w = state.world;
             int32_t const width = w.room_get_width(room);
             int32_t const height = w.room_get_height(room);
             int32_t const x0 = door_first_x + door * door_spacing;
             auto const first = w.room_get_first_tile(room).id.index();
-            ++w.room_get_geometry_version(room);
+            bool changed = false;
             for (int32_t i = 0; i < 2; ++i)
                 for (int32_t j = door_bottom_y; j <= door_top_y; ++j) {
                     if (x0 + i >= width || j >= height)
                         continue;
                     dcon::tile_id const t{dcon::tile_id::value_base_t(first + j * width + x0 + i)};
-                    w.tile_set_terrain(t, open ? world::terrain::air : world::terrain::solid);
+                    auto const want = j > door_top_y - rows ? world::terrain::solid : world::terrain::air;
+                    if (w.tile_get_terrain(t) != want) {
+                        w.tile_set_terrain(t, want);
+                        changed = true;
+                    }
                 }
+            if (changed)
+                ++w.room_get_geometry_version(room);
         }
 
         // abstract position of a creature (the tile of its main chunk), if it
@@ -157,14 +185,15 @@ namespace gates {
         switch (w.gate_get_mode(g)) {
         case gate_mode::middle_closed: {
             int32_t const num = players_in_zone(state, room);
-            // not vanilla: something over the middle most of the last 5 s
-            // (creatures coming and going, on both sides, slugcats throwing
-            // each other off it) starts the cycle anyway, for the side more
-            // of them are on
+            // not vanilla: any living creature over the middle most of the
+            // last 2.5 s (creatures coming and going, on both sides,
+            // slugcats throwing each other off it, one that came through and
+            // stays on it) starts the cycle anyway, for the side more of
+            // them are on
             auto const [left, right] = middle_counts(state, room);
             int32_t& busy = w.gate_get_held_counter(g);
             busy = left + right > 0 ? busy + 1 : std::max(0, busy - 1);
-            bool const forced = left + right > 0 && busy > held_ticks && (num < 0 || !w.gate_get_dont_open(g));
+            bool const forced = left + right > 0 && busy > held_ticks;
             if ((num > 0 && num < 3) || forced) {
                 bool const dir = num > 0 ? num == 1 : left != right ? left > right : bool(w.gate_get_let_through_dir(g));
                 w.gate_set_let_through_dir(g, dir);
@@ -192,7 +221,7 @@ namespace gates {
             break;
         case gate_mode::waiting:
             // the next region is always loaded: no waitingForWorldLoader
-            if (++w.gate_get_washing_counter(g) > 400) {
+            if (++w.gate_get_washing_counter(g) > washing_ticks) {
                 w.gate_set_mode(g, gate_mode::opening_middle);
                 goal[1] = 0.f;
             }
@@ -247,9 +276,7 @@ namespace gates {
             else if (closed[i] < goal[i])
                 closed[i] = mathf::min(1.f, closed[i] + close_speed);
             bool const is_closed = closed[i] > 0.f;
-            bool const was_closed = (last_closed >> i) & 1u;
-            if (is_closed != was_closed)
-                change_door_status(state, room, i, !is_closed);
+            change_door_rows(state, room, i, solid_rows(closed[i]));
             last_closed = uint8_t((last_closed & ~(1u << i)) | (uint32_t(is_closed) << i));
         }
 

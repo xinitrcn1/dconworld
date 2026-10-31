@@ -2,6 +2,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "scavenger.hpp"
 #include "body_parts.hpp"
@@ -24,10 +25,10 @@ namespace scavenger {
     using creature::rel;
 
     namespace {
-        // CreatureTemplate: Scavenger
-        constexpr float base_damage_resistance = 1.1f;
+        // CreatureTemplate: Scavenger (ScavengerElite and ScavengerDisciple:
+        // baseDamageResistance 2.2, instantDeathDamageLimit 3.5; the
+        // Disciple's visualRadius 2500)
         constexpr float base_stun_resistance = 1.3f;
-        constexpr float visual_radius = 1200.f;
         // Weapon.exitThrownModeSpeed
         constexpr float exit_thrown_mode_speed = 30.f;
         // how long a scavenger threatens a hostile slugcat (Warning) before
@@ -53,6 +54,15 @@ namespace scavenger {
         vec2 pos(sys::game_state const& state, dcon::creature_id c, uint32_t i) { return state.world.body_chunk_get_pos(chunk(state, c, i)); }
         vec2& vel(sys::game_state& state, dcon::creature_id c, uint32_t i) { return state.world.body_chunk_get_vel(chunk(state, c, i)); }
         vec2 last_pos(sys::game_state const& state, dcon::creature_id c, uint32_t i) { return state.world.body_chunk_get_last_pos(chunk(state, c, i)); }
+
+        // Scavenger.Elite, Templar (only the Disciple is ported), Disciple
+        bool elite(sys::game_state const& state, dcon::creature_id c) { return pl(state, c).variant == variant::elite; }
+        bool templar(sys::game_state const& state, dcon::creature_id c) { return pl(state, c).variant == variant::disciple; }
+        float base_damage_resistance(sys::game_state const& state, dcon::creature_id c) { return pl(state, c).variant == variant::scavenger ? 1.1f : 2.2f; }
+        float instant_death_damage_limit(sys::game_state const& state, dcon::creature_id c) { return pl(state, c).variant == variant::scavenger ? 1.5f : 3.5f; }
+        float visual_radius(sys::game_state const& state, dcon::creature_id c) { return templar(state, c) ? 2500.f : 1200.f; }
+        // ScavengerAI.bloodLustAggressionThreshold
+        constexpr int32_t blood_lust_aggression_threshold = 25;
 
         // abstractCreature.pos: the main chunk's tile
         ivec2 here(sys::game_state const& state, dcon::creature_id c) { return room_view::get_tile_position(pos(state, c, 0)); }
@@ -89,16 +99,20 @@ namespace scavenger {
         }
 
         // Scavenger.Injured, LittleStuck, ReallyStuck
-        float injured(sys::game_state const& state, dcon::creature_id c) { return mathf::inverse_lerp(0.5f, 0.f, state.world.creature_get_health(c)); }
+        float injured(sys::game_state const& state, dcon::creature_id c) {
+            return mathf::inverse_lerp(elite(state, c) ? 0.25f : 0.5f, 0.f, state.world.creature_get_health(c));
+        }
         float little_stuck(sys::game_state const& state, dcon::creature_id c) { return mathf::inverse_lerp(5.f, 20.f, float(pl(state, c).stuck_counter)); }
         float really_stuck(sys::game_state const& state, dcon::creature_id c) { return mathf::inverse_lerp(40.f, 200.f, float(pl(state, c).stuck_counter)); }
 
         // Scavenger.MovementSpeed
         float movement_speed(sys::game_state const& state, dcon::creature_id c) {
             auto const& a = ai(state, c);
+            float const e = pers(state, c).energy;
+            if (a.anim == animation::jumping)
+                return std::fabs(e - 0.5f) * mathf::lerp(1.f, 0.1f, injured(state, c));
             if (a.anim == animation::throw_)
                 return 0.f;
-            float const e = pers(state, c).energy;
             return mathf::max(little_stuck(state, c), mathf::lerp(a.run_speed_goal, 0.3f + 0.7f * e, std::fabs(e - 0.5f)) * mathf::lerp(1.f, 0.1f, injured(state, c)));
         }
 
@@ -126,13 +140,18 @@ namespace scavenger {
                 return 0;
             auto const& w = state.world;
             auto const lethal = ai(state, c).violence == violence_type::lethal;
+            // the Templar with its blood lust up wants spears most (vanilla
+            // scores even one stuck in a wall 6; not here)
+            bool const lust = templar(state, c) && ai(state, c).blood_lust >= blood_lust_aggression_threshold;
             switch (w.item_get_type(it)) {
             case world::item_type::spear:
             case world::item_type::electric_spear:
-                return w.item_get_mode(it) == world::weapon_mode::stuck_in_wall ? 0 : 3;
+                return w.item_get_mode(it) == world::weapon_mode::stuck_in_wall ? 0 : (lust ? 6 : 3);
             case world::item_type::explosive_spear:
                 if (w.item_get_mode(it) == world::weapon_mode::stuck_in_wall)
                     return 0;
+                if (lust)
+                    return 6;
                 return (!lethal && !pickup) ? 1 : 4;
             case world::item_type::rock: return 2;
             case world::item_type::bomb:
@@ -257,8 +276,10 @@ namespace scavenger {
         // The tracker (ArtificialIntelligence's VisualContact, the
         // RelationshipTracker)
         //
-        tracker::params const& tracker_params() {
-            static tracker::params const p = [] {
+        // (the Elite's and the Templar's PreyTracker: sureToGetPreyDistance
+        // 40, sureToLosePreyDistance 450)
+        tracker::params const& tracker_params(sys::game_state const& state, dcon::creature_id c) {
+            static tracker::params const plain = [] {
                 tracker::params q;
                 q.see_around_corners = 10;
                 q.frames_to_remember = -1;
@@ -270,16 +291,23 @@ namespace scavenger {
                 q.threat_max = 10;
                 return q;
             }();
-            return p;
+            static tracker::params const strong = [] {
+                tracker::params q = plain;
+                q.sure_to_get = 40.f;
+                q.sure_to_lose = 450.f;
+                return q;
+            }();
+            return pl(state, c).variant == variant::scavenger ? plain : strong;
         }
 
         // ArtificialIntelligence.VisualScore + ScavengerAI.VisualScore: it
         // sees from its head, best where it looks
         bool visual_contact(sys::game_state const& state, dcon::creature_id c, room_view const& room, vec2 look) {
             vec2 const eye = pos(state, c, 2);
-            if (!custom::dist_less(eye, look, visual_radius))
+            float const vr = visual_radius(state, c);
+            if (!custom::dist_less(eye, look, vr))
                 return false;
-            float score = mathf::inverse_lerp(visual_radius, 0.f, rw::distance(eye, look));
+            float score = mathf::inverse_lerp(vr, 0.f, rw::distance(eye, look));
             auto const& a = ai(state, c);
             score -= mathf::lerp(0.8f, 0.2f, a.agitation) * mathf::inverse_lerp(1.f, mathf::lerp(-1.f, 0.8f, 1.f), rw::dot(head_look_dir(state, c), rw::normalized(look - eye)));
             score -= 1.f - 0.75f;
@@ -295,6 +323,27 @@ namespace scavenger {
                 return relationship{};
             if (creature::is_slugcat(w, r.who)) {
                 float const like = ai(state, c).like;
+                if (pl(state, c).variant != variant::scavenger) {
+                    // PlayerRelationship of the Elite and the Templar: their
+                    // like threshold is 0.7, above any like here, so the
+                    // slugcat is always below it. Attacks when
+                    // aggression * the courage (num3) beats LerpMap(like, 0,
+                    // 0.7, 0.08, 0.18), else Afraid; both at full intensity.
+                    // The courage leaves out the pack and the slugcat being
+                    // armed; the karmic armour adds 0.5 to both
+                    auto const& p = pers(state, c);
+                    bool const armoured = karmic_armor_protected(state, c);
+                    float num3 = p.bravery * (1.f - 0.5f * ai(state, c).scared * (1.f - p.bravery));
+                    if (armoured)
+                        num3 += 0.5f;
+                    float num7 = p.aggression * num3;
+                    if (armoured)
+                        num7 += 0.5f;
+                    float const intensity = 0.5f + mathf::inverse_lerp(0.7f, 0.f, like) * 0.5f;
+                    if (num7 > custom::lerp_map(like, 0.f, 0.7f, 0.08f, 0.18f))
+                        return relationship{rel::attacks, intensity};
+                    return relationship{rel::afraid, intensity};
+                }
                 if (like >= 0.f)
                     return relationship{};
                 float const hate = mathf::inverse_lerp(0.f, -1.f, like);
@@ -350,6 +399,12 @@ namespace scavenger {
                 return violence_type::none;
             if (creature::is_slugcat(state.world, r.who)) {
                 auto const& a = ai(state, c);
+                // the Elite always tags the slugcat Lethal; the Templar
+                // NonLethal until its blood lust is up
+                if (elite(state, c))
+                    return violence_type::lethal;
+                if (templar(state, c))
+                    return a.blood_lust > blood_lust_aggression_threshold ? violence_type::lethal : violence_type::non_lethal;
                 bool const close = custom::dist_less(pos(state, c, 0), r.last_seen, 200.f);
                 return (a.warned < warning_ticks && !close && a.like > -0.9f) ? violence_type::warning : violence_type::lethal;
             }
@@ -428,6 +483,15 @@ namespace scavenger {
             auto& a = ai(state, c);
             switch (a.anim) {
             case animation::none: return;
+            // (the jumps: JumpLogicUpdate and Act's PrepareToJump branch)
+            case animation::prepare_to_jump: return;
+            case animation::jumping:
+                // JumpingAnimation: Continue while it acts on a jump; Update
+                // looks for a throw (in Act, after the AI) and goes through
+                // floors
+                if (!bs(state, c).has_act)
+                    stop_animation(state, c);
+                return;
             case animation::throw_charge:
                 // Continue: discontinue < 60
                 if (a.discontinue >= 60) {
@@ -455,17 +519,25 @@ namespace scavenger {
         }
 
         // Scavenger.Throw (without DLCShared: frc 1.3, the speed set to
-        // max(20, exitThrownModeSpeed + 5) along the throw direction)
+        // max(20, exitThrownModeSpeed + 5) along the throw direction, which
+        // DLCShared's last line sets for every variant too)
         void throw_weapon(sys::game_state& state, dcon::creature_id c, vec2 dir) {
             auto& w = state.world;
             auto const it = grasp_item(state, c, 0);
             if (!it)
                 return;
             auto& a = ai(state, c);
+            // the Templar holds its spear back three times in four without
+            // its blood lust
+            if (templar(state, c) && is_spear(state, it) && a.blood_lust < blood_lust_aggression_threshold && w.creature_get_random(c).value() < 0.75f)
+                return;
             a.anim = animation::throw_;
             a.anim_age = 0;
             a.throw_flip = mathf::sign(dir.x);
             a.thrown_item = it;
+            // (the Templar watches where it lands: HitAnObjectWithWeapon)
+            if (templar(state, c) && items::is_weapon(w.item_get_type(it)))
+                a.watched_throw = it;
             // ThrowAnimation's constructor: the head swings forward
             pos(state, c, 2) = rw::lerp(pos(state, c, 2), pos(state, c, 0) + vec2{a.throw_flip * 30.f, 0.f}, 0.8f);
             a.reflex_build_up = mathf::lerp(a.reflex_build_up, 1.f, 0.5f);
@@ -494,25 +566,29 @@ namespace scavenger {
             return true;
         }
 
-        // Scavenger.TryThrow (the Elite's and the safari's parts aside)
+        // Scavenger.TryThrow (the safari's parts aside; the Elite's flatter,
+        // longer and quicker throws and the Templar's blood lust in)
         void try_throw(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id target, uint32_t k, violence_type vt) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
             auto& a = ai(state, c);
+            bool const el = elite(state, c);
             auto const held = grasp_item(state, c, 0);
             auto const aim = chunk_of(state, target, k);
             if (!held || !aim || a.anim == animation::throw_)
                 return;
             vec2 const main = pos(state, c, 0);
             vec2 const ap = w.body_chunk_get_pos(*aim), alp = w.body_chunk_get_last_pos(*aim);
-            if (std::fabs(custom::dir_vec(main, ap).x) < 0.75f)
+            if (std::fabs(custom::dir_vec(main, ap).x) < (el ? 0.f : 0.75f))
                 return;
             bool const spear = is_spear(state, held);
             bool const nonlethal_real = real_weapon(state, held) && vt != violence_type::lethal;
+            if (templar(state, c) && spear)
+                a.blood_lust /= 3;
             vec2 v = ap + (alp - ap) * rw::distance(main, ap) * (0.02f + 0.02f * rng.value());
             if (!custom::dist_less(main, v, 200.f)) {
                 float const r = rng.value();
-                v.y += mathf::pow(rw::distance(main, v), 1.5f) * 0.05f * (spear ? (0.08f + r * 0.1f) : (0.15f + r * 0.2f));
+                v.y += mathf::pow(rw::distance(main, v), el ? 1.f : 1.5f) * (el ? 0.35f : 0.05f) * (spear ? (0.08f + r * 0.1f) : (0.15f + r * 0.2f));
             }
             if (nonlethal_real) {
                 // a warning: over its head
@@ -525,18 +601,21 @@ namespace scavenger {
             } else if (auto const hit = exact_terrain_ray_trace_pos(room, ap, v)) {
                 v = rw::lerp(*hit, v, 0.1f);
             }
-            if (std::fabs(custom::dir_vec(main, v).x) < 0.95f || !room.visual_contact(main, v))
+            float const num3 = el ? 0.95f - mathf::inverse_lerp(150.f, 600.f, rw::distance(main, v)) * 0.05f : 0.95f;
+            if (std::fabs(custom::dir_vec(main, v).x) < num3 || !room.visual_contact(main, v))
                 return;
             vec2 mv = alp - ap;
             if (vt != violence_type::warning || !spear)
                 mv.x *= 0.1f;
             auto const& p = pers(state, c);
+            float const ra = el ? 400.f : 200.f, rb = el ? 1800.f : 900.f;
+            float const num4 = el ? 40.f + mathf::inverse_lerp(150.f, 600.f, rw::distance(main, v)) * 60.f : 40.f;
             float num5;
             if (nonlethal_real) {
-                num5 = rw::magnitude(mv) * mathf::max(20.f, rw::distance(main, v) - mathf::lerp(200.f, 900.f, p.aggression)) * 0.05f;
+                num5 = rw::magnitude(mv) * mathf::max(20.f, rw::distance(main, v) - mathf::lerp(ra, rb, p.aggression)) * 0.05f;
             } else {
-                num5 = rw::magnitude(mv) * mathf::max(10.f, rw::distance(main, v) - mathf::lerp(200.f, 900.f, p.bravery)) * 0.1f;
-                if (rw::distance(main, ap) < 120.f && rw::distance(main, ap) > 40.f && std::fabs(main.y - ap.y) < 40.f)
+                num5 = rw::magnitude(mv) * mathf::max(10.f, rw::distance(main, v) - mathf::lerp(ra, rb, p.bravery)) * 0.1f;
+                if (rw::distance(main, ap) < (el ? 240.f : 120.f) && rw::distance(main, ap) > 40.f && std::fabs(main.y - ap.y) < num4)
                     num5 = 0.f;
             }
             float num6 = 0.f;
@@ -565,24 +644,40 @@ namespace scavenger {
             float const health = w.creature_get_health(c);
             num5 *= screen(health, 1.f - a.agitation);
             num6 *= custom::lerp_map(screen(health, 1.f - a.agitation), 0.f, 1.f, 10.f, 1.f);
-            if (a.anim == animation::throw_charge) {
-                a.charge_target = target;
-                a.charge_chunk = uint8_t(k);
-                if (a.discontinue < 30)
-                    a.discontinue = 0;
+            if (a.anim == animation::throw_charge || a.anim == animation::jumping) {
+                if (a.anim == animation::throw_charge) {
+                    a.charge_target = target;
+                    a.charge_chunk = uint8_t(k);
+                    if (a.discontinue < 30)
+                        a.discontinue = 0;
+                }
                 if (nonlethal_real) {
                     v += custom::dir_vec(main, v) * 400.f;
                     if (auto const hit = exact_terrain_ray_trace_pos(room, main, v))
                         v = *hit;
                 }
-                bool const charged = float(a.anim_age) > mathf::lerp(w.item_get_type(held) == world::item_type::rock ? 10.f : 40.f, 2.f,
-                                                             mathf::pow(mathf::max(p.aggression, 1.f - health), 0.93f));
+                float const quick = w.item_get_type(held) == world::item_type::rock ? 10.f : (el ? 20.f : 40.f);
+                bool const charged = a.anim == animation::jumping || float(a.anim_age) > mathf::lerp(quick, 2.f, mathf::pow(mathf::max(p.aggression, 1.f - health), 0.93f));
                 bool const go = charged
                     && (vt != violence_type::warning || !spear
                         || rng.value() < rw::magnitude(mv) / custom::lerp_map(num6, 2.f, 50.f, 100.f, 0.15f, mathf::lerp(0.8f, 0.2f, p.aggression * 0.5f)))
-                    && std::fabs(custom::dir_vec(main, v).x) > 0.975f && num6 > num5 && throw_path_clear(state, c, v, nonlethal_real ? 40.f : 0.f);
-                if (go)
+                    && (std::fabs(custom::dir_vec(main, v).x) > 0.975f || el) && num6 > num5 && throw_path_clear(state, c, v, nonlethal_real ? 40.f : 0.f);
+                if (go) {
+                    float const num8 = rw::distance(main, v);
+                    if (num8 > 50.f && el) {
+                        // the Elite's aim lifted for the drop
+                        float const y = custom::dir_vec(main, v).y;
+                        if (y >= 0.f && y <= 0.05f)
+                            v.y += 17.f * (num8 / 180.f);
+                        else if (y >= -0.1f && y <= 0.f)
+                            v.y += 10.f * (num8 / 200.f);
+                        else if (y <= 0.f)
+                            v.y += 25.f * (num8 / 200.f);
+                        else
+                            v.y += 15.f * (num8 / 200.f);
+                    }
                     throw_weapon(state, c, custom::dir_vec(main, v));
+                }
                 return;
             }
             if (num6 < num5 / 2.f)
@@ -638,7 +733,8 @@ namespace scavenger {
             for (uint32_t j = 0; j < n; ++j) {
                 vec2 const cp = w.body_chunk_get_pos(creature::chunk_of(state, target, j));
                 float const x = std::fabs(custom::dir_vec(main, cp).x);
-                if (x > top && (x > 0.5f || std::fabs(main.y - cp.y) < 40.f) && custom::dist_less(main, cp, 1000.f) && !exact_terrain_ray_trace_pos(room, main, cp)) {
+                float const num6 = elite(state, c) ? 40.f + mathf::inverse_lerp(150.f, 600.f, rw::distance(main, cp)) * 60.f : 40.f;
+                if (x > top && (x > 0.5f || std::fabs(main.y - cp.y) < num6) && custom::dist_less(main, cp, 1000.f) && !exact_terrain_ray_trace_pos(room, main, cp)) {
                     top = x;
                     k = int32_t(j);
                 }
@@ -662,25 +758,29 @@ namespace scavenger {
             return (b == behavior::flee && r->who == ts.threat) || (b == behavior::attack && r->who == ts.prey);
         }
 
-        // Scavenger.TryToMeleeCreature (spear stabs: a throw from up close)
+        // Scavenger.TryToMeleeCreature (spear stabs: a throw from up close;
+        // the Elite reaches 125 px, the Templar 35 px and skips the skill
+        // and reaction check; a jump throws at once)
         void try_to_melee(sys::game_state& state, dcon::creature_id c) {
             auto& w = state.world;
             auto& a = ai(state, c);
             auto& rng = w.creature_get_random(c);
-            if (rng.value() > skills(state, c).melee || !(a.reflex_build_up >= 1.f || rng.value() < 0.5f))
+            bool const tp = templar(state, c);
+            if (!tp && (rng.value() > skills(state, c).melee || !(a.reflex_build_up >= 1.f || rng.value() < 0.5f)))
                 return;
             auto const k = chunk_of(state, a.melee_target, a.melee_chunk);
             if (!k)
                 return;
+            float const num2 = tp ? 35.f : (elite(state, c) ? 125.f : 50.f);
             vec2 const main = pos(state, c, 0);
-            float const side = pos(state, c, 2).x < main.x ? -50.f : 50.f;
+            float const side = pos(state, c, 2).x < main.x ? -num2 : num2;
             vec2 const reach = main + vec2{side, 0.f};
             uint32_t const n = creature::chunk_count_of(state, a.melee_target);
-            bool const ready = charging(state, c) && a.anim_age > 5;
+            bool const ready = (charging(state, c) && a.anim_age > 5) || a.anim == animation::jumping;
             for (uint32_t i = 0; i < n + 1; ++i) {
                 auto const kk = i == 0 ? *k : creature::chunk_of(state, a.melee_target, i - 1);
                 vec2 const cp = w.body_chunk_get_pos(kk);
-                if (!custom::dist_less(cp, reach, 50.f))
+                if (!custom::dist_less(cp, reach, num2))
                     continue;
                 if (ready) {
                     throw_weapon(state, c, custom::dir_vec(main, cp));
@@ -700,12 +800,21 @@ namespace scavenger {
             auto& a = ai(state, c);
             auto& rng = w.creature_get_random(c);
             auto const& sk = skills(state, c);
+            bool const el = elite(state, c);
+            // the Templar's blood lust: at the creature its spear stunned
+            if (a.blood_lust >= blood_lust_aggression_threshold && is_spear(state, grasp_item(state, c, 0)) && chunk_of(state, a.targeted, a.targeted_chunk)) {
+                a.melee_target = a.targeted;
+                a.melee_chunk = a.targeted_chunk;
+                try_to_melee(state, c);
+            }
             float const low = a.agitation * 0.25f;
             a.reflex_build_up = mathf::max(low, a.reflex_build_up - mathf::lerp(0.033333335f, 0.002f, sk.reaction));
+            // MeleeRange
+            float const melee_range = el ? 80.f + 110.f * sk.melee : 40.f + 100.f * sk.melee;
             if (a.melee_target) {
                 auto const k = chunk_of(state, a.melee_target, a.melee_chunk);
                 auto const held = grasp_item(state, c, 0);
-                if (!k || !custom::dist_less(w.body_chunk_get_pos(*k), pos(state, c, 0), w.body_chunk_get_rad(*k) + 40.f + 100.f * sk.melee)
+                if (!k || !custom::dist_less(w.body_chunk_get_pos(*k), pos(state, c, 0), w.body_chunk_get_rad(*k) + melee_range)
                     || a.violence != violence_type::lethal || !held || w.item_get_type(held) == world::item_type::bomb
                     || w.item_get_type(held) == world::item_type::explosive_spear)
                     a.melee_target = dcon::creature_id{};
@@ -722,7 +831,9 @@ namespace scavenger {
                 return;
             vec2 const main = pos(state, c, 0);
             vec2 const fp = creature::main_pos(state, f->who);
-            if (std::fabs(fp.y - main.y) > mathf::lerp(30.f, 60.f, sk.mid_range) || !custom::dist_less(fp, main, 200.f + 200.f * sk.mid_range))
+            // (MidRange)
+            if (std::fabs(fp.y - main.y) > mathf::lerp(el ? 60.f : 30.f, el ? 100.f : 60.f, sk.mid_range)
+                || !custom::dist_less(fp, main, (el ? 350.f : 200.f) + 200.f * sk.mid_range))
                 return;
             uint32_t const k = uint32_t(rng.range(0, int32_t(creature::chunk_count_of(state, f->who))));
             auto const kc = creature::chunk_of(state, f->who, k);
@@ -736,10 +847,14 @@ namespace scavenger {
             aim.y += (cp.y - clp.y) * t;
             if (custom::dir_vec(main, aim).y > 0.25f)
                 return;
-            if (charging(state, c) && a.anim_age > 5 && room.visual_contact(main, cp)) {
-                // ReactionCheck
-                a.reflex_build_up = mathf::min(1.f, a.reflex_build_up + mathf::lerp(0.008333334f, 0.5f, mathf::pow(sk.reaction, 3.5f)));
-                if (a.reflex_build_up < 1.f || !throw_path_clear(state, c, aim, 0.f))
+            if (a.anim == animation::jumping || (charging(state, c) && a.anim_age > 5 && room.visual_contact(main, cp))) {
+                // ReactionCheck (none mid-jump)
+                if (a.anim != animation::jumping) {
+                    a.reflex_build_up = mathf::min(1.f, a.reflex_build_up + mathf::lerp(0.008333334f, 0.5f, mathf::pow(sk.reaction, 3.5f)));
+                    if (a.reflex_build_up < 1.f)
+                        return;
+                }
+                if (!throw_path_clear(state, c, aim, 0.f))
                     return;
                 throw_weapon(state, c, custom::dir_vec(main, aim));
                 vel(state, c, 0) += custom::dir_vec(aim, main) * 3.f;
@@ -747,6 +862,220 @@ namespace scavenger {
             }
             if (a.anim == animation::none)
                 start_charge(state, c, f->who, k);
+        }
+
+        //
+        // The Templar (the Disciple): karmic armour, its shockwave, the
+        // DisciplePing, HitAnObjectWithWeapon
+        //
+        // whether `t` is already in a hit list (else it goes in; a full
+        // list counts as hit)
+        bool already_hit(dcon::creature_id* list, uint8_t& count, dcon::creature_id t) {
+            for (uint8_t i = 0; i < count; ++i)
+                if (list[i] == t)
+                    return true;
+            if (count >= ai_state::max_hit)
+                return true;
+            list[count++] = t;
+            return false;
+        }
+
+        // Scavenger.DisciplePing: a ring from where it stands (KarmicArmor.rad
+        // 40 while the armour is up)
+        void start_ping(sys::game_state& state, dcon::creature_id c) {
+            auto& a = ai(state, c);
+            a.ping_frame = 0;
+            a.ping_pos = pos(state, c, 0);
+            a.ping_rad = a.armor_alive ? 40.f : 0.f;
+            a.ping_inc = 0.2f;
+            a.ping_hit_count = 0;
+        }
+
+        // DisciplePing.Update (TemplarCircle: rad += radIncrement,
+        // radIncrement += 0.2, 100 frames): a creature it passes that is
+        // moving (2.5 px a tick) is seen (PingReturnInfo). The weapons it
+        // passes aren't (no ItemTracker)
+        void ping_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& a = ai(state, c);
+            if (a.ping_frame < 0)
+                return;
+            a.ping_rad += a.ping_inc;
+            a.ping_inc += 0.2f;
+            ++a.ping_frame;
+            hook_ctx hx{state, c, room};
+            tracker::hooks const h = make_hooks(hx);
+            rooms::for_each_creature(state, room.id, [&](dcon::creature_id t) {
+                if (t == c || !creature::live(state, t))
+                    return;
+                auto const k = creature::chunk_of(state, t, 0);
+                if (!custom::dist_less(a.ping_pos, state.world.body_chunk_get_pos(k), a.ping_rad) || already_hit(a.ping_hit, a.ping_hit_count, t))
+                    return;
+                if (rw::magnitude(state.world.body_chunk_get_vel(k)) >= 2.5f)
+                    tracker::see(state, c, room, t, h);
+            });
+            if (a.ping_frame >= 100)
+                a.ping_frame = -1;
+        }
+
+        // NoiseTracker (hearingSkill: 0.8 moving, else Lerp(1.4, 0.9,
+        // agitation); the noises it sees are ignored) with
+        // ScavengerAI.ReactToNoise, the Disciple's part: a ping when it has
+        // no focus, else three times in ten
+        void hear_noises(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& a = ai(state, c);
+            auto& rng = state.world.creature_get_random(c);
+            float const hearing = pl(state, c).moving ? 0.8f : mathf::lerp(1.4f, 0.9f, a.agitation);
+            vec2 const head = pos(state, c, 2);
+            auto const me = body(state, c);
+            for (auto const& n : state.noises(room.id)) {
+                if (a.ping_cd != 0)
+                    return;
+                if ((n.source && n.source == me) || !custom::dist_less(head, n.pos, n.strength * hearing) || visual_contact(state, c, room, n.pos))
+                    continue;
+                if (!a.focus || rng.value() > 0.7f) {
+                    a.ping_cd = 100;
+                    start_ping(state, c);
+                }
+            }
+        }
+
+        // KarmicArmor.Explode: a KarmicShockwave from the scavenger (its
+        // sparks, strands, light and sounds aren't ported)
+        void explode_armor(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& a = ai(state, c);
+            a.armor_alive = 0;
+            a.shock_frame = 0;
+            a.shock_pos = pos(state, c, 0);
+            a.shock_hit_count = 0;
+            state.add_noise(room.id, a.shock_pos, 800.f, body(state, c));
+        }
+
+        // Scavenger.Update's karmic armour (a level lost every
+        // karmicArmorResetTime ticks once triggered) and KarmicArmor.Update
+        // (made while there is karma; shaking, then bursting once it's gone)
+        void armor_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& a = ai(state, c);
+            if (a.karma_levels > 0 && a.armor_triggered && --a.armor_timer <= 0) {
+                a.armor_timer = a.armor_reset_time;
+                --a.karma_levels;
+            }
+            if (!a.armor_alive && a.karma_levels > 0) {
+                a.armor_alive = 1;
+                a.armor_level = a.karma_levels;
+                a.armor_shake = 0.f;
+            }
+            if (!a.armor_alive)
+                return;
+            bool const imminent = a.armor_level == 0;
+            if (a.armor_shake > 0.f && !imminent) {
+                a.armor_shake = mathf::max(a.armor_shake - 0.01f, 0.f);
+            } else if (imminent) {
+                a.armor_shake = mathf::min(a.armor_shake + 0.015f, 1.f);
+                if (a.armor_shake >= 1.f)
+                    explode_armor(state, c, room);
+            }
+            if (a.armor_level != a.karma_levels) {
+                a.armor_level = a.karma_levels;
+                a.armor_shake = mathf::clamp01(a.armor_shake + (a.armor_level == 0 ? 0.5f : 0.6f));
+            }
+        }
+
+        // KarmicShockwave.Update/StunCreatures: a ring from 15 to 300 px
+        // over 20 frames, following the scavenger; every creature it reaches
+        // (0.7 of its radius, plus the nearest chunk's) is thrown off,
+        // stunned 50 ticks and dealt Violence(Explosion, 0.01, 2)
+        void shock_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& w = state.world;
+            auto& a = ai(state, c);
+            if (a.shock_frame < 0)
+                return;
+            ++a.shock_frame;
+            if (creature::here(state, c, room.id))
+                a.shock_pos = pos(state, c, 0);
+            float const rad = custom::lerp_map(float(a.shock_frame), 0.f, 20.f, 15.f, 300.f, 0.5f);
+            float const num = rad * 0.7f;
+            constexpr float max_rad = 300.f;
+            constexpr float num2 = 8.f;
+            auto const source = creature::template_of(state, c);
+            std::vector<dcon::creature_id> hit;
+            rooms::for_each_creature(state, room.id, [&](dcon::creature_id t) {
+                if (t == c || !creature::live(state, t))
+                    return;
+                uint32_t const n = creature::chunk_count_of(state, t);
+                float closest = float_max, crad = 0.f;
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk_of(state, t, i);
+                    float const d = rw::distance(w.body_chunk_get_pos(k), a.shock_pos) - w.body_chunk_get_rad(k);
+                    if (d < closest) {
+                        closest = d;
+                        crad = w.body_chunk_get_rad(k);
+                    }
+                }
+                if (n == 0 || !custom::dist_less(a.shock_pos, creature::main_pos(state, t), num + crad) || already_hit(a.shock_hit, a.shock_hit_count, t))
+                    return;
+                hit.push_back(t);
+            });
+            for (auto const t : hit) {
+                uint32_t const n = creature::chunk_count_of(state, t);
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk_of(state, t, i);
+                    vec2 const kp = w.body_chunk_get_pos(k);
+                    float const d = mathf::inverse_lerp(max_rad, max_rad * 0.75f, rw::distance(kp, a.shock_pos));
+                    // PushAngle: away, a fifth of the way up
+                    vec2 const dir = rw::slerp(rw::normalized(kp - a.shock_pos), vec2{0.f, 1.f}, 0.2f);
+                    float const m = mathf::max(w.body_chunk_get_mass(k), 0.0001f);
+                    w.body_chunk_get_vel(k) += dir * (num2 / m) * d;
+                    w.body_chunk_get_pos(k) += dir * (num2 / m) * d * 0.1f;
+                }
+                creature::violence_on(state, t, creature::main_chunk_of(state, t), vec2{0.f, 0.f}, 0.01f, 2.f, creature::damage_type::explosion, source);
+                creature::stun(state, t, 50);
+            }
+            if (a.shock_frame >= 20)
+                a.shock_frame = -1;
+        }
+
+        // ScavengerAI.HitAnObjectWithWeapon, the Templar's: its thrown
+        // weapon stopped being its throw without being picked up (a
+        // creature hit clears thrownBy): the creature closest to it is the
+        // stunnedCreature, its first chunk the targetedBodyChunk, and a
+        // pounce is due (boomerangCharge)
+        void watch_throw(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& w = state.world;
+            auto& a = ai(state, c);
+            auto const it = a.watched_throw;
+            if (!it)
+                return;
+            if (!w.item_is_valid(it)) {
+                a.watched_throw = dcon::item_id{};
+                return;
+            }
+            if (w.item_get_thrown_by(it) == c)
+                return;
+            a.watched_throw = dcon::item_id{};
+            if (w.item_get_mode(it) == world::weapon_mode::carried || w.physical_object_get_room_from_object_location(items::body(state, it)) != room.id)
+                return;
+            vec2 const ip = w.body_chunk_get_pos(items::chunk(state, it));
+            float best = 60.f;
+            dcon::creature_id found;
+            rooms::for_each_creature(state, room.id, [&](dcon::creature_id t) {
+                if (t == c || !creature::live(state, t))
+                    return;
+                uint32_t const n = creature::chunk_count_of(state, t);
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk_of(state, t, i);
+                    float const d = rw::distance(w.body_chunk_get_pos(k), ip) - w.body_chunk_get_rad(k);
+                    if (d < best) {
+                        best = d;
+                        found = t;
+                    }
+                }
+            });
+            if (!found)
+                return;
+            a.stunned_creature = found;
+            a.boomerang_charge = 1;
+            a.targeted = found;
+            a.targeted_chunk = 0;
         }
 
         //
@@ -791,7 +1120,7 @@ namespace scavenger {
                 num -= 10.f;
             if (any_water(room, t))
                 num -= 500.f;
-            num -= 1000.f * tracker::threat_of_area(tracker::of(state, c), t, tracker_params().see_around_corners);
+            num -= 1000.f * tracker::threat_of_area(tracker::of(state, c), t, tracker_params(state, c).see_around_corners);
             return num;
         }
 
@@ -811,7 +1140,9 @@ namespace scavenger {
             }
             if (idle_score(state, c, room, test) > idle_score(state, c, room, a.test_idle_pos))
                 a.test_idle_pos = test;
-            float const margin = float(200 + a.idle_counter);
+            float margin = float(200 + a.idle_counter);
+            if (elite(state, c) && !pl(state, c).moving)
+                margin = 0.f;
             if (a.test_idle_pos != dest && idle_score(state, c, room, a.test_idle_pos) > idle_score(state, c, room, dest) + margin)
                 dest = a.test_idle_pos;
             --a.idle_counter;
@@ -847,7 +1178,7 @@ namespace scavenger {
             float const d = float_dist(t, target);
             num *= custom::lerp_map(d, 30.f, 60.f, 1.f, 0.f);
             num *= custom::lerp_map(d, 5.f, 0.f, 1.f, 0.1f);
-            num *= 1.f - mathf::clamp01(tracker::threat_of_area(tracker::of(state, c), t, tracker_params().see_around_corners));
+            num *= 1.f - mathf::clamp01(tracker::threat_of_area(tracker::of(state, c), t, tracker_params(state, c).see_around_corners));
             num *= std::abs(t.y - target.y) < 3 ? 1.f : mathf::inverse_lerp(5.f, 10.f, d);
             if (t == bs(state, c).occupy_tile)
                 num *= 0.1f;
@@ -870,9 +1201,11 @@ namespace scavenger {
                 vec2 const ip = w.body_chunk_get_pos(items::chunk(state, it));
                 if (!visual_contact(state, c, room, ip) || !accessible(room, room_view::get_tile_position(ip) ))
                     return;
-                // ScavengerAI.PickUpItemScore
+                // ScavengerAI.PickUpItemScore (the Templar wants spears)
                 float s = float(score) * 100.f - rw::distance(main, ip) * 0.1f;
-                s -= tracker::threat_of_area(tracker::of(state, c), room_view::get_tile_position(ip), tracker_params().see_around_corners) * 300.f;
+                if (templar(state, c) && is_spear(state, it))
+                    s += 100.f;
+                s -= tracker::threat_of_area(tracker::of(state, c), room_view::get_tile_position(ip), tracker_params(state, c).see_around_corners) * 300.f;
                 if (conservative && it == a.scavenge_candidate)
                     s += 100.f;
                 if (s > best) {
@@ -969,11 +1302,20 @@ namespace scavenger {
             if (!prey)
                 return;
             a.focus = prey->who;
+            ivec2& dest = w.creature_get_destination(c);
+            // the Templar's blood lust with a spear in hand: straight at it
+            // (the stab comes from CombatUpdate and the collisions)
+            if (a.blood_lust >= blood_lust_aggression_threshold && is_spear(state, grasp_item(state, c, 0))) {
+                dest = tracker::best_guess(*prey);
+                return;
+            }
             int32_t num = 0;
             for (uint32_t i = 0; i < 2; ++i)
                 num = std::max(num, weapon_score(state, c, grasp_item(state, c, i), false));
             check_throw(state, c, room);
-            ivec2& dest = w.creature_get_destination(c);
+            // the Templar fights with spears only: else it fetches one
+            if (templar(state, c) && !is_spear(state, grasp_item(state, c, 0)) && !is_spear(state, grasp_item(state, c, 1)))
+                num = 0;
             if (num == 0) {
                 // RetrieveWeapon: to the weapon it saw, else away from it
                 if (a.scavenge_candidate && w.item_is_valid(a.scavenge_candidate))
@@ -1026,8 +1368,10 @@ namespace scavenger {
                     b = k;
                 }
             };
-            consider(tracker::threat_utility(ts), behavior::flee);
-            consider(tracker::prey_utility(state, c, room, here(state, c), tracker_params()) * 0.5f, behavior::attack);
+            // (the Templar Attacks its threat while it holds a spear)
+            bool const spear_in_hand = is_spear(state, grasp_item(state, c, 0)) || is_spear(state, grasp_item(state, c, 1));
+            consider(tracker::threat_utility(ts), templar(state, c) && spear_in_hand ? behavior::attack : behavior::flee);
+            consider(tracker::prey_utility(state, c, room, here(state, c), tracker_params(state, c)) * 0.5f, behavior::attack);
             consider(dens::rain_utility(state, c, room.id), behavior::escape_rain);
             // InjuryTracker(0.01)
             consider(custom::s_curve(mathf::inverse_lerp(0.2f, 0.9f, 1.f - mathf::clamp01(w.creature_get_health(c))), 0.01f), behavior::injured);
@@ -1053,7 +1397,7 @@ namespace scavenger {
                             lowest = std::min(lowest, collect_score(state, c, grasp_item(state, c, i)));
                     }
                     ivec2 const it = room_view::get_tile_position(w.body_chunk_get_pos(items::chunk(state, a.scavenge_candidate)));
-                    int32_t const sac = tracker_params().see_around_corners;
+                    int32_t const sac = tracker_params(state, c).see_around_corners;
                     if (collect_score(state, c, a.scavenge_candidate) > lowest && tracker::threat_of_area(ts, it, sac) <= tracker::threat_of_area(ts, bs(state, c).occupy_tile, sac))
                         b = behavior::scavenge;
                 }
@@ -1069,10 +1413,32 @@ namespace scavenger {
             ivec2 const at = here(state, c);
             hook_ctx hx{state, c, room};
             tracker::hooks const h = make_hooks(hx);
-            tracker::update(state, c, room, at, tracker_params(), h);
+            tracker::update(state, c, room, at, tracker_params(state, c), h);
             auto& a = ai(state, c);
             auto const& p = pers(state, c);
             ++a.age;
+            // the Templar's: its blood lust (two spears in hand, the creature
+            // it stunned still stunned), the ping's cool down, the noises
+            if (templar(state, c)) {
+                int32_t spears = 0;
+                for (uint32_t i = 0; i < 2; ++i)
+                    if (is_spear(state, grasp_item(state, c, i)))
+                        ++spears;
+                if (a.blood_lust < blood_lust_aggression_threshold && spears > 1)
+                    a.blood_lust += 2;
+                if (creature::live(state, a.stunned_creature) && w.creature_get_stun(a.stunned_creature) > 0)
+                    a.blood_lust += 4;
+                else
+                    a.stunned_creature = dcon::creature_id{};
+                if (a.blood_lust > 20)
+                    --a.blood_lust;
+                if (a.ping_cd > 0) {
+                    --a.ping_cd;
+                    if (behavior(w.creature_get_behavior(c)) != behavior::attack && a.ping_cd > 0)
+                        --a.ping_cd;
+                }
+                hear_noises(state, c, room);
+            }
             // the abstract AI's roll for a trip to another room
             if (rng.value() < 0.002f)
                 migrate::abstract_behavior(state, c, room);
@@ -1126,7 +1492,7 @@ namespace scavenger {
             case behavior::flee:
                 a.run_speed_goal = 1.f;
                 a.focus = tracker::of(state, c).threat;
-                dest = tracker::flee_to(state, c, room, bs(state, c).occupy_tile.x >= 0 ? bs(state, c).occupy_tile : at, 10, 30, tracker_params(), h);
+                dest = tracker::flee_to(state, c, room, bs(state, c).occupy_tile.x >= 0 ? bs(state, c).occupy_tile : at, 10, 30, tracker_params(state, c), h);
                 if (rng.value() < 0.25f)
                     check_throw(state, c, room);
                 break;
@@ -1373,14 +1739,435 @@ namespace scavenger {
             x.drop = 0;
         }
 
+        //
+        // DLCShared's jumps: the Elite's JumpFinders (Scavenger.JumpFinder,
+        // RunningUpdate, InitiateJump, Jump, JumpingUpdate) and the
+        // Templar's pounce. The pathing cells' costToGoal are the path
+        // field's costs to the destination (no generations)
+        //
+        // SharedPhysics.RayTracedTilesArray, the tiles from `a` to `b` in
+        // order: `f` returns false to stop
+        template<typename F>
+        void for_each_ray_tile(vec2 a, vec2 b, F&& f) {
+            float const ax = a.x / 20.f, ay = a.y / 20.f, bx = b.x / 20.f, by = b.y / 20.f;
+            float const dx = std::fabs(bx - ax), dy = std::fabs(by - ay);
+            int32_t x = int32_t(std::floor(ax)), y = int32_t(std::floor(ay));
+            float const dt_dx = 1.f / dx, dt_dy = 1.f / dy;
+            int32_t n = 1, x_inc = 0, y_inc = 0;
+            float t_next_h, t_next_v;
+            if (dx == 0.f) {
+                t_next_h = dt_dx;
+            } else if (bx > ax) {
+                x_inc = 1;
+                n += int32_t(std::floor(bx)) - x;
+                t_next_h = (std::floor(ax) + 1.f - ax) * dt_dx;
+            } else {
+                x_inc = -1;
+                n += x - int32_t(std::floor(bx));
+                t_next_h = (ax - std::floor(ax)) * dt_dx;
+            }
+            if (dy == 0.f) {
+                t_next_v = dt_dy;
+            } else if (by > ay) {
+                y_inc = 1;
+                n += int32_t(std::floor(by)) - y;
+                t_next_v = (std::floor(ay) + 1.f - ay) * dt_dy;
+            } else {
+                y_inc = -1;
+                n += y - int32_t(std::floor(by));
+                t_next_v = (ay - std::floor(ay)) * dt_dy;
+            }
+            n = std::min(n, 4096);
+            for (; n > 0; --n) {
+                if (!f(ivec2{x, y}))
+                    return;
+                if (t_next_v < t_next_h) {
+                    y += y_inc;
+                    t_next_v += dt_dy;
+                } else {
+                    x += x_inc;
+                    t_next_h += dt_dx;
+                }
+            }
+        }
+
+        // the path field to the destination
+        pathing::field_id dest_field(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            return pathing::field_to(state, room.id, state.world.creature_get_destination(c), movement);
+        }
+        // the field's cost from `t` to its goal
+        uint16_t path_cost(sys::game_state const& state, room_view const& room, pathing::field_id f, ivec2 t) {
+            if (!room.inside(t.x, t.y) || !accessible(room, t))
+                return pathing::unreachable;
+            return pathing::distance(state, f, t);
+        }
+        // JumpFinder.PathWeightComparison(A, B): B is the better cell (A
+        // none: any B)
+        bool path_weight_comparison(bool a_none, uint16_t a, uint16_t b) {
+            if (a_none)
+                return true;
+            if (b == pathing::unreachable)
+                return false;
+            return a == pathing::unreachable || b < a;
+        }
+
+        // Scavenger.InStandardRunMode
+        bool in_standard_run_mode(sys::game_state const& state, dcon::creature_id c) {
+            auto const anim = ai(state, c).anim;
+            return !bs(state, c).has_act && anim != animation::prepare_to_jump && anim != animation::jumping;
+        }
+
+        // Scavenger.InitiateJump: the PrepareToJumpAnimation, every finder gone
+        void initiate_jump(sys::game_state& state, dcon::creature_id c, jump_instruction const& j, ivec2 start, int32_t length) {
+            if (!j.has_goal)
+                return;
+            auto& b = bs(state, c);
+            auto& a = ai(state, c);
+            b.has_act = 1;
+            b.act = j;
+            b.act_start = start;
+            b.act_fade = 0;
+            b.jump_counter = 0;
+            b.jump_anim_length = length;
+            b.jump_cycle = 0.f;
+            b.finder_count = 0;
+            stop_animation(state, c);
+            a.anim = animation::prepare_to_jump;
+        }
+
+        // JumpFinder.NewTest
+        void new_test(sys::game_state& state, dcon::creature_id c, room_view const& room, jump_finder& f) {
+            auto& rng = state.world.creature_get_random(c);
+            float num = rng.value() * mathf::pow(ai(state, c).run_speed_goal, 0.5f);
+            if (pathing::ai_terrain_proximity(state, room.id, f.start) > 1)
+                num *= 0.5f;
+            float num2 = mathf::lerp(14.f, 50.f, num);
+            if (creature::grasped_object(state.world, c, 0))
+                num2 *= 0.75f;
+            {
+                float const r = rng.value();
+                num2 *= mathf::lerp(1.f, 1.f - injured(state, c), 0.5f + 0.5f * r);
+            }
+            float const r1 = rng.value();
+            float const r2 = rng.value();
+            float const r3 = rng.value();
+            vec2 const init = custom::deg_to_vec((45.f * mathf::pow(r1, 0.75f) + 135.f * mathf::pow(r2, 2.f)) * (r3 >= 0.5f ? 1.f : -1.f)) * num2;
+            f.current = jump_instruction{};
+            f.current.start_pos = room_view::middle_of_tile(f.start);
+            f.current.init_vel = init;
+            f.current.power = num;
+            f.best_shares = 0;
+            f.pos = f.last_pos = room_view::middle_of_tile(f.start);
+            f.vel = init;
+            f.ventured = 0;
+            if (!f.has_best) {
+                f.best = f.current;
+                f.has_best = 1;
+                f.best_shares = 1;
+            }
+        }
+
+        // JumpFinder.Iterate: one tick of the test jump's flight
+        void iterate(sys::game_state& state, dcon::creature_id c, room_view const& room, pathing::field_id pf, jump_finder& f) {
+            f.last_pos = f.pos;
+            f.pos += f.vel;
+            f.vel *= 0.999f;
+            f.vel.y -= 0.9f;
+            vec2 const a = custom::perpendicular_vector(f.last_pos, f.pos);
+            ivec2 const dest = state.world.creature_get_destination(c);
+            bool abort = false;
+            for_each_ray_tile(f.last_pos, f.pos, [&](ivec2 t) {
+                if (solid(room, t) || t.y < 0 || t.y < room.default_water_level || pathing::narrow_space(room, t)) {
+                    abort = true;
+                    return false;
+                }
+                int32_t const prox = pathing::ai_terrain_proximity(state, room.id, t);
+                bool const beam = room.get_tile(t).any_beam();
+                if (!f.ventured && prox > 1 && !beam)
+                    f.ventured = 1;
+                if (f.ventured && accessible(room, t) && (prox == 1 || beam)
+                    && float_dist(f.start, t) > float(custom::int_clamp(int32_t(rw::magnitude(f.current.init_vel) / 3.f), 5, 20)) && float_dist(dest, t) > 3.f) {
+                    uint16_t const best = f.best.has_goal ? path_cost(state, room, pf, f.best.goal) : pathing::unreachable;
+                    if (path_weight_comparison(!f.best.has_goal, best, path_cost(state, room, pf, t))) {
+                        f.best = f.current;
+                        f.best_shares = 1;
+                        f.best.goal = t;
+                        f.best.has_goal = 1;
+                        vec2 const a2 = room_view::middle_of_tile(t);
+                        vec2 const v = custom::dir_vec(f.last_pos, f.pos);
+                        f.best.grab_when_landing = !room.get_tile(a2 + custom::perpendicular_vector(v) * 15.f + v * 20.f).solid();
+                    }
+                }
+                float const side = custom::lerp_map(float(f.current.tick), 5.f, 20.f, 10.f, 20.f);
+                if ((!solid(room, f.start + ivec2{0, 1}) && solid(room, t + ivec2{0, 1})) || room.get_tile(room_view::middle_of_tile(t) + a * side).solid()
+                    || room.get_tile(room_view::middle_of_tile(t) - a * side).solid()) {
+                    abort = true;
+                    return false;
+                }
+                return true;
+            });
+            if (abort) {
+                new_test(state, c, room, f);
+                return;
+            }
+            ++f.current.tick;
+            if (f.best_shares)
+                f.best.tick = f.current.tick;
+            if (f.current.tick > 700)
+                new_test(state, c, room, f);
+        }
+
+        // JumpFinder.BeneficialMovement
+        bool beneficial_movement(sys::game_state& state, dcon::creature_id c, room_view const& room, pathing::field_id pf, jump_finder const& f) {
+            if (!f.has_best || !f.best.has_goal || float_dist(f.start, f.best.goal) <= 5.f
+                || float_dist(state.world.creature_get_destination(c), f.best.goal) <= 3.f)
+                return false;
+            auto const& b = bs(state, c);
+            uint16_t const goal = path_cost(state, room, pf, f.best.goal);
+            if (b.has_jump_cell && path_weight_comparison(false, goal, path_cost(state, room, pf, b.jump_cell)))
+                return false;
+            return !path_weight_comparison(false, goal, path_cost(state, room, pf, f.start));
+        }
+
+        // a new JumpFinder at `t`
+        void add_finder(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 t) {
+            auto& b = bs(state, c);
+            if (b.finder_count >= body_state::max_jump_finders)
+                return;
+            jump_finder& f = b.finders[b.finder_count++];
+            f = jump_finder{};
+            f.start = t;
+            new_test(state, c, room, f);
+        }
+
+        // JumpFinder.Update for all of them (the destroyed ones go)
+        void update_finders(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& b = bs(state, c);
+            bool const standard = in_standard_run_mode(state, c);
+            int32_t const count = b.finder_count;
+            if (count == 0)
+                return;
+            auto const pf = dest_field(state, c, room);
+            uint8_t kept = 0;
+            for (int32_t i = 0; i < count; ++i) {
+                jump_finder& f = b.finders[i];
+                if (standard) {
+                    ++f.fade;
+                    uint16_t const jc = b.has_jump_cell ? path_cost(state, room, pf, b.jump_cell) : pathing::unreachable;
+                    if (!path_weight_comparison(!b.has_jump_cell, jc, path_cost(state, room, pf, f.start)))
+                        f.fade += 10;
+                    if (f.fade > 40)
+                        continue;
+                }
+                for (int32_t k = std::max(1, 100 / std::max(1, count)); k >= 0; --k)
+                    iterate(state, c, room, pf, f);
+                if (kept != i)
+                    b.finders[kept] = f;
+                ++kept;
+            }
+            b.finder_count = kept;
+        }
+
+        // Scavenger.RunningUpdate (the Templar's pounce at what it stunned,
+        // else the Elite's jump finders along the path ahead)
+        void running_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& w = state.world;
+            auto& rng = w.creature_get_random(c);
+            auto& a = ai(state, c);
+            auto& b = bs(state, c);
+            auto const& x = pl(state, c);
+            ivec2 const at = here(state, c);
+            auto const pf = dest_field(state, c, room);
+            if (templar(state, c)) {
+                if (!a.boomerang_charge || a.blood_lust < blood_lust_aggression_threshold)
+                    return;
+                a.boomerang_charge = 0;
+                if (!creature::live(state, a.stunned_creature) || !creature::here(state, a.stunned_creature, room.id))
+                    return;
+                vec2 const sp = creature::main_pos(state, a.stunned_creature);
+                float const num = rw::distance(pos(state, c, 0), sp);
+                if (num <= 151.f)
+                    return;
+                ivec2 const st = room_view::get_tile_position(sp);
+                bool const left = at.x > st.x;
+                float const t = num / 300.f;
+                float const r1 = rng.value();
+                float const r2 = rng.value();
+                jump_instruction j;
+                j.start_pos = pos(state, c, 0);
+                j.init_vel = vec2{left ? -11.5f : 11.5f, 13.5f};
+                j.power = mathf::lerp(0.05f + mathf::lerp(-0.05f, 0.05f, r1), 0.5f + mathf::lerp(-0.1f, 0.1f, r2), t);
+                j.goal = st;
+                j.has_goal = 1;
+                initiate_jump(state, c, j, at, 12);
+                return;
+            }
+            if (x.mov_mode == move_mode::run || (x.mov_mode == move_mode::climb && !b.has_swing_pos))
+                for (int32_t i = int32_t(b.finder_count) - 1; i >= 0; --i)
+                    if (b.finders[i].start == at && beneficial_movement(state, c, room, pf, b.finders[i])) {
+                        jump_finder const f = b.finders[i];
+                        initiate_jump(state, c, f.best, f.start, 30);
+                        return;
+                    }
+            ivec2 list[5];
+            int32_t listed = 0;
+            bool on_path = false;
+            ivec2 wc = at;
+            for (int32_t j = 0; j < 5; ++j) {
+                auto const m = follow_path(state, room, pf, wc);
+                if (!m.valid || m.dest == m.start)
+                    break;
+                wc = m.dest;
+                list[listed++] = wc;
+                for (uint8_t k = 0; k < b.finder_count; ++k)
+                    if (b.finders[k].start == wc) {
+                        b.finders[k].fade = 0;
+                        on_path = true;
+                    }
+            }
+            if (path_cost(state, room, pf, at) != pathing::unreachable) {
+                b.jump_cell = at;
+                b.has_jump_cell = 1;
+            }
+            if (b.add_delay > 0) {
+                --b.add_delay;
+                return;
+            }
+            if (int32_t(b.finder_count) < (on_path ? 1 : 4) && listed > 1) {
+                ivec2 const t = list[rng.range(0, listed)];
+                uint16_t const jc = b.has_jump_cell ? path_cost(state, room, pf, b.jump_cell) : pathing::unreachable;
+                if (float_dist(t, at) > 2.f && !pathing::narrow_space(room, t) && path_weight_comparison(!b.has_jump_cell, jc, path_cost(state, room, pf, t)))
+                    add_finder(state, c, room, t);
+            }
+        }
+
+        // Scavenger.Jump: off the start tile with the jump's velocity
+        void jump(sys::game_state& state, dcon::creature_id c) {
+            auto& b = bs(state, c);
+            auto& x = pl(state, c);
+            x.mov_mode = move_mode::run;
+            b.move_mode_change_counter = 0;
+            x.drop = 0;
+            b.has_swing_pos = 0;
+            b.has_next_swing_pos = 0;
+            x.climbing_up_coming = 0;
+            x.commit_to_move_counter = 0;
+            vec2 const a0 = room_view::middle_of_tile(b.act_start);
+            vec2 const init = b.act.init_vel;
+            vec2 const n = rw::normalized(init);
+            for (uint32_t i = 0; i < 3; ++i)
+                pos(state, c, i) = a0 + n * float(1 - int32_t(i)) * 8.f;
+            vec2 const d = a0 + init - pos(state, c, 0);
+            for (uint32_t j = 0; j < 3; ++j) {
+                pos(state, c, j) += d;
+                vel(state, c, j) = vec2{mathf::clamp(init.x, -22.f, 22.f), mathf::min(init.y, 17.f)};
+            }
+            b.jump_counter = 0;
+            b.add_delay = 20;
+            b.spin = 0;
+            if (b.act.tick > 25 && rw::dot(rw::normalized(pos(state, c, 0) - pos(state, c, 2)), n) < -0.1f)
+                b.spin = int8_t(mathf::sign(init.x));
+        }
+
+        // PrepareToJumpAnimation.Update: crouching on the start tile, then
+        // the JumpingAnimation (which jumps)
+        void prepare_to_jump_update(sys::game_state& state, dcon::creature_id c) {
+            auto& a = ai(state, c);
+            auto& b = bs(state, c);
+            ++a.anim_age;
+            vec2 const start = room_view::middle_of_tile(b.act_start);
+            if (!b.has_act || !consious(state, c) || !custom::dist_less(pos(state, c, 0), start, 50.f)) {
+                stop_animation(state, c);
+                return;
+            }
+            vec2 const n = rw::normalized(b.act.init_vel);
+            vel(state, c, 0) *= 0.5f;
+            pos(state, c, 0) = rw::lerp(pos(state, c, 0), start - n * float(a.anim_age) * 0.5f, 0.2f);
+            vel(state, c, 2) += n * 1.5f;
+            vel(state, c, 1) -= n * 2.f;
+            b.jump_cycle += 1.f;
+            pos(state, c, 1) += custom::perpendicular_vector(custom::dir_vec(pos(state, c, 0), pos(state, c, 1))) * std::sin(b.jump_cycle)
+                * (float(a.anim_age) / float(b.jump_anim_length)) * 10.f;
+            if (a.anim_age > b.jump_anim_length - 5) {
+                a.anim = animation::jumping;
+                a.anim_age = 0;
+                jump(state, c);
+            }
+        }
+
+        // Scavenger.JumpingUpdate
+        void jumping_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            auto& b = bs(state, c);
+            ++b.jump_counter;
+            bool end = false;
+            if (!b.has_act) {
+                end = true;
+            } else {
+                if (b.jump_counter > b.act.tick + 5) {
+                    for (uint32_t i = 0; i < 3; ++i)
+                        if (accessible(room, pos(state, c, i)))
+                            vel(state, c, i) *= 0.5f;
+                } else if (b.jump_counter >= 5) {
+                    b.has_act = 0;
+                }
+                if (b.has_act) {
+                    vec2 const to = room_view::middle_of_tile(b.act.goal);
+                    for (uint32_t j = 0; j < 3 && !end; ++j)
+                        end = custom::dist_less(pos(state, c, j), to, 40.f);
+                }
+            }
+            if (end || (b.has_act && b.jump_counter >= b.act.tick + 20)) {
+                if (b.has_act && b.act.grab_when_landing)
+                    for (uint32_t k = 0; k < 3; ++k)
+                        vel(state, c, k) *= 0.5f;
+                b.has_act = 0;
+                stop_animation(state, c);
+            }
+        }
+
+        // Scavenger.JumpLogicUpdate (the Elite and the Templar)
+        void jump_logic_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+            if (state.world.creature_get_dead(c))
+                return;
+            auto& a = ai(state, c);
+            auto& b = bs(state, c);
+            if (!consious(state, c) && (a.anim == animation::prepare_to_jump || a.anim == animation::jumping))
+                stop_animation(state, c);
+            update_finders(state, c, room);
+            if (a.anim == animation::jumping)
+                jumping_update(state, c, room);
+            else if (in_standard_run_mode(state, c))
+                running_update(state, c, room);
+            if (b.has_act && a.anim != animation::prepare_to_jump && a.anim != animation::jumping && ++b.act_fade > 40)
+                b.has_act = 0;
+        }
+
         // Scavenger.Act, the movement (the AI and the combat first)
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
             auto& rng = w.creature_get_random(c);
             auto& x = pl(state, c);
+            // PrepareToJump: only the animation runs (no AI, no moving)
+            if (ai(state, c).anim == animation::prepare_to_jump) {
+                prepare_to_jump_update(state, c);
+                return;
+            }
             ai_update(state, c, room);
             animation_update(state, c);
+            if (ai(state, c).anim == animation::jumping) {
+                // JumpingAnimation.Update: a throw on the way, through floors
+                check_throw(state, c, room);
+                physics::set_go_through_floors(state, body(state, c), true);
+            }
             combat_update(state, c, room);
+            if (ai(state, c).anim == animation::jumping) {
+                // mid-jump the body flies on (vanilla's AllowIdleMoves: no
+                // path following; the head and standing pushes are left out
+                // too)
+                x.mov_mode = move_mode::run;
+                x.moving = 1;
+                return;
+            }
             auto& b = bs(state, c);
             float const g = w.physical_object_get_g(body(state, c));
             vec2 const main = pos(state, c, 0), main_last = last_pos(state, c, 0);
@@ -1856,6 +2643,14 @@ namespace scavenger {
         return grasp_item(state, c, i);
     }
 
+    variant variant_of(sys::game_state const& state, dcon::creature_id c) {
+        return pl(state, c).variant;
+    }
+
+    bool karmic_armor_protected(sys::game_state const& state, dcon::creature_id c) {
+        return templar(state, c) && ai(state, c).karma_levels > 0;
+    }
+
     // SharedPhysics.ExactTerrainRayTracePos: where the segment from `a` to
     // `b` enters the first solid tile on it
     std::optional<vec2> exact_terrain_ray_trace_pos(room_view const& room, vec2 a, vec2 b) {
@@ -1949,10 +2744,12 @@ namespace scavenger {
     //
     // The creature
     //
-    dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at) {
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, variant v) {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::scavenger);
         auto const d = data(state, c);
+        // (first: everything below reads the template)
+        pl(state, c).variant = uint32_t(v) < variant_count ? v : variant::scavenger;
         rw::rng rng{state.random.next() | 1u};
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
@@ -2046,11 +2843,22 @@ namespace scavenger {
                 float const base = roll(p.energy);
                 sk.reaction = push_from_half(base, 1.f + r.value());
             }
-            float const num2 = 1.f - p.dominance;
-            sk.dodge = mathf::lerp(sk.dodge, 0.f, num2 * 0.085f);
-            sk.mid_range = mathf::lerp(sk.mid_range, 0.f, num2 * 0.085f);
-            sk.blocking = mathf::lerp(sk.blocking, 0.f, num2 * 0.05f);
-            sk.reaction = mathf::lerp(sk.reaction, 0.f, num2 * 0.15f);
+            if (v == variant::elite) {
+                float const num = mathf::lerp(p.dominance, 1.f, 0.15f);
+                sk.dodge = mathf::lerp(sk.dodge, 1.f, num * 0.15f);
+                sk.mid_range = mathf::lerp(sk.mid_range, 1.f, num * 0.1f);
+                sk.blocking = mathf::lerp(sk.blocking, 1.f, num * 0.1f);
+                sk.reaction = mathf::lerp(sk.reaction, 1.f, num * 0.05f);
+            } else {
+                // (the Templar's too: it isn't Elite)
+                float const num2 = 1.f - p.dominance;
+                sk.dodge = mathf::lerp(sk.dodge, 0.f, num2 * 0.085f);
+                sk.mid_range = mathf::lerp(sk.mid_range, 0.f, num2 * 0.085f);
+                sk.blocking = mathf::lerp(sk.blocking, 0.f, num2 * 0.05f);
+                sk.reaction = mathf::lerp(sk.reaction, 0.f, num2 * 0.15f);
+            }
+            if (v == variant::disciple)
+                sk.melee = 1.f;
         }
         w.scavenger_data_set_skills(d, sk);
         body_state b;
@@ -2065,6 +2873,9 @@ namespace scavenger {
         a.test_look_pos = b.look_point;
         a.already_looked_at_pos = b.look_point;
         a.idle_counter = rng.range(100, 400);
+        // karmaLevels: the Disciple's 5 to 7
+        if (v == variant::disciple)
+            a.karma_levels = rng.range(5, 8);
         w.scavenger_data_set_ai(d, a);
         w.creature_set_random(c, rng);
         auto& x = pl(state, c);
@@ -2104,6 +2915,9 @@ namespace scavenger {
             float const r = rng.value();
             stun(state, c, int32_t(mathf::lerp(0.f, 14.f * r, mathf::pow(injured(state, c), 0.5f))));
         }
+        // (the Watcher's part: the Templar's karmic armour)
+        if (templar(state, c))
+            armor_update(state, c, room);
         weighted_push(state, c, 2, 0, custom::dir_vec(pos(state, c, 1), pos(state, c, 0)), 0.3f * (1.f - really_stuck(state, c)));
         w.body_chunk_set_collide_with_terrain(chunk(state, c, 2), room.visual_contact(pos(state, c, 0), pos(state, c, 2)));
         creature::stun_countdown(state, c);
@@ -2114,6 +2928,10 @@ namespace scavenger {
             b.last_non_solid_tile = mt;
         else
             physics::hard_set_position(state, chunk(state, c, 0), room_view::middle_of_tile(b.last_non_solid_tile));
+        if (pl(state, c).variant != variant::scavenger)
+            jump_logic_update(state, c, room);
+        if (templar(state, c))
+            watch_throw(state, c, room);
         if (consious(state, c)) {
             act(state, c, room);
         } else {
@@ -2135,6 +2953,11 @@ namespace scavenger {
         float const squeeze = 1.f - little_stuck(state, c);
         for (uint32_t j = 0; j < 3; ++j)
             w.body_chunk_set_terrain_squeeze(chunk(state, c, j), squeeze);
+        // the Templar's room objects: the ping, the shockwave
+        if (templar(state, c)) {
+            ping_update(state, c, room);
+            shock_update(state, c, room);
+        }
         // the items it holds (GraphicsModuleUpdated: the graphics module
         // takes them to the hands where a camera looks)
         if (!state.viewed(room.id))
@@ -2173,39 +2996,76 @@ namespace scavenger {
         // passed down; the thrown item hitting is still Thrown here)
         auto const hit = chunk(state, c, std::min<uint32_t>(k, 2));
         vec2 const hp = w.body_chunk_get_pos(hit);
-        bool by_slugcat = false;
+        // the thrown weapon that hit (its thrower): any thrower for the
+        // karmic armour, a slugcat's for the like
+        dcon::creature_id thrower;
+        bool thrown = false;
         rooms::for_each_item(state, room, [&](dcon::item_id it) {
-            if (by_slugcat || w.item_get_mode(it) != world::weapon_mode::thrown)
+            if (thrown || w.item_get_mode(it) != world::weapon_mode::thrown)
                 return;
             auto const by = w.item_get_thrown_by(it);
-            if (!by || !w.creature_is_valid(by) || !creature::is_slugcat(w, by))
+            if (!by || !w.creature_is_valid(by) || by == c)
                 return;
             auto const ic = items::chunk(state, it);
-            if (custom::dist_less(w.body_chunk_get_pos(ic), hp, w.body_chunk_get_rad(hit) + rw::magnitude(w.body_chunk_get_vel(ic)) + 20.f))
-                by_slugcat = true;
+            if (custom::dist_less(w.body_chunk_get_pos(ic), hp, w.body_chunk_get_rad(hit) + rw::magnitude(w.body_chunk_get_vel(ic)) + 20.f)) {
+                thrown = true;
+                thrower = by;
+            }
         });
-        if (by_slugcat)
+        if (thrown && creature::is_slugcat(w, thrower))
             slugcat_attacked(state, c, room);
-        // Scavenger.Violence: the head is the soft spot
+        // the Templar's karmic armour (Watcher): a thrown weapon glances off
+        // (karmicArmorResetTime 45), a creature's blow does nothing (15);
+        // either sets the countdown going. Explosions have no source and
+        // get through
+        if (karmic_armor_protected(state, c) && type != creature::damage_type::explosion) {
+            auto& a = ai(state, c);
+            if (thrown) {
+                auto const view = world::get_room_view(state, room);
+                hook_ctx hx{state, c, view};
+                if (creature::live(state, thrower) && creature::here(state, thrower, room))
+                    tracker::see(state, c, view, thrower, make_hooks(hx));
+                a.armor_reset_time = 45;
+            } else {
+                a.armor_reset_time = 15;
+            }
+            a.armor_triggered = 1;
+            a.armor_timer = 0;
+            // (KarmicArmor.DeflectedProjectile's sparks and Templar_Shield_Deflect: not ported)
+            return;
+        }
+        // Scavenger.Violence: the head is the soft spot; the Elite takes
+        // less stun
         bool const head = k == 2;
         if (head)
             damage *= 10.f;
+        if (elite(state, c))
+            stun_bonus *= 0.85f;
         float const dmg = damage * (head ? 1.3f : 1.f);
         // Creature.Violence
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
         if (!w.creature_get_dead(c)) {
             float& health = w.creature_get_health(c);
-            float const d = dmg / base_damage_resistance;
+            float const d = dmg / base_damage_resistance(state, c);
             float st = (dmg * 30.f + stun_bonus) / base_stun_resistance;
             health -= d;
             stun(state, c, int32_t(st));
             if (rng.value() < -health || health < -1.f || (health < 0.f && rng.value() < 0.33f))
+                creature::die(state, c);
+            // instantDeathDamageLimit (1.5, the Elite's and Disciple's 3.5)
+            if (d >= instant_death_damage_limit(state, c))
                 creature::die(state, c);
             if (head && damage > 0.5f && health < 0.f)
                 creature::die(state, c);
             // ShockReaction
             if (state.viewed(room))
                 scavenger_graphics::shock_reaction(state, c, mathf::inverse_lerp(0.f, 1.f, dmg) + mathf::inverse_lerp(0.f, 60.f, stun_bonus) * 0.5f);
+        }
+        // the Elite's VultureMask comes off when it dies of a blow
+        // (readyToReleaseMask); the mask item itself: see the integration
+        // notes
+        if (elite(state, c) && w.creature_get_dead(c) && !ai(state, c).mask_released) {
+            ai(state, c).mask_released = 1;
         }
     }
 
@@ -2217,6 +3077,10 @@ namespace scavenger {
             a.charge_target = dcon::creature_id{};
         if (a.focus == t)
             a.focus = dcon::creature_id{};
+        if (a.stunned_creature == t)
+            a.stunned_creature = dcon::creature_id{};
+        if (a.targeted == t)
+            a.targeted = dcon::creature_id{};
     }
 
     void died(sys::game_state& state, dcon::creature_id c) {
@@ -2255,13 +3119,26 @@ namespace scavenger {
         a.focus = dcon::creature_id{};
         a.melee_target = dcon::creature_id{};
         stop_animation(state, c);
+        // the jumps start over; the Templar's armour, ping and shockwave
+        // stay in the old room, and its karma is rolled again
+        // (Scavenger.PlaceInRoom)
+        b.finder_count = 0;
+        b.has_act = 0;
+        b.has_jump_cell = 0;
+        a.armor_alive = 0;
+        a.ping_frame = -1;
+        a.shock_frame = -1;
+        a.watched_throw = dcon::item_id{};
+        if (templar(state, c))
+            a.karma_levels = rng.range(5, 8);
     }
 
     std::string describe(sys::game_state const& state, dcon::creature_id c) {
         auto const& w = state.world;
         static char const* const modes[] = {"run", "stand", "crawl", "climb", "swim"};
         vec2 const p = pos(state, c, 0);
-        std::string s = "scavenger at " + std::to_string(int(p.x)) + "," + std::to_string(int(p.y)) + " behavior " + std::to_string(int(w.creature_get_behavior(c)))
+        static char const* const names[] = {"scavenger", "scavenger elite", "scavenger disciple"};
+        std::string s = std::string{names[uint32_t(pl(state, c).variant) % variant_count]} + " at " + std::to_string(int(p.x)) + "," + std::to_string(int(p.y)) + " behavior " + std::to_string(int(w.creature_get_behavior(c)))
             + " " + modes[uint32_t(pl(state, c).mov_mode) % 5];
         for (uint32_t i = 0; i < 2; ++i)
             if (auto const it = grasp_item(state, c, i))
@@ -2270,6 +3147,10 @@ namespace scavenger {
             s += " hostile";
         if (ai(state, c).anim == animation::throw_charge)
             s += " charging";
+        if (ai(state, c).anim == animation::prepare_to_jump || ai(state, c).anim == animation::jumping)
+            s += " jumping";
+        if (templar(state, c))
+            s += " karma " + std::to_string(ai(state, c).karma_levels) + " lust " + std::to_string(ai(state, c).blood_lust);
         return s;
     }
 

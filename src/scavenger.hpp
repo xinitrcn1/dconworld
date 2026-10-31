@@ -14,6 +14,15 @@
 // before. A hostile slugcat is threatened first (the throw charge without a
 // throw), then attacked with thrown weapons. No trading, squads, tolls or
 // kings. Its paths come from pathing.hpp's distance fields.
+//
+// Two more templates run on the same code (`variant`): Downpour's
+// ScavengerElite (tougher, hostile to the slugcat from the start, throws to
+// kill at once, from further and with a flatter aim, and jumps across gaps
+// with the JumpFinder) and the Watcher's ScavengerDisciple (a Templar:
+// karmic armour that turns every weapon and blow until its karma runs out
+// and it bursts in a stunning shockwave, a blood lust that turns its
+// warning throws lethal, pounces at what its spear stunned, and pings the
+// room for moving creatures when it hears a noise).
 
 #include <cstdint>
 #include <optional>
@@ -29,7 +38,9 @@ namespace scavenger {
     using creature::chunk;
     using creature::consious;
 
-    dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos);
+    dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, variant v = variant::scavenger);
+    // which template it is (the payload's variant)
+    variant variant_of(sys::game_state const& state, dcon::creature_id c);
     void destroy(sys::game_state& state, dcon::creature_id c);
     // Scavenger.Update (its AI's with it)
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
@@ -58,6 +69,9 @@ namespace scavenger {
     float act_nervous(sys::game_state const& state, dcon::creature_id c);
     // the item in grasp `i` (none)
     dcon::item_id held_item(sys::game_state const& state, dcon::creature_id c, uint32_t i);
+    // Scavenger.KarmicArmorProtected: a Disciple with karma left (weapons
+    // and blows don't hurt it, spears glance off)
+    bool karmic_armor_protected(sys::game_state const& state, dcon::creature_id c);
     // SharedPhysics.ExactTerrainRayTracePos
     std::optional<rw::vec2> exact_terrain_ray_trace_pos(world::room_view const& room, rw::vec2 a, rw::vec2 b);
 }
