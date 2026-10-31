@@ -98,6 +98,11 @@ namespace simulation {
         });
         if (fresh.empty())
             return;
+        // the buffers over rooms and regions, for the scenario as it is now
+        // (it doesn't change while the world ticks: docs/LIMITS.md)
+        state.npc_buffers.shelter_crowd = ve::vectorizable_buffer<int32_t, dcon::room_id>(w.room_size());
+        state.npc_buffers.slugcats_in_room = ve::vectorizable_buffer<int32_t, dcon::room_id>(w.room_size());
+        state.npc_buffers.warped_region = ve::vectorizable_buffer<int32_t, dcon::region_id>(w.region_size());
         // Room.Loaded's first visit, for every room at once: what creates
         // objects goes room by room in order...
         for (auto const r : fresh) {
@@ -269,12 +274,14 @@ namespace simulation {
         // the loops are kept up tick by tick: this tick's start empty
         state.loops.clear();
         // a pipeline stage (docs/PIPELINE.md): every region's rain cycle (the
-        // den creatures' spawn counters) and the NPC slugcats' packs (the
-        // slugcats' creatures) touch different objects, so they run at once
-        stage(2, [&](uint32_t k) {
+        // den creatures' spawn counters), the NPC slugcats' packs (the
+        // slugcats' creatures) and the rot bulbs' eyes (their light and
+        // focus) touch different objects, so they run at once
+        stage(3, [&](uint32_t k) {
             switch (k) {
-            case 0: rain::update_world(state); break;
-            case 1: npc::update_world(state); break;
+            case 0: npc::update_world(state); break;
+            case 1: rain::update_world(state); break;
+            case 2: rot::update_attention(state); break;
             }
         });
 

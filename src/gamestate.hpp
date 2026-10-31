@@ -226,6 +226,16 @@ namespace sys {
         // (main reseeds it from the clock before loading). Every rw::random
         // keys by it (docs/PIPELINE.md)
         uint32_t seed = 0x2545F491u;
+        // npc.cpp's tallies over scenario objects (docs/LIMITS.md: their
+        // counts don't change while the world ticks), built with them in
+        // simulation::populate
+        struct npc_buffers_t {
+            // the slugcats in each shelter, in each room; the regions with a
+            // warp open
+            ve::vectorizable_buffer<int32_t, dcon::room_id> shelter_crowd{0};
+            ve::vectorizable_buffer<int32_t, dcon::room_id> slugcats_in_room{0};
+            ve::vectorizable_buffer<int32_t, dcon::region_id> warped_region{0};
+        } npc_buffers;
         // RainWorldGame.nextIssuedId: the EntityID numbers handed out so far
         int32_t next_issued_id = 0;
         // the campaign being played (SlugcatStats.Timeline): room spawns that

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "rot.hpp"
+#include "keyed_random.hpp"
 #include "rooms.hpp"
 #include "creature.hpp"
 #include "items.hpp"
@@ -921,17 +922,8 @@ namespace rot {
             }
             w.rot_bulb_set_closed(b, mathf::max(0.f, w.rot_bulb_get_closed(b) - 0.05f));
             vec2 const look = w.rot_bulb_get_look_dir(b);
-            float const light = w.rot_bulb_get_light(b);
-            float const num7 = light * mathf::inverse_lerp(0.f, 1.f, rw::distance(w.rot_bulb_get_last_look_dir(b), look));
-            w.rot_bulb_set_light(b, mathf::max(0.f, light - 0.05f));
-            if (r.value() < num7)
-                w.rot_bulb_set_get_to_focus(b, mathf::max(w.rot_bulb_get_get_to_focus(b), r.value()));
-            else if (r.value() < 1.f / 70.f)
-                w.rot_bulb_set_get_to_focus(b, 0.f);
-            float const focus = w.rot_bulb_get_focus(b);
-            float const goal = w.rot_bulb_get_get_to_focus(b);
-            w.rot_bulb_set_last_focus(b, focus);
-            w.rot_bulb_set_focus(b, focus < goal ? mathf::min(focus + 0.05f, goal) : mathf::max(focus - 0.05f, goal));
+            // (the light fading and the eye's focus: update_attention, for
+            // every bulb at once)
             if (r.value() < 0.01f)
                 w.rot_bulb_set_leg_reach_pos(b, std::nullopt);
             w.rot_bulb_set_last_look_dir(b, look);
@@ -1262,6 +1254,39 @@ namespace rot {
                 climb_update(state, room, t, r);
                 break;
             }
+        });
+    }
+
+    void update_attention(sys::game_state& state) {
+        auto& w = state.world;
+        uint32_t const salt = rw::site();
+        ve::fp_vector const zero{0.f}, one{1.f}, step{0.05f}, lose_focus{1.f / 70.f};
+        w.execute_serial_over_rot_bulb([&](auto ids) {
+            // the carve-outs (per lane): the ids' values the rolls key by, the
+            // bulbs eating (their update returns before this), how far the
+            // eye turned since last tick (vec2s: no ve:: loads)
+            ve::int_vector const values = ve::apply([](dcon::rot_bulb_id b) { return int32_t(b.value); }, ids);
+            ve::mask_vector const eating = ve::apply([&](dcon::rot_bulb_id b) { return w.rot_bulb_get_eat_chunk(b).valid(); }, ids);
+            ve::fp_vector const turned = ve::apply([&](dcon::rot_bulb_id b) { return rw::distance(w.rot_bulb_get_last_look_dir(b), w.rot_bulb_get_look_dir(b)); }, ids);
+            ve::mask_vector const looks = !eating;
+            // its three rolls, every lane its own (rw::random's bits)
+            auto const keys = keyed_random::key(state.seed, state.tick, values, salt);
+            ve::fp_vector const notice = keyed_random::to_value(keyed_random::draw(keys, 0));
+            ve::fp_vector const how_much = keyed_random::to_value(keyed_random::draw(keys, 1));
+            ve::fp_vector const forget = keyed_random::to_value(keyed_random::draw(keys, 2));
+            // the light fades; a turn of the eye, as lit as it is, may make it
+            // focus (at least a rolled amount), else now and then it lets go
+            ve::fp_vector const light = w.rot_bulb_get_light(ids);
+            ve::fp_vector const chance = light * ve::min(ve::max(turned, zero), one);
+            ve::fp_vector const goal_was = w.rot_bulb_get_get_to_focus(ids);
+            ve::fp_vector const goal = ve::select(notice < chance, ve::max(goal_was, how_much), ve::select(forget < lose_focus, zero, goal_was));
+            // the focus moves towards it, 0.05 a tick
+            ve::fp_vector const focus = w.rot_bulb_get_focus(ids);
+            ve::fp_vector const next = ve::select(focus < goal, ve::min(focus + step, goal), ve::max(focus - step, goal));
+            w.rot_bulb_set_light(ids, ve::select(looks, ve::max(zero, light - step), light));
+            w.rot_bulb_set_get_to_focus(ids, ve::select(looks, goal, goal_was));
+            w.rot_bulb_set_last_focus(ids, ve::select(looks, focus, w.rot_bulb_get_last_focus(ids)));
+            w.rot_bulb_set_focus(ids, ve::select(looks, next, focus));
         });
     }
 

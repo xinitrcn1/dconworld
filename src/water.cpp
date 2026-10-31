@@ -145,7 +145,7 @@ namespace water {
             ve::fp_vector const lo{-max_height}, hi{max_height};
             for (; i + lanes <= n; i += lanes) {
                 ve::fp_vector const t = ve::load(tags{i}, h) + ve::load(tags{i}, v);
-                ve::store(tags{i}, h, ve::select(t < lo, lo, ve::select(t > hi, hi, t)));
+                ve::store(tags{i}, h, ve::min(ve::max(t, lo), hi));
             }
             for (; i < n; ++i)
                 h[i] = mathf::clamp(h[i] + v[i], -max_height, max_height);

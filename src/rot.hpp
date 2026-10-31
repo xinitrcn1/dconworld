@@ -28,6 +28,10 @@ namespace rot {
     dcon::rot_system_id system_of(sys::game_state const& state, dcon::room_id room) noexcept;
     // DaddyCorruption.Update, its noises and tubes, and the creatures it eats
     void update_room(sys::game_state& state, world::room_view const& room);
+    // the bulbs' light fading and their eyes' focus (Bulb.Update's), every
+    // bulb of the world at once in dcon's vectors: a workload of the tick's
+    // first stage, before the rooms (docs/PIPELINE.md)
+    void update_attention(sys::game_state& state);
     // lets go of a creature (a slugcat respawned, destroyed)
     void release(sys::game_state& state, dcon::creature_id c);
 

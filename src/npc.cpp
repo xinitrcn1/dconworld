@@ -59,15 +59,10 @@ namespace npc {
         // stuns it, the 10th blows it up)
         constexpr int32_t pyro_cool_enough = 4;
 
-        // the slugcats in each shelter (alive, out of the pipes), by room
-        // index: counted in update_world, read while the rooms think
-        std::vector<uint8_t>& crowds() {
-            static std::vector<uint8_t> v;
-            return v;
-        }
-        bool crowded(dcon::room_id r) {
-            auto const& v = crowds();
-            return r && size_t(r.index()) < v.size() && v[size_t(r.index())] > crowd_limit;
+        // the slugcats in each shelter (alive, out of the pipes), by room:
+        // counted in update_world, read while the rooms think
+        bool crowded(sys::game_state const& state, dcon::room_id r) {
+            return r && state.npc_buffers.shelter_crowd.get(r) > crowd_limit;
         }
 
         // a room's goals: its exits by node, its warps after them
@@ -1444,8 +1439,8 @@ namespace npc {
                     std::erase_if(options, [&](dcon::room_id r) { return r == home; });
                 nav.guessed = options.empty() ? 1 : 0;
                 // (crowded shelters: another one, if there is one)
-                if (std::any_of(options.begin(), options.end(), [](dcon::room_id r) { return !crowded(r); }))
-                    std::erase_if(options, [](dcon::room_id r) { return crowded(r); });
+                if (std::any_of(options.begin(), options.end(), [&](dcon::room_id r) { return !crowded(state, r); }))
+                    std::erase_if(options, [&](dcon::room_id r) { return crowded(state, r); });
                 if (options.empty() && !closest)
                     for (auto const st : sp->order)
                         if (sp->via[st] >= migrate::warp_hop) {
@@ -1478,8 +1473,8 @@ namespace npc {
                 auto const& s = *sp;
                 if (options.size() > 1 && nav.given_up != 0)
                     std::erase_if(options, [&](dcon::room_id r) { return uint32_t(r.index()) + 1u == nav.given_up; });
-                if (std::any_of(options.begin(), options.end(), [](dcon::room_id r) { return !crowded(r); }))
-                    std::erase_if(options, [](dcon::room_id r) { return crowded(r); });
+                if (std::any_of(options.begin(), options.end(), [&](dcon::room_id r) { return !crowded(state, r); }))
+                    std::erase_if(options, [&](dcon::room_id r) { return crowded(state, r); });
                 if (options.empty())
                     return false;
                 auto const t = closest ? options.front() : options[size_t(rng.range(0, int32_t(options.size())))];
@@ -2667,7 +2662,7 @@ namespace npc {
         constexpr float pup_off = 1.f / 3000.f, off = 1.f / 900.f;
         constexpr float piggy_reach = 60.f;
 
-        void piggybacks(sys::game_state& state, std::vector<uint8_t> const& warped_region) {
+        void piggybacks(sys::game_state& state, ve::vectorizable_buffer<int32_t, dcon::region_id> const& warped_region) {
             auto& w = state.world;
             std::vector<dcon::slugcat_npc_id> all;
             w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) { all.push_back(n); });
@@ -2699,7 +2694,7 @@ namespace npc {
                 // (a Watcher where there are no warps goes its own way: on
                 // another's back it would be in that one's pack)
                 if (warps::is_watcher(state, p))
-                    if (auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p)); g && !warped_region[size_t(g.index())])
+                    if (auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p)); g && !warped_region.get(g))
                         continue;
                 float const r = rng.value();
                 bool const climb = r < (pup ? pup_climb : ask);
@@ -2782,36 +2777,39 @@ namespace npc {
         auto& w = state.world;
         // the shelters' crowds; a pack (or one alone) on its way to a crowded
         // one goes somewhere else
-        auto& crowd = crowds();
-        crowd.assign(w.room_size(), 0);
+        // (the counts start from zero: every room written, a vector at a time)
+        auto& crowd = state.npc_buffers.shelter_crowd;
+        w.execute_serial_over_room([&](auto ids) { crowd.set(ids, ve::int_vector{0}); });
         w.for_each_player([&](dcon::player_id p) {
             if (player::dead(state, p) || player::in_shortcut(state, p))
                 return;
             auto const r = rooms::room_of(state, p);
-            if (r && w.room_get_is_shelter(r) && crowd[size_t(r.index())] < 255)
-                ++crowd[size_t(r.index())];
+            if (r && w.room_get_is_shelter(r))
+                ++crowd.get(r);
         });
         // who rides on whom, and the riders' packs
         // the regions with a warp open (none placed, no dynamic one open: a
         // Watcher there makes its own way)
-        std::vector<uint8_t> warped_region(w.region_size(), 0);
+        auto& warped_region = state.npc_buffers.warped_region;
+        w.execute_serial_over_region([&](auto ids) { warped_region.set(ids, ve::int_vector{0}); });
         w.for_each_warp_point([&](dcon::warp_point_id wp) {
             auto const r = w.warp_point_get_room_from_warp_point_location(wp);
             if (r && w.warp_point_get_state(wp) != world::warp_state::closed)
                 if (auto const g = w.room_get_region_from_region_membership(r))
-                    warped_region[size_t(g.index())] = 1;
+                    warped_region.set(g, 1);
         });
         piggybacks(state, warped_region);
         // A room with more than 5 slugcats in it is crowded: every 400 ticks
         // each NPC of a pack there (not resting) may leave it (5%, 2.5% more
         // for each slugcat past 6) and make for another shelter, alone
         {
-            std::vector<uint16_t> in_room(w.room_size(), 0);
+            auto& in_room = state.npc_buffers.slugcats_in_room;
+            w.execute_serial_over_room([&](auto ids) { in_room.set(ids, ve::int_vector{0}); });
             w.for_each_player([&](dcon::player_id p) {
                 if (player::dead(state, p) || player::in_shortcut(state, p))
                     return;
                 if (auto const r = rooms::room_of(state, p))
-                    ++in_room[size_t(r.index())];
+                    ++in_room.get(r);
             });
             w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
                 auto const p = w.slugcat_npc_get_player(n);
@@ -2820,7 +2818,8 @@ namespace npc {
                 if (!w.slugcat_npc_get_leader(n) || player::dead(state, p) || player::in_shortcut(state, p) || nav.what == goal::rest
                     || (state.tick + uint32_t(n.index()) * 97u) % room_crowd_every != 0)
                     return;
-                uint32_t const count = in_room[size_t(rooms::room_of(state, p).index())];
+                // (no room: the buffer's leading pad, none)
+                uint32_t const count = in_room.get(rooms::room_of(state, p));
                 if (count <= room_crowd_limit)
                     return;
                 float const chance = 0.05f + 0.025f * float(count - room_crowd_limit - 1);
@@ -2843,15 +2842,15 @@ namespace npc {
         // the packs whose slugcats are all Artificers (and those alone) take
         // the pyro jumps' ways
         {
-            std::vector<uint8_t> mixed(w.slugcat_npc_size(), 0);
+            ve::vectorizable_buffer<uint8_t, dcon::slugcat_npc_id> mixed(w.slugcat_npc_size());
             w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
                 auto const l = w.slugcat_npc_get_leader(n);
                 if (l && w.player_get_stats(w.slugcat_npc_get_player(n)).name != player::slugcat_name::artificer)
-                    mixed[size_t(l.id.index())] = 1;
+                    mixed.set(l.id, 1);
             });
             w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
                 auto const l = w.slugcat_npc_get_leader(n);
-                w.slugcat_npc_get_nav(n).pyro_pack = !l || !mixed[size_t(l.id.index())] ? 1 : 0;
+                w.slugcat_npc_get_nav(n).pyro_pack = !l || !mixed.get(l.id) ? 1 : 0;
             });
         }
         // a Watcher in a pack another leads, in a region without warps (none
@@ -2862,7 +2861,7 @@ namespace npc {
             if (!l || l == n || !warps::is_watcher(state, p) || player::dead(state, p))
                 return;
             auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p));
-            if (!g || warped_region[size_t(g.index())])
+            if (!g || warped_region.get(g))
                 return;
             // (off the back it rides, too: a rider is in its carrier's pack,
             // which would take it back the next tick)
@@ -2877,7 +2876,7 @@ namespace npc {
             auto const l = w.slugcat_npc_get_leader(n);
             auto const p = w.slugcat_npc_get_player(n);
             auto const target = w.slugcat_npc_get_target(n);
-            if ((l && l != n) || !crowded(target) || player::dead(state, p) || rooms::room_of(state, p) == target)
+            if ((l && l != n) || !crowded(state, target) || player::dead(state, p) || rooms::room_of(state, p) == target)
                 return;
             w.slugcat_npc_get_nav(n).given_up = uint16_t(target.id.index() + 1);
             w.slugcat_npc_set_target(n, dcon::room_id{});

@@ -10,7 +10,7 @@ pipeline.
 ## The model
 
 ```
-stage 0   rain::update_world ‖ npc::update_world            (concurrent workloads)
+stage 0   npc::update_world ‖ rain::update_world ‖ rot::update_attention   (concurrent workloads)
 serial    populate, the vessels in pipes, cameras, rooms::build_index
 stage 1   every room's update_room                           (tbb::parallel_for, auto partitioner)
 stage 2   items::update_counters                             (whole-world dcon vector pass)
@@ -203,6 +203,54 @@ roll = lowbias32(key ^ n * K_draw)
   freely. The rooms' shared streams (`room_random`, the rooms' `cosmetic`)
   are gone too: a roll in a room keys by the object it is about, so the
   objects of a room no longer serialize through one generator.
+
+### Stage 0: the rot bulbs' eyes, a whole-world vector pass
+
+`rot::update_attention` puts every technique above into one workload. Each
+bulb's light fades, a turn of its eye may make it focus (two rolls) or lose
+focus (one roll), and the focus eases towards its goal. Every bulb of the
+world is handled at once, in `execute_serial_over_rot_bulb`:
+
+- **Rolls:** `keyed_random::key(seed, tick, ids, site)` and `draw(keys, n)`:
+  three rolls per lane, computed in vectors, the same bits `rw::random`
+  would give that bulb.
+- **Branches:** the `if / else if` on the rolls become `ve::select` over
+  `mask_vector`s, and the clamps are `ve::min` / `ve::max`.
+- **Carve-outs (`ve::apply`):** the lanes' id values, the eating mask (a
+  `rot_prey` struct) and how far the eye turned. That last one is the
+  distance between two `vec2` properties, which `ve` can't load.
+- **Why stage 0:** it touches only the bulbs' light and focus, which only the
+  renderer reads, so it runs before the rooms, alongside the rain and the
+  NPCs. It sees last tick's look and light: a one-tick shift
+  (DIVERGENCES.md).
+
+What stays in the room pass: the bulbs' movement, their eating and feeling
+(they write creatures' chunks and their neighbours: serial within the
+room), and the tubes. `leg_update` reads the bulbs' reach target, which
+decides what the rot grabs.
+
+### What blocks bigger vector passes
+
+- **`vec2`/`vec3` properties are arrays of structs.** Positions and
+  velocities (body chunks, worm grass worms, rot bulbs, items) are dcon
+  properties of type `rw::vec2`, stored as 8-byte elements. dcon generates
+  `ve::` getters only for 4-byte (and smaller) types, so a vector pass over
+  them needs a per-lane carve-out. Splitting the hot ones into float
+  properties (`pos_x`, `pos_y`, ...) is the step that turns their
+  integration steps into straight vector passes: the worm grass worms'
+  `last_pos = pos; pos += vel; vel *= 0.9; vel.y += 0.6` at the start of
+  `worm_update`, the bulbs' spring towards their stuck position. Those touch
+  nothing but their own worm or bulb, so they could leave the room pass for a
+  stage-0 pass (worm positions are written only by the worms' update; an
+  explosion's push would then show a tick later).
+- **The interactions are serial within a room.** Grabbing, eating, pulling
+  and colliding write other objects (a creature's chunks, a neighbouring
+  bulb), so they stay in `update_room`, where the room's order is kept.
+- **Small-integer lanes:** ve's 8- and 16-bit stores go lane by lane with no
+  masked partial form. Counters that a pass updates are better as `int32_t`.
+- The costly parts of the tick are irregular: path field builds (17% of the
+  game's time in dens mode), chunk physics (8%), items (7%), rot (12%
+  together), water (5%, now vectorized), worm grass (5%).
 
 ## Rules for adding a workload
 
