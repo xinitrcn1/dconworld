@@ -225,7 +225,7 @@ namespace snail {
         // SnailAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             ivec2 const at = here(state, c);
             hook_ctx hx{state, c, room, std::nullopt};
@@ -289,9 +289,10 @@ namespace snail {
         }
 
         // SnailAI.CollideWithSnail
-        void collide_with_snail(sys::game_state& state, dcon::creature_id c, room_view const& room) {
+        void collide_with_snail(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id t) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            // the other snail in the key: each collision of a tick rolls apart
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(t.value)));
             if (!pl(state, c).move || rng.value() >= 0.1f)
                 return;
             ivec2 const at = here(state, c);
@@ -312,7 +313,8 @@ namespace snail {
         void spray(sys::game_state& state, dcon::creature_id c, room_view const& room, int n, float lo, float hi, bool bubbles) {
             if (!state.viewed(room.id))
                 return;
-            auto& rng = state.world.creature_get_graphics_random(c);
+            // (the count and kind in the key: a mini click and a click of a tick spray apart)
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(n) * 2u + (bubbles ? 1u : 0u)));
             vec2 const at = pos(state, c, 1);
             for (int i = 0; i < n; ++i) {
                 vec2 const v = custom::deg_to_vec(rng.value() * 360.f) * mathf::lerp(lo, hi, rng.value());
@@ -348,7 +350,7 @@ namespace snail {
 
         // Snail.MiniClick: a warning click
         void mini_click(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             // (no Snail_Warning_Click sound)
             vel(state, c, 1) += custom::deg_to_vec(rng.value() * 360.f) * 3.f;
             pl(state, c).bloated = 1;
@@ -430,7 +432,7 @@ namespace snail {
         // Snail.Act
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             if (!x.has_suck_point) {
                 find_suck_point(state, c, room);
@@ -542,7 +544,7 @@ namespace snail {
                 click(state, c, room);
             } else if (consious(state, c)) {
                 if (is_snail) {
-                    collide_with_snail(state, c, room);
+                    collide_with_snail(state, c, room, t);
                     if (x.move && pathing::narrow_space(room, tile_of(pos(state, t, 0))))
                         x.click_counter += 0.005f;
                 } else {
@@ -559,7 +561,7 @@ namespace snail {
         auto& x = pl(state, c);
         if (x.trigger_ticker > 0)
             return;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const shell = chunk(state, c, 1);
         float const shell_sub = physics::submersion(state, room, shell);
         // (no ShockWave; the WaterDrips out of the water)
@@ -642,7 +644,7 @@ namespace snail {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::snail);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -718,8 +720,6 @@ namespace snail {
             x.suck_point = at;
             x.has_suck_point = 1;
         }
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x5A11u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -742,7 +742,7 @@ namespace snail {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
@@ -809,7 +809,8 @@ namespace snail {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        // the hit chunk in the key: two hits of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         auto& x = pl(state, c);
         // Snail.Violence: a real hit sets it off, a light one nearly
         if (!w.creature_get_dead(c) && (damage >= 0.1f || stun_bonus > 10.f))
@@ -855,7 +856,8 @@ namespace snail {
         x.allowed_in_non_accessible_tile = 0;
         // SnailAI.NewRoom: heading for the den it came out of, it picks a
         // random tile of the new room instead
-        w.creature_set_destination(c, random_tile(w.creature_get_random(c), view));
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
+        w.creature_set_destination(c, random_tile(rng, view));
     }
 
     std::string describe(sys::game_state const& state, dcon::creature_id c) {

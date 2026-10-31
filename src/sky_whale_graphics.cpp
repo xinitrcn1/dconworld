@@ -194,7 +194,7 @@ namespace sky_whale_graphics {
         // CreatureLooker (simplified): now and then it looks at the closest
         // creature it can see, or at nothing
         void look_update(sys::game_state& state, dcon::creature_id c, graphics_state& g, room_view const& room) {
-            auto& rng = state.world.creature_get_graphics_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             vec2 const eye = cpos(state, c, 0);
             if (g.look && (!creature::here(state, g.look, room.id) || !custom::dist_less(eye, creature::main_pos(state, g.look), visual_radius)))
                 g.look = dcon::creature_id{};
@@ -386,7 +386,7 @@ namespace sky_whale_graphics {
             return;
         auto& g = gs(state, c);
         auto const& L = layout(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         bool const awake = sky_whale::consious(state, c);
         look_update(state, c, g, room);
         if (g.blink > 0)

@@ -293,7 +293,7 @@ namespace sky_whale {
         // SkyWhaleAI.NewRoom (and the constructor's)
         void new_room_ai(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto& ai = w.sky_whale_data_get_ai(data(state, c));
             ai = ai_state{};
@@ -341,7 +341,7 @@ namespace sky_whale {
         // SkyWhaleAI.Update (DetermineBehavior and Act)
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const d = data(state, c);
             auto& ai = w.sky_whale_data_get_ai(d);
@@ -671,7 +671,7 @@ namespace sky_whale {
             auto& w = state.world;
             auto& js = w.sky_whale_data_get_jets(data(state, c));
             bool const viewed = state.viewed(room.id);
-            auto& rng = state.room_random(room.id);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(c.value)));
             for (auto& j : js.j) {
                 if (j.life <= 0)
                     continue;
@@ -741,7 +741,7 @@ namespace sky_whale {
         // back in over a side of `room` (serial: the deferred room change)
         void enter_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const from = creature::room_of(state, c);
             auto const view = world::get_room_view(state, room);
@@ -774,7 +774,7 @@ namespace sky_whale {
             auto const rooms = roam_rooms(state, from ? w.room_get_region_from_region_membership(from) : dcon::region_id{});
             dcon::room_id target = from;
             if (!rooms.empty())
-                target = rooms[size_t(w.creature_get_random(c).range(0, int32_t(rooms.size())))];
+                target = rooms[size_t(rw::random(state.seed, state.tick, uint32_t(c.value)).range(0, int32_t(rooms.size())))];
             if (target)
                 enter_room(state, c, target);
         }
@@ -834,7 +834,7 @@ namespace sky_whale {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::sky_whale);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -889,8 +889,6 @@ namespace sky_whale {
         x.hidden = 0;
         x.hidden_timer = 0;
         x.data = uint16_t(d.index());
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x5C7A11E5u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -926,7 +924,7 @@ namespace sky_whale {
             offscreen_update(state, c, room);
             return;
         }
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
@@ -996,7 +994,8 @@ namespace sky_whale {
         auto& w = state.world;
         if (hidden(state, c))
             return;
-        auto& rng = w.creature_get_random(c);
+        // the hit chunk in the key: two hits of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         k = k < chunk_count ? k : 1u;
         auto const hit = chunk(state, c, k);
         vec2 const hp = w.body_chunk_get_pos(hit);
@@ -1103,20 +1102,15 @@ namespace sky_whale {
             int32_t const number = ++state.next_issued_id;
             int32_t const seed = sd.seed >= 0 ? sd.seed : number;
             auto const room = rooms[size_t(uint32_t(seed) * 2654435761u % uint32_t(rooms.size()))];
-            auto const saved = state.random;
-            state.random = rw::rng{uint32_t(seed) * 0x9E3779B1u ^ 0x5BD1E995u};
-            if (state.random.state == 0)
-                state.random.state = 0x2545F491u;
             state.spawn_seed = seed;
             auto const view = world::get_room_view(state, room);
             auto const c = create(state, room, vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f}, alt);
             state.spawn_seed = -1;
-            state.random = saved;
             if (!c)
                 continue;
             w.creature_set_spawn_flags(c, flags);
             // AbstractCreature's constructor: out of the den in 100 to 1000 ticks
-            go_hidden(state, c, view, w.creature_get_random(c).range(100, 1000));
+            go_hidden(state, c, view, rw::random(state.seed, 0, uint32_t(c.value)).range(100, 1000));
             ++made;
             ++r.made[alt ? "sky whale (AlternateForm)" : "sky whale"];
             ++r.creatures;

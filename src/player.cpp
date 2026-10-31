@@ -303,7 +303,6 @@ namespace player {
         // What the slugcat shares with every creature (its `creature`), see
         // the creature object in dcon_generated.txt
 #define SLUGCAT_CREATURE_FIELDS \
-    X(random) \
     X(stun) \
     X(dead) \
     X(shortcut_delay) \
@@ -337,8 +336,11 @@ namespace player {
             dcon::physical_object_id o;
             dcon::body_chunk_id c[2];
             dcon::chunk_connection_id k; // bodyChunkConnections[0]
+            // this tick's rolls of the slugcat
+            rw::rng rng;
 
-            ctx(sys::game_state& state, dcon::player_id id, room_view const& room) : p{state, id}, state{state}, room{room} {
+            ctx(sys::game_state& state, dcon::player_id id, room_view const& room)
+                : p{state, id}, state{state}, room{room}, rng{rw::random(state.seed, state.tick, uint32_t(p.cr.value))} {
                 o = body(state, id);
                 c[0] = physics::chunk(state, o, 0);
                 c[1] = physics::chunk(state, o, 1);
@@ -456,7 +458,7 @@ namespace player {
 
         void stun_impl(pref& p, int32_t st) {
             // Player.Stun then Creature.Stun
-            if (st > p.random().range(5, 12)) {
+            if (st > rw::random(p.state.seed, p.state.tick, rw::ids(uint32_t(p.cr.value), uint32_t(st))).range(5, 12)) {
                 p.standing() = false;
                 p.feet_stuck_pos().reset();
             }
@@ -520,16 +522,14 @@ namespace player {
         // every field back to its Player constructor value
         void reset_fields(pref& p) {
             auto const stats = p.stats();
-            auto const random = p.random();
 #define X(name) p.name() = std::remove_reference_t<decltype(p.name())>{};
             PLAYER_FIELDS
 #undef X
-            // the creature's share of it (its generator kept)
+            // the creature's share of it
 #define X(name) p.name() = std::remove_reference_t<decltype(p.name())>{};
             SLUGCAT_CREATURE_FIELDS
 #undef X
             p.stats() = stats;
-            p.random() = random;
             auto& w = p.state.world;
             w.creature_set_away(p.cr, 0);
             w.creature_set_away_room(p.cr, dcon::room_id{});
@@ -569,7 +569,7 @@ namespace player {
         w.body_chunk_get_vel(c) += momentum / w.body_chunk_get_mass(c);
         int32_t const st = int32_t(damage * 30.f + stun_bonus);
         stun_impl(p, st);
-        if (!creature::held(state, p.cr) && st > p.random().range(5, 12))
+        if (!creature::held(state, p.cr) && st > rw::random(state.seed, state.tick, rw::ids(uint32_t(p.cr.value), uint32_t(st))).range(5, 12))
             items::release_all(state, id);
         if (damage >= 1.f)
             die_impl(p);
@@ -592,7 +592,6 @@ namespace player {
         state.world.creature_set_health(cr, 1.f);
         pref p{state, id};
         p.stats() = make_stats(name);
-        p.random() = rw::rng{0x9E3779B9u ^ (uint32_t(id.index()) * 0x85EBCA6Bu)};
         reset_fields(p);
         float const mass = 0.7f * p.stats().body_weight_fac;
         physics::object_desc d;
@@ -609,7 +608,7 @@ namespace player {
         state.world.try_create_creature_body(cr, o);
         // erasable slots are reused: drop any graphics state left by a previous player
         state.world.player_set_graphics(id, ::player::graphics_state{});
-        p.flip_direction() = p.random().value() < 0.5f ? -1 : 1;
+        p.flip_direction() = rw::random(state.seed, 0, uint32_t(cr.value)).value() < 0.5f ? -1 : 1;
         return id;
     }
 
@@ -2634,7 +2633,7 @@ namespace player {
                     x.vel(0) *= 0.5f;
                     x.vel(1) *= 0.5f;
                     if (p.corridor_turn_counter() < 30) {
-                        x.vel(0) += custom::deg_to_vec(p.random().value() * 360.f);
+                        x.vel(0) += custom::deg_to_vec(x.rng.value() * 360.f);
                     } else {
                         x.vel(0) += rw::to_vec2(*p.corridor_turn_dir()) * 0.5f;
                         x.vel(1) -= rw::to_vec2(*p.corridor_turn_dir()) * 0.5f;
@@ -2969,7 +2968,7 @@ namespace player {
         // the Artificer running out of breath: its sparks go off under water
         // (the Explosion of Player.LungUpdate): everything close is thrown
         // back, centipedes are hurt, and it dies in a burst of bubbles
-        rw::rng& p_random(ctx& x) { return x.p.random(); }
+        rw::rng& p_random(ctx& x) { return x.rng; }
 
         void artificer_underwater_explosion(ctx& x) {
             auto& state = x.state;
@@ -3141,8 +3140,8 @@ namespace player {
                 } else if (p.air_in_lungs() < p.stats().drown_threshold) {
                     if (p.slow_movement_stun() < 1)
                         p.slow_movement_stun() = 1;
-                    if (p.random().value() < 0.5f)
-                        x.vel(0) += custom::deg_to_vec(p.random().value() * 360.f) * p.random().value();
+                    if (x.rng.value() < 0.5f)
+                        x.vel(0) += custom::deg_to_vec(x.rng.value() * 360.f) * x.rng.value();
                     if (x.in(0).y < 1)
                         x.vel(1) *= mathf::lerp(1.f, 0.9f, mathf::inverse_lerp(0.f, p.stats().drown_threshold, p.air_in_lungs()));
                 }

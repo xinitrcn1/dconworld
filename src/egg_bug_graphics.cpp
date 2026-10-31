@@ -95,9 +95,8 @@ namespace egg_bug_graphics {
     }
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
-        auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         if (g.leg_length <= 0.f)
             g = graphics_state{};
         vec2 const c0 = cpos(state, c, 0), c1 = cpos(state, c, 1);
@@ -130,7 +129,7 @@ namespace egg_bug_graphics {
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& x = pl(state, c);
         auto const& mv = w.egg_bug_data_get_move(creature::egg_bug_data(w, c));
         bool const fire = egg_bug::fire(state, c);
@@ -299,8 +298,7 @@ namespace egg_bug_graphics {
         bool const show = show_eggs(state, c);
         float const t = alpha;
         // the shiver (DrawSprites' UnityEngine.Random: a per creature, per tick roll)
-        rw::rng rng{(state.tick * 2654435761u) ^ (uint32_t(c.index()) * 40503u) ^ 0x6E6B0Bu};
-        rng.next();
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
 
         float const num = mathf::lerp(g.last_flip, g.flip, t);
         vec2 const v = rw::slerp(g.last_z_rotat, g.z_rotat, t);

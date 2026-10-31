@@ -201,11 +201,6 @@ object{
 	// bumped whenever tiles change at runtime (gate doors, spear beams):
 	// cached path fields of the room are rebuilt
 	property{ name{geometry_version} type{uint16_t} }
-	// UnityEngine.Random for the room's own rolls (item spawns, weapon
-	// spins, music trigger chances...): every room has its own, seeded from
-	// the world seed and its index, so rooms can tick in parallel and still
-	// roll the same numbers
-	property{ name{random} type{rw::rng} }
 	// whose rain cycle the room follows (its region's; a gate or a shared
 	// shelter takes a region it connects to)
 	property{ name{rain_region} type{region_id} }
@@ -867,10 +862,6 @@ object{
 	// EntityID.RandomSeed (RainWorldGame.GetNewID's number): what the
 	// graphics seed their rolls with
 	property{ name{seed} type{int32_t} }
-	// its own UnityEngine.Random for the rolls of its update (the pearls'
-	// glimmer, the rag's flutter, the zappers' flicker), so items don't
-	// share a generator
-	property{ name{random} type{rw::rng} }
 	// Weapon.tailPos (the rock's trail while thrown)
 	property{ name{tail_pos} type{rw::vec2} }
 	// Spearmaster's needles: 1 still connected to the slugcat, 2 let go
@@ -1012,7 +1003,6 @@ object{
 	size{16384}
 	tag{save}
 	property{ name{type} type{::creature::type} }
-	property{ name{random} type{rw::rng} }
 	// Creature / HealthState
 	property{ name{stun} type{int32_t} }
 	property{ name{dead} type{uint8_t} }
@@ -1022,9 +1012,6 @@ object{
 	property{ name{current_utility} type{float} }
 	// the pathfinder's destination
 	property{ name{destination} type{rw::ivec2} }
-	// the graphics module's UnityEngine.Random (it rolls only where a
-	// camera looks)
-	property{ name{graphics_random} type{rw::rng} }
 	property{ name{payload} type{::creature::payload} }
 	// Dens and shortcut travel (dens.hpp, shortcuts.hpp). The den it lives
 	// in (AbstractCreature.spawnDen: a room and its exitAndDenIndex node,
@@ -1719,8 +1706,6 @@ object{
 	property{ name{highest_tile} type{int32_t} }
 	// WormGrassPatch.trackedCreatures (CreatureAndPull)
 	property{ name{tracked} type{::worm_grass::tracked_set} }
-	// the patch's UnityEngine.Random, for it and its worms
-	property{ name{random} type{rw::rng} }
 }
 relationship{
 	name{worm_grass_location}
@@ -1853,7 +1838,6 @@ object{
 	// DaddyCorruption.directions, zero for tiles without rot
 	property{ name{directions} type{vector_pool{1048576}{rw::vec2}} }
 	property{ name{cells} type{vector_pool{1048576}{world::rot_cell}} }
-	property{ name{random} type{rw::rng} }
 	// Garbage Wastes rot (no reacting to noise, black eyes on the tubes)
 	property{ name{gw_mode} type{uint8_t} }
 	property{ name{effect_color} type{rw::vec3} }

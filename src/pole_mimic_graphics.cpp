@@ -290,7 +290,7 @@ namespace pole_mimic_graphics {
         auto leaves = w.pole_mimic_data_get_leaves(d);
         if (!g.initiated || chunks.size() < 2 || leaves.size() != uint32_t(g.leaf_pairs * 2) || rope.size() < 2)
             return;
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // a reveal running up the stalk now and then (the first few for
         // the slugcat who never saw one: PoleMimicEverSeen, kept per plant)
         if (g.look_like_a_pole > 0.9f && g.reveal == 0.f && g.last_reveal == 0.f) {

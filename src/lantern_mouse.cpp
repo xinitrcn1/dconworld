@@ -73,10 +73,11 @@ namespace lantern_mouse {
             room_view const& room;
             creature::lantern_mouse_payload& x;
             dcon::lantern_mouse_data_id d;
-            rw::rng& rng;
+            rw::rng rng;
             dcon::body_chunk_id ch[2];
-            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r)
-                : state(s), w(s.world), c(cc), room(r), x(pl(s, cc)), d(data(s, cc)), rng(s.world.creature_get_random(cc)) {
+            // `salt` tells apart the ctxs made for one mouse in one tick
+            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r, uint32_t salt)
+                : state(s), w(s.world), c(cc), room(r), x(pl(s, cc)), d(data(s, cc)), rng(rw::random(s.seed, s.tick, rw::ids(uint32_t(cc.value), salt))) {
                 ch[0] = chunk(s, cc, 0);
                 ch[1] = chunk(s, cc, 1);
             }
@@ -420,7 +421,7 @@ namespace lantern_mouse {
                 return;
             x.x.voice_counter = int16_t(x.rng.range(5, 12));
             if (x.viewed()) {
-                auto& gr = x.w.creature_get_graphics_random(x.c);
+                auto gr = rw::random(x.state.seed, x.state.tick, uint32_t(x.c.value));
                 lantern_mouse_graphics::shove_head(x.state, x.c, custom::rnv(gr) * 4.f * gr.value());
                 if (gr.value() > mathf::inverse_lerp(0.5f, 1.f, stress))
                     lantern_mouse_graphics::ouch(x.state, x.c, x.x.voice_counter);
@@ -891,7 +892,7 @@ namespace lantern_mouse {
             if (ai.struggle_b < 0 && x.rng.value() < 0.008333334f)
                 ai.struggle_b = x.rng.range(10, 100);
             if (x.viewed() && (ai.struggle_a < 0 || ai.struggle_b < 0)) {
-                auto& gr = x.w.creature_get_graphics_random(x.c);
+                auto gr = rw::random(x.state.seed, x.state.tick, uint32_t(x.c.value));
                 if (gr.value() < 0.025f)
                     lantern_mouse_graphics::reset_unconsious_profile(x.state, x.c);
                 lantern_mouse_graphics::jostle(x.state, x.c, gr);
@@ -934,7 +935,7 @@ namespace lantern_mouse {
             sys::game_state* state;
             dcon::creature_id c;
         };
-        void on_impact(void* user, dcon::physical_object_id, uint32_t, ivec2, float speed, bool) {
+        void on_impact(void* user, dcon::physical_object_id, uint32_t k, ivec2, float speed, bool) {
             auto& ic = *static_cast<impact_ctx*>(user);
             auto& state = *ic.state;
             if (speed <= 12.f)
@@ -945,7 +946,7 @@ namespace lantern_mouse {
             lantern_mouse_graphics::ouch(state, ic.c, custom::int_clamp(int32_t(speed * 0.5f), 0, 30));
             if (battery(state, ic.c) <= 0.7f)
                 return;
-            auto& gr = state.world.creature_get_graphics_random(ic.c);
+            auto gr = rw::random(state.seed, state.tick, rw::ids(uint32_t(ic.c.value), k));
             auto const k0 = chunk(state, ic.c, 0);
             vec3 const col = custom::hsl2rgb(hue(state, ic.c), 1.f, 0.9f);
             int32_t const n = gr.range(2, 6);
@@ -955,7 +956,7 @@ namespace lantern_mouse {
         }
 
         bool spot_for_hanging(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 tile, dangle& out) {
-            ctx x(state, c, room);
+            ctx x(state, c, room, 1);
             out = dangle_tile(x, tile, true);
             return out.valid;
         }
@@ -965,7 +966,7 @@ namespace lantern_mouse {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::lantern_mouse);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1017,8 +1018,6 @@ namespace lantern_mouse {
         x.rope_length = 0.f;
         x.lungs = 1.f;
         x.battery = full_battery;
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x3A5F1C7u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -1037,7 +1036,7 @@ namespace lantern_mouse {
         dangle dg;
         ivec2 const tile = tile_of(at);
         if (spot_for_hanging(state, c, view, tile, dg)) {
-            ctx cx(state, c, view);
+            ctx cx(state, c, view, 2);
             cx.ai().dangle_spot = dg;
             attach_rope(cx, dg.attached_pos);
             x.rope_length = float_dist(dg.attached_pos, dg.body_pos) * 20.f;
@@ -1064,7 +1063,7 @@ namespace lantern_mouse {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        ctx x(state, c, room);
+        ctx x(state, c, room, 0);
         auto& p = x.x;
         // LanternMouse.Update: hurt, it may die or faint now and then
         if (!w.creature_get_dead(c)) {
@@ -1168,7 +1167,7 @@ namespace lantern_mouse {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         // Creature.Violence (HealthState, quickDeath)
         auto const hit = chunk(state, c, k < 2 ? k : 0);
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
@@ -1182,7 +1181,7 @@ namespace lantern_mouse {
             creature::die(state, c);
         // LanternMouse.Violence: a squeak
         auto const view = world::get_room_view(state, creature::room_of(state, c));
-        ctx x(state, c, view);
+        ctx x(state, c, view, rw::ids(3, k));
         squeak(x, 1.f);
     }
 
@@ -1300,7 +1299,7 @@ namespace lantern_mouse {
 
     void grab(sys::game_state& state, dcon::player_id p, dcon::creature_id c) {
         auto const view = world::get_room_view(state, creature::room_of(state, c));
-        ctx x(state, c, view);
+        ctx x(state, c, view, 4);
         // (the port's: a grabbed mouse is off its rope at once)
         x.x.rope_invincible = 0;
         detach_rope(x);

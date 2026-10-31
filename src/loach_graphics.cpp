@@ -285,7 +285,6 @@ namespace loach_graphics {
     void create(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         auto const d = data(state, c);
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x6C8E9CF5u};
         rw::unity_random r{w.loach_data_get_seed(d)};
         graphics_state g;
         // bodyLength: the end chunks' radii and the connections
@@ -380,7 +379,7 @@ namespace loach_graphics {
         auto& w = state.world;
         auto const d = data(state, c);
         auto& g = w.loach_data_get_graphics(d);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& pl = w.creature_get_payload(c).loach;
         bool const cons = creature::consious(state, c);
         vec2 const head = w.body_chunk_get_pos(creature::chunk(state, c, 0));

@@ -237,7 +237,7 @@ namespace needle_worm {
             room_view const& room;
             creature::needle_worm_payload& x;
             dcon::needle_worm_data_id d;
-            rw::rng& rng;
+            rw::rng rng;
             bool small;
             uint32_t n, nt, total;
             dcon::body_chunk_id ch[max_chunks];
@@ -245,8 +245,10 @@ namespace needle_worm {
             // the pathfinder's field to the destination, when asked for
             std::optional<pathing::field_id> field;
 
-            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r)
-                : state(s), c(cc), room(r), x(pl(s, cc)), d(data(s, cc)), rng(s.world.creature_get_random(cc)), small(x.variant == variant::small),
+            // (keyed by the constructing call site too: several ctxs of one
+            // worm in one tick roll apart)
+            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r, std::source_location const l = std::source_location::current())
+                : state(s), c(cc), room(r), x(pl(s, cc)), d(data(s, cc)), rng(rw::random(s.seed, s.tick, uint32_t(cc.value), l)), small(x.variant == variant::small),
                   n(chunk_count(small)), nt(tail_count(small)), total(total_segments(small)), tail(s.world.needle_worm_data_get_tail(d)) {
                 for (uint32_t i = 0; i < n; ++i)
                     ch[i] = chunk(s, cc, i);
@@ -551,12 +553,12 @@ namespace needle_worm {
         void small_respond_cry(sys::game_state& state, dcon::creature_id m) {
             auto& b = state.world.needle_worm_data_get_big_ai(data(state, m));
             if (b.respond_scream_counter == 0)
-                b.respond_scream_counter = state.world.creature_get_random(m).range(10, 50);
+                b.respond_scream_counter = rw::random(state.seed, state.tick, uint32_t(m.value)).range(10, 50);
         }
         void big_respond_cry(sys::game_state& state, dcon::creature_id m) {
             auto& b = state.world.needle_worm_data_get_big_ai(data(state, m));
             if (b.respond_scream_counter > -1)
-                b.respond_scream_counter = -state.world.creature_get_random(m).range(6, 16);
+                b.respond_scream_counter = -rw::random(state.seed, state.tick, uint32_t(m.value)).range(6, 16);
         }
         // BigNeedleWorm.SmallCry, BigCry (no sounds here: the snout's quiver)
         void small_cry(ctx& x) {
@@ -598,6 +600,8 @@ namespace needle_worm {
                 return;
             if (auto const h = creature::holder(x.state, x.c)) {
                 ctx mx(x.state, m, x.room);
+                // (several young may scream for one mother in a tick)
+                mx.rng = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(m.value), uint32_t(x.c.value)));
                 tracker::see(x.state, m, x.room, h, make_hooks(mx));
             }
             small_respond_cry(x.state, m);
@@ -1935,7 +1939,7 @@ namespace needle_worm {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::needle_worm);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -2025,7 +2029,6 @@ namespace needle_worm {
         b.attack_target_pos = at;
         w.needle_worm_data_set_big_ai(d, b);
         w.needle_worm_data_set_social(d, social_memory{});
-        w.creature_set_random(c, rng);
         {
             ctx x(state, c, view);
             reset_tail(x, at + vec2{0.f, -float(n) * 4.f});
@@ -2064,7 +2067,7 @@ namespace needle_worm {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         bool const small = is_small(state, c);
         bool const was_dead = w.creature_get_dead(c) != 0;
         // Creature.Violence (HealthState)

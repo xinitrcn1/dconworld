@@ -67,8 +67,8 @@ namespace vulture {
             }
         }
 
-        ctx::ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r)
-            : state(s), c(cc), room(r), rng(s.world.creature_get_random(cc)), p(s.world.creature_get_payload(cc).vulture), d(creature::vulture_data(s.world, cc)),
+        ctx::ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r, std::source_location l)
+            : state(s), c(cc), room(r), rng(rw::random(s.seed, s.tick, uint32_t(cc.value), l)), p(s.world.creature_get_payload(cc).vulture), d(creature::vulture_data(s.world, cc)),
               b(s.world.vulture_data_get_body(creature::vulture_data(s.world, cc))), ai(s.world.vulture_data_get_ai(creature::vulture_data(s.world, cc))),
               neck_s(s.world.vulture_data_get_neck(creature::vulture_data(s.world, cc))), wings(work_buffer(depth)), scratch(scratch_buffer(depth)) {
             ++depth;
@@ -246,7 +246,7 @@ namespace vulture {
                     x.vel(k) -= tv * (x.king() ? 1.2f : 0.8f) * f;
                 set_jet_fuel(x, x.p.jet_fuel - 1.f / (x.king() ? 60.f : 40.f));
                 if (x.viewed) {
-                    auto& g = x.state.runtime(x.room.id).cosmetic;
+                    auto g = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(x.room.id.value), rw::ids(uint32_t(x.c.value), i)));
                     vec2 const ep = exhaust_pos(x, i);
                     auto const& d = thruster_defs[i];
                     if (!x.room.point_submerged(ep)) {
@@ -1433,7 +1433,7 @@ namespace vulture {
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 pos, variant v) {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::vulture);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t const seed = state.spawn_seed >= 0 ? state.spawn_seed : int32_t(rng.next() & 0x7FFFFFFF);
         bool const king = v == variant::king, miros = v == variant::miros;
         float const num = king ? 1.4f : 1.f;
@@ -1515,7 +1515,6 @@ namespace vulture {
             w.vulture_wing_get_grab_path(l).resize(0);
         }
         tracker::clear(state, c);
-        w.creature_set_random(c, rng);
         {
             auto const view = world::get_room_view(state, room);
             ctx x{state, c, view};
@@ -1587,7 +1586,7 @@ namespace vulture {
             } else {
                 // the mask turns it: sparks
                 if (x.viewed && (damage > 0.1f || stun_bonus > 30.f)) {
-                    auto& g = state.runtime(room).cosmetic;
+                    auto g = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), uint32_t(c.value)));
                     vec2 const at = x.pos(head);
                     particles::spawn(state, room, particles::kind::flash, at, vec2{0.f, 0.f}, 12.f, 0.15f, vec3{1.f, 1.f, 1.f});
                     for (int32_t i = 0; i < 3 + int32_t(mathf::min(damage * 3.f, 9.f)); ++i)
@@ -1654,7 +1653,7 @@ namespace vulture {
         auto const view = world::get_room_view(state, room);
         ivec2 const t = room_view::get_tile_position(at);
         vec2 const a = rw::to_vec2(view.shortcut_entrance_hole_direction(t));
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         for (uint32_t i = 0; i < chunk_count; ++i) {
             auto const k = chunk(state, c, i);
             w.body_chunk_set_pos(k, room_view::middle_of_tile(t) - a * (i == 1 ? 10.f : 5.f) + custom::deg_to_vec(rng.value() * 360.f));

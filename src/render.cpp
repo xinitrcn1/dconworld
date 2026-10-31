@@ -1297,7 +1297,8 @@ namespace render {
         void dangle_stalk_cmds(dcon::item_id it, vec2 stuck, vec2 fruit, float rope_length, rw::vec3 black, std::vector<sprites::draw_cmd>& out) {
             int const segs = std::max(1, int(rope_length / 15.f));
             float const conn_rad = rope_length / mathf::pow(float(segs), 1.1f);
-            rw::rng rng{uint32_t(it.index()) * 2654435761u | 1u};
+            // (from a fixed key: the same shape every frame)
+            rw::rng rng{rw::keyed::key(0u, 0u, uint32_t(it.value), rw::site())};
             static std::vector<vec2> v;
             v.assign(size_t(segs) * 4, vec2{0.f, 0.f});
             vec2 a = stuck;

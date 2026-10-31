@@ -123,15 +123,15 @@ namespace egg_bug {
         }
 
         // EggBug.Squirt / EggBugGraphics.Squirt: drips off the eggs
-        // (cosmetic, where a camera looks, rolled from the graphics'
-        // generator; the eggs taken on the body, never the graphics
-        // module's: the simulation doesn't read it)
-        void squirt(sys::game_state& state, dcon::creature_id c, float intensity) {
-            auto& w = state.world;
+        // (cosmetic, where a camera looks, from its own stream keyed by one
+        // draw of the caller's, taken viewed or not; the eggs taken on the
+        // body, never the graphics module's: the simulation doesn't read it)
+        void squirt(sys::game_state& state, dcon::creature_id c, float intensity, rw::rng& caller) {
+            uint32_t const k = caller.next();
             auto const room = creature::room_of(state, c);
             if (!state.viewed(room) || !show_eggs(state, c))
                 return;
-            auto& rng = w.creature_get_graphics_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
             vec3 const col = drip_color(state, c);
             vec2 const c0 = pos(state, c, 0), c1 = pos(state, c, 1);
             vec2 const back = custom::dir_vec(c0, c1);
@@ -149,12 +149,10 @@ namespace egg_bug {
         }
 
         // EggBug.TryJump: a leap away from `away`
-        void try_jump(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 away) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+        void try_jump(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 away, rw::rng& rng) {
             auto& x = pl(state, c);
             if (consious(state, c))
-                squirt(state, c, 0.5f + 0.5f * x.fear);
+                squirt(state, c, 0.5f + 0.5f * x.fear, rng);
             if (!consious(state, c) || x.no_jumps > 0 || (!accessible(state, c, room, pos(state, c, 0)) && !accessible(state, c, room, pos(state, c, 1)))
             || pathing::narrow_space(room, tile_of(pos(state, c, 1))))
                 return;
@@ -175,9 +173,7 @@ namespace egg_bug {
         }
 
         // EggBug.Suprise
-        void suprise(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 at) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+        void suprise(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 at, rw::rng& rng) {
             auto& x = pl(state, c);
             if (!consious(state, c))
                 return;
@@ -187,7 +183,7 @@ namespace egg_bug {
                         vel(state, c, i) += (custom::rnv(rng) * 4.f + custom::dir_vec(at, pos(state, c, i)) * 2.f) * (0.5f + 0.5f * x.fear);
             x.shake = int16_t(std::max(int32_t(x.shake), rng.range(5, 15)));
             x.fear = custom::lerp_and_tick(x.fear, 1.f, 0.3f, 0.14285715f);
-            squirt(state, c, x.fear);
+            squirt(state, c, x.fear, rng);
         }
 
         //
@@ -200,6 +196,8 @@ namespace egg_bug {
             // the field to where it is (PathFinder.CoordinateReachableAndGetbackable,
             // judged by the way back), built on the first question
             std::optional<pathing::field_id> from_here;
+            // the hooks' rolls this tick (one stream for all their calls)
+            rw::rng rng;
         };
         bool reachable(hook_ctx& x, ivec2 t) {
             if (!accessible(x.state, x.c, x.room, t))
@@ -247,7 +245,7 @@ namespace egg_bug {
             auto& x = *static_cast<hook_ctx*>(u);
             auto& state = x.state;
             auto const c = x.c;
-            auto& rng = state.world.creature_get_random(c);
+            auto& rng = x.rng;
             if (!first && rng.value() > pl(state, c).fear)
                 return;
             relationship const rel = r.rel;
@@ -256,9 +254,9 @@ namespace egg_bug {
             vec2 const at = room_view::middle_of_tile(tracker::best_guess(r));
             if (first && rel.type == creature::rel::afraid && rel.intensity > 0.06f
             && custom::dist_less(pos(state, c, 0), at, custom::lerp_map(rel.intensity, 0.06f, 0.5f, 50.f, 300.f)))
-                try_jump(state, c, x.room, at);
+                try_jump(state, c, x.room, at, rng);
             if (rel.intensity > (first ? 0.02f : 0.1f))
-                suprise(state, c, x.room, at);
+                suprise(state, c, x.room, at, rng);
         }
         bool hook_reach(void* u, ivec2 t) {
             return reachable(*static_cast<hook_ctx*>(u), t);
@@ -322,7 +320,7 @@ namespace egg_bug {
         // (NoiseTracker: hearingSkill 2 sitting, else 0.2)
         void hear_noises(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto& ai = w.egg_bug_data_get_ai(data(state, c));
             float const hearing = x.sitting ? 2.f : 0.2f;
@@ -335,8 +333,8 @@ namespace egg_bug {
                 if (ai.noise_reaction_delay > 0)
                     continue;
                 if (n.strength > 160.f && custom::dist_less(n.pos, main, mathf::lerp(x.sitting ? 300.f : 100.f, 600.f, x.fear)))
-                    try_jump(state, c, room, n.pos);
-                suprise(state, c, room, n.pos);
+                    try_jump(state, c, room, n.pos, rng);
+                suprise(state, c, room, n.pos, rng);
                 ai.noise_reaction_delay = rng.range(0, 30);
             }
         }
@@ -344,11 +342,11 @@ namespace egg_bug {
         // EggBugAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const d = data(state, c);
             ivec2 const at = here(state, c);
             auto const& p = tracker_params(state, c);
-            hook_ctx hx{state, c, room, std::nullopt};
+            hook_ctx hx{state, c, room, std::nullopt, rw::random(state.seed, state.tick, uint32_t(c.value))};
             tracker::hooks const h = make_hooks(hx);
             tracker::update(state, c, room, at, p, h);
             auto const& ts = tracker::of(state, c);
@@ -437,7 +435,7 @@ namespace egg_bug {
                     auto const k = creature::chunk_of(state, r->who, uint32_t(rng.range(0, int32_t(n))));
                     vec2 const kp = w.body_chunk_get_pos(k);
                     if (custom::dist_less(pos(state, c, 0), kp, w.body_chunk_get_rad(chunk(state, c, 0)) + w.body_chunk_get_rad(k) + 40.f * x.fear))
-                        try_jump(state, c, room, kp);
+                        try_jump(state, c, room, kp, rng);
                 }
                 break;
             }
@@ -643,8 +641,7 @@ namespace egg_bug {
         // EggBug.DropEggs (no graphics module: from the body, all at once;
         // the fire bug's blast goes off either way)
         void drop_eggs(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             bool const fb = fire(state, c);
             if (fb && x.eggs_left <= 0)
@@ -692,8 +689,7 @@ namespace egg_bug {
         // EggBug.DropSpears: the fire bug's spines, six spears (plain ones:
         // the bug spear's hue and smoke trail aren't ported)
         void drop_spears(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             pl(state, c).drop_spears = 0;
             std::vector<drop_item> spears;
             vec2 const c1 = pos(state, c, 1), v1 = vel(state, c, 1);
@@ -731,7 +727,7 @@ namespace egg_bug {
         // the spines
         void carry_object(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& fs = w.egg_bug_data_get_fire(data(state, c));
             auto const t = grasped(state, c);
             uint32_t const k = creature::grasp_chunk(w, c, 0);
@@ -789,7 +785,7 @@ namespace egg_bug {
                     // (no CreatureSpasmers, no Spear_Stick_In_Creature sound)
                     vel(state, c, 0) += custom::rnv(rng) * 5.f;
                     if (state.viewed(room.id)) {
-                        auto& gr = w.creature_get_graphics_random(c);
+                        auto gr = rw::random(state.seed, state.tick, uint32_t(c.value));
                         vec2 const v0 = vel(state, c, 0);
                         for (int q = 0; q < 8; ++q)
                             particles::spawn(state, room.id, particles::kind::drop, w.body_chunk_get_pos(gc),
@@ -810,7 +806,8 @@ namespace egg_bug {
         // Creature.Violence (HealthState, quickDeath)
         void base_violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            // (the hit chunk in the key: a tick's hits on two chunks roll apart)
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
             auto const& t = tp(state, c);
             auto const hit = chunk(state, c, k < 2 ? k : 0);
             w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
@@ -901,11 +898,12 @@ namespace egg_bug {
                     creature::stun(state, cr, int32_t(e.min_stun * mathf::inverse_lerp(0.f, 0.5f, num2)));
             }
         }
-        // the look of it (rolled from the room's cosmetic generator, only
-        // where a camera looks): ExplosionLight, Sparks, smoke
+        // the look of it (only where a camera looks, keyed by the room, the
+        // source and the spot): ExplosionLight, Sparks, smoke
         if (!state.viewed(room.id))
             return;
-        auto& r = state.runtime(room.id).cosmetic;
+        uint32_t const spot = uint32_t(int32_t(at.x)) ^ uint32_t(int32_t(at.y)) << 16;
+        auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(source.value) ^ spot));
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, e.rad * 0.5f, 0.3f, e.color, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, e.rad * 0.25f, 0.15f, vec3{1.f, 1.f, 1.f}, 1.f);
         for (int i = 0; i < 20; ++i) {
@@ -923,7 +921,8 @@ namespace egg_bug {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::egg_bug);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        // the creature's rolls at its making (tick 0: from its identity)
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -980,8 +979,6 @@ namespace egg_bug {
         x.drop_spears = fb ? 1 : 0;
         x.sitting = 0;
         x.swimming = 0;
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0xE66B06u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -991,14 +988,14 @@ namespace egg_bug {
         w.creature_set_destination(c, tile_of(at));
         w.egg_bug_data_set_seed(d, seed);
         // AbstractCreature.personality.dominance
-        w.egg_bug_data_set_dominance(d, w.creature_get_random(c).value());
+        w.egg_bug_data_set_dominance(d, rng.value());
         w.egg_bug_data_set_move(d, move_state{});
         ai_state ai;
         ai.temp_idle_pos = tile_of(at);
         w.egg_bug_data_set_ai(d, ai);
         fire_state fs;
         if (fb)
-            fs.next_stab = w.creature_get_random(c).range(15, 60);
+            fs.next_stab = rng.range(15, 60);
         w.egg_bug_data_set_fire(d, fs);
         w.egg_bug_data_set_graphics(d, graphics_state{});
         tracker::clear(state, c);
@@ -1014,7 +1011,7 @@ namespace egg_bug {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         auto& x = pl(state, c);
         bool const fb = fire(state, c);
@@ -1042,7 +1039,7 @@ namespace egg_bug {
                 drop_spears(state, c, room);
             // FireSmoke: it bleeds smoke once it lost eggs (cosmetic)
             if (x.eggs_left < 6 && !w.creature_get_dead(c) && state.viewed(room.id)) {
-                auto& gr = w.creature_get_graphics_random(c);
+                auto gr = rw::random(state.seed, state.tick, uint32_t(c.value));
                 if (gr.value() < 0.25f)
                     particles::spawn(state, room.id, particles::kind::dust, pos(state, c, 0), custom::rnv(gr) * 0.8f, 6.f, 1.f,
                         custom::hsl2rgb(custom::decimal(x.hue + hue_off), 1.f, 0.5f), 0.4f);
@@ -1160,7 +1157,8 @@ namespace egg_bug {
         if (!state.world.creature_is_valid(c))
             return;
         if (damage > 0.05f || (fb && (type == creature::damage_type::blunt || type == creature::damage_type::stab))) {
-            squirt(state, c, mathf::inverse_lerp(0.2f, 1.f, damage));
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
+            squirt(state, c, mathf::inverse_lerp(0.2f, 1.f, damage), rng);
             if (fb && x.drop_eggs && state.world.creature_get_away(c) == 0)
                 drop_eggs(state, c, world::get_room_view(state, creature::room_of(state, c)));
         }
@@ -1217,11 +1215,13 @@ namespace egg_bug {
         if (!custom::dist_less(head, at + vec2{mathf::sign(v.x) * 300.f, 0.f}, 300.f))
             return;
         auto const room = world::get_room_view(state, creature::room_of(state, c));
+        // keyed by where the weapon is too: two weapons of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(int32_t(at.x)) ^ uint32_t(int32_t(at.y)) << 16));
         if (at.y <= head.y + 50.f && (!fire(state, c) || x.eggs_left == 0)) {
-            try_jump(state, c, room, at);
+            try_jump(state, c, room, at, rng);
             return;
         }
-        squirt(state, c, 1.f);
+        squirt(state, c, 1.f, rng);
     }
 
     std::string describe(sys::game_state const& state, dcon::creature_id c) {

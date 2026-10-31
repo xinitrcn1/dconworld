@@ -81,6 +81,6 @@ namespace cicada {
         uint8_t current_loop = 0;
         // CreatureLooker.lookCreature
         dcon::creature_id look_creature;
-        // (its UnityEngine.Random is the creature's graphics_random)
+        // (its UnityEngine.Random is the graphics update's keyed stream)
     };
 }

@@ -666,7 +666,7 @@ namespace lizard {
         float last_voice_visualization = 0.f;
         int32_t override_head_graphic = -1;
         individual_variations ivars;
-        // (its UnityEngine.Random is the creature's graphics_random)
+        // (its UnityEngine.Random is a stream keyed by the creature)
         cosmetics_state cosmetics;
     };
 

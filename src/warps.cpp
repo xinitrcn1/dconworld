@@ -502,7 +502,7 @@ namespace warps {
             if (other_layer(state, wp) && !one_way_exit(state, placed)) {
                 float t = w.warp_point_get_shockwave_timer(wp) + 1.f / 60.f;
                 float const limit = w.warp_point_get_shockwave_limit(wp);
-                auto& rng = state.room_random(room.id);
+                auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(wp.value)));
                 if (t >= limit && !w.warp_point_get_second_shockwave(wp)) {
                     w.warp_point_set_second_shockwave(wp, true);
                     spawn_ripple_ring(state, room.id, pos, 80.f + 180.f * rng.value(), 1.f, 1.f);

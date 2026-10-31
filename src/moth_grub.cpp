@@ -97,7 +97,7 @@ namespace moth_grub {
         // CreatureInterestBonus: never a small creature)
         void reevaluate_look(sys::game_state& state, dcon::creature_id c, room_view const& room, ai_state& a) {
             auto const& w = state.world;
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const& ts = tracker::of(state, c);
             a.look_creature = dcon::creature_id{};
             float best = 0.f;
@@ -129,7 +129,7 @@ namespace moth_grub {
         // CreatureLooker.Update (chanceToLookAtNothing 0.0025, 30 frames
         // between focus changes)
         void looker_update(sys::game_state& state, dcon::creature_id c, room_view const& room, ai_state& a) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (a.look_creature && !tracker::find(tracker::of(state, c), a.look_creature))
                 a.look_creature = dcon::creature_id{};
             if (a.look_focus_delay > 0)
@@ -217,7 +217,7 @@ namespace moth_grub {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::moth_grub);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -262,8 +262,6 @@ namespace moth_grub {
         physics::add_connection(state, o, k[3], k[1], 10.f, connection_type::normal, 0.7f, 0.5f);
         physics::set_go_through_floors(state, o, true);
         w.try_create_creature_body(c, o);
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{rng.next() | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -304,7 +302,7 @@ namespace moth_grub {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
             float& health = w.creature_get_health(c);
@@ -393,7 +391,7 @@ namespace moth_grub {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         if (k >= chunk_count)
             k = 0;
         // MothGrub.Violence: the head takes double

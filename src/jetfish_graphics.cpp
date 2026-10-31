@@ -131,7 +131,7 @@ namespace jetfish_graphics {
             }
         }
         // GraphicsModule.Reset: every body part on the first chunk
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const at = w.body_chunk_get_pos(ch(state, c, 0));
         for (uint32_t i = 0; i < 2; ++i) {
             for (uint32_t j = 0; j < tail_segments; ++j)

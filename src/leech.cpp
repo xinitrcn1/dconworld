@@ -170,8 +170,6 @@ namespace leech {
         void reset_school(sys::game_state& state, dcon::creature_id c) {
             auto& w = state.world;
             leave_school(state, c);
-            // the LeechSchool constructor's colour
-            w.creature_get_random(c).value();
             pl(state, c).school = uint16_t(c.index());
             pl(state, c).school_order = 0;
             w.leech_data_set_prey_count(data(state, c), 0);
@@ -242,7 +240,7 @@ namespace leech {
         // Leech.ConsiderOtherCreature: prey for the school, or another school to join
         void consider(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id t) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(t.value)));
             vec2 const at = main_pos(state, c);
             if (!here(state, t, room.id))
                 return;
@@ -283,7 +281,7 @@ namespace leech {
         // Leech.SwitchDestination
         void switch_destination(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const d = data(state, c);
             vec2 const at = main_pos(state, c);
@@ -344,7 +342,7 @@ namespace leech {
         // Leech.Swim
         void swim(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const d = data(state, c);
             auto const m = main(state, c);
             vec2 const at = w.body_chunk_get_pos(m);
@@ -515,7 +513,7 @@ namespace leech {
         // leech's way of life)
         void crawl(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const m = main(state, c);
             vec2 const at = w.body_chunk_get_pos(m);
@@ -611,7 +609,7 @@ namespace leech {
         // Leech.Attached: hanging on to the slugcat, dragging it down
         void attached(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const p = grasped(state, c);
             auto const m = main(state, c);
@@ -699,7 +697,7 @@ namespace leech {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::leech);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -739,7 +737,6 @@ namespace leech {
         x.hunt_prey = dcon::creature_id{};
         x.has_goal = 0;
         x.flee_from_rain = 0;
-        w.creature_set_random(c, rng);
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -763,7 +760,7 @@ namespace leech {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto& x = pl(state, c);
         auto const m = main(state, c);
         // Creature.Update + PhysicalObject.Update

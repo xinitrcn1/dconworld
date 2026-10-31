@@ -16,6 +16,9 @@ Shared by every kind ported here:
 - Sounds that have no id in sound_types.hpp yet are silent (noted per kind).
 - Worm grass isn't a creature here either: like vanilla it's a system of its
   room (patches and worms), with no creature payload.
+- Random numbers: no generator is stored anywhere. Every roll is a pure function of the world's seed (set when the world is made, never changed), the tick, the ids of what rolls (dcon ids' `.value`), the call site and which draw of that call it is (`rw::random`, docs/PIPELINE.md). So the rolls differ from UnityEngine.Random's sequence everywhere, on purpose: no roll depends on serial state, and any object, lane or thread can roll in any order. What must come out the same whenever it's rolled (a creature's looks, a shape drawn every frame, the layouts made at a room's load) rolls with tick 0. The audio thread keys its rolls by the sounds it has started, its own clock.
+- Item counters (Weapon.vibrate, PlayerCarryableItem.forbiddenToPlayer) tick down in one pass over every item after the rooms' update (items::update_counters, docs/PIPELINE.md) instead of in each item's update. Everything that sets them runs before that point except Spear.Update's 10 ticks of vibration when it lodges in a wall, which now shakes for 9.
+- Floating point: the build targets the host CPU (`RWCPP_NATIVE`, `-march=native`), where GCC fuses `a * b + c` into FMA instructions, so results differ from vanilla's C# in the last bits. A given build is still deterministic: one thread and every thread agree.
 
 
 ## Noodlefly (BigNeedleWorm, SmallNeedleWorm)

@@ -287,7 +287,7 @@ namespace tentacle_plant_graphics {
         // the danglers
         auto dgs = w.tentacle_plant_data_get_danglers(d);
         auto ss = w.tentacle_plant_data_get_dangler_segments(d);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         dcon::body_chunk_id const body[2] = {creature::chunk(state, c, 0), creature::chunk(state, c, 1)};
         for (uint32_t i = 0; i < dgs.size(); ++i) {
             auto const& dg = dgs.at(i);

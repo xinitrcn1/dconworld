@@ -225,7 +225,7 @@ namespace terrain {
                     s.h[i] += (target - s.h[i]) * storm_rate;
                 }
                 // and blows sand through the air
-                auto& r = state.room_random(room.id);
+                auto r = rw::random(state.seed, state.tick, uint32_t(room.id.value));
                 for (int k = 0; k < 4; ++k) {
                     vec2 const at{r.value() * room.pixel_width(), r.value() * room.pixel_height()};
                     particles::spawn(state, room.id, particles::kind::dust, at, vec2{8.f + 6.f * r.value(), -0.5f + r.value()}, 2.f + 3.f * r.value(), 1.5f,
@@ -253,8 +253,10 @@ namespace terrain {
                     if (pos.x < x0 || pos.x > x1 || pos.y > top || pos.y < bottom)
                         return;
                     if (last.y > top && vel.y < -3.f) {
+                        // (the splash of this chunk in this pit)
+                        auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(t.value), uint32_t(c.value)));
                         for (int k = 0; k < 6; ++k)
-                            particles::spawn(state, room.id, particles::kind::drop, vec2{pos.x, top}, vec2{(state.room_random(room.id).value() - 0.5f) * 3.f, 1.f + 2.f * state.room_random(room.id).value()},
+                            particles::spawn(state, room.id, particles::kind::drop, vec2{pos.x, top}, vec2{(r.value() - 0.5f) * 3.f, 1.f + 2.f * r.value()},
                                 1.4f, 1.f, rw::vec3{0.32f, 0.22f, 0.13f}, 0.9f);
                     }
                     float const depth = mathf::clamp01((top - pos.y) / 30.f);

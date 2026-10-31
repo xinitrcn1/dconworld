@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <source_location>
 #include <limits>
 
 #include <glm/vec2.hpp>
@@ -231,14 +232,60 @@ namespace rw {
         };
     }
 
-    // UnityEngine.Random replacement (deterministic xorshift, seedable)
-    struct rng {
-        uint32_t state = 0x9E3779B9u;
-        uint32_t next() noexcept {
-            uint32_t x = state;
-            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-            return state = x;
+    // The stateless generator (docs/PIPELINE.md). A roll is a pure function
+    // of the world's seed (immutable, set when the world is made), the tick
+    // (passed explicitly), the ids or properties that tell the roller apart
+    // (dcon ids' .value, a creature's seed), the call site, and which draw of
+    // the call it is. No generator state is stored anywhere, so no roll
+    // depends on another's and any object, lane or thread can roll in any
+    // order. Each input is multiplied by its own odd constant before they're
+    // XORed (a bare tick ^ id gives tick 1 / id 2 and tick 2 / id 1 the same
+    // key), then mixed by lowbias32's finalizer. keyed_random.hpp has the ve::
+    // versions, lane for lane the same bits
+    namespace keyed {
+        inline constexpr uint32_t k_tick = 0x9E3779B1u;
+        inline constexpr uint32_t k_id = 0x85EBCA77u;
+        inline constexpr uint32_t k_id2 = 0x27D4EB2Fu;
+        inline constexpr uint32_t k_salt = 0x165667B1u;
+        inline constexpr uint32_t k_draw = 0xC2B2AE3Du;
+        constexpr uint32_t mix(uint32_t x) noexcept {
+            x ^= x >> 16;
+            x *= 0x7FEB352Du;
+            x ^= x >> 15;
+            x *= 0x846CA68Bu;
+            x ^= x >> 16;
+            return x;
         }
+        constexpr uint32_t key(uint32_t seed, uint32_t tick, uint32_t id, uint32_t salt) noexcept {
+            return seed ^ tick * k_tick ^ id * k_id ^ salt * k_salt;
+        }
+        // the n-th draw from a key
+        constexpr uint32_t draw(uint32_t key, uint32_t n) noexcept { return mix(key ^ n * k_draw); }
+        // [0, 1], UnityEngine.Random.value's scale
+        constexpr float to_value(uint32_t bits) noexcept { return float(bits >> 8) * (1.f / 16777215.f); }
+    }
+
+    // two ids (or properties) as one key input: an object and the one it rolls about
+    constexpr uint32_t ids(uint32_t a, uint32_t b) noexcept { return a ^ b * keyed::k_id2; }
+
+    // the call site's salt: its file and line, so two rolls of a tick at two
+    // places are unrelated (what rw::random keys by)
+    constexpr uint32_t site(std::source_location const l = std::source_location::current()) noexcept {
+        uint32_t h = 2166136261u;
+        for (char const* c = l.file_name(); *c; ++c)
+            h = (h ^ uint8_t(*c)) * 16777619u;
+        return keyed::mix(h ^ l.line() * keyed::k_id2);
+    }
+
+    // The draws of one call: a key and the count of draws taken from it. A
+    // value made where the rolls happen and dropped after (never stored), so
+    // a function can roll several numbers, or hand it to its helpers by
+    // reference. rw::random makes one; rng{k} is a stream from a fixed key
+    // (the tests' inputs)
+    struct rng {
+        uint32_t key = 0x9E3779B9u;
+        uint32_t n = 0;
+        uint32_t next() noexcept { return keyed::draw(key, n++); }
         // Random.value: [0, 1]
         float value() noexcept { return float(next() >> 8) * (1.f / 16777215.f); }
         // Random.Range(int, int): [lo, hi)
@@ -246,6 +293,21 @@ namespace rw {
             return hi <= lo ? lo : lo + int32_t(next() % uint32_t(hi - lo));
         }
     };
+
+    // The rolls of one call site, for (world seed, tick, id): what replaces a
+    // stored UnityEngine.Random. `id` tells the roller apart (a dcon id's
+    // .value, rw::ids of two, a creature's seed); the tick is 0 for what must
+    // come out the same whenever it's rolled (a shape drawn every frame, a
+    // layout made at a room's load). Several calls of the same site, the
+    // same tick, for the same id roll the same numbers: a helper called in a
+    // loop takes its caller's rng, or puts the loop's index in `id`
+    constexpr rng random(uint32_t seed, uint32_t tick, uint32_t id, std::source_location const l = std::source_location::current()) noexcept {
+        return rng{keyed::key(seed, tick, id, site(l)), 0};
+    }
+    // with an explicit salt (two streams of one site)
+    constexpr rng random_salted(uint32_t seed, uint32_t tick, uint32_t id, uint32_t salt) noexcept {
+        return rng{keyed::key(seed, tick, id, salt), 0};
+    }
 
     // UnityEngine.Random itself (Xorshift128 seeded by InitState), for the
     // cosmetic layouts vanilla rolls from a fixed seed (SeedCob.PlaceInRoom)

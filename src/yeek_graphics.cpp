@@ -306,9 +306,8 @@ namespace yeek_graphics {
     }
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
-        auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const at = cpos(state, c, 0);
         // YeekTail.Reset
         for (auto& tail : g.tails)
@@ -332,9 +331,8 @@ namespace yeek_graphics {
     }
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-        auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& x = pl(state, c);
         auto const& lk = yeek::looks_of(state, c);
         auto const& pers = yeek::personality_of(state, c);

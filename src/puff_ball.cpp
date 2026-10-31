@@ -198,14 +198,14 @@ namespace puff_ball {
     void thrown(sys::game_state& state, dcon::item_id it, ivec2 throw_dir) {
         auto& w = state.world;
         auto const room = w.physical_object_get_room_from_object_location(items::body(state, it));
-        auto& r = w.item_get_random(it);
+        auto r = rw::random(state.seed, state.tick, uint32_t(it.value));
         // a SporeCloud of size 0.5 (Slugcat_Throw_Puffball has no sample here)
         spore_puff(state, room, r, w.body_chunk_get_pos(items::chunk(state, it)), custom::rnv(r) * r.value() + rw::to_vec2(throw_dir) * 10.f, 0.5f);
     }
 
     void explode(sys::game_state& state, room_view const& room, dcon::item_id it, vec2 at) {
         auto& w = state.world;
-        auto& r = w.item_get_random(it);
+        auto r = rw::random(state.seed, state.tick, uint32_t(it.value));
         // 70 SporeClouds
         for (int32_t j = 0; j < 70; ++j)
             spore_puff(state, room.id, r, at, custom::rnv(r) * r.value() * 10.f, 1.f);

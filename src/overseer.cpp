@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 #include <queue>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -187,15 +188,16 @@ namespace overseer {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
-            rw::rng& rng;
+            mutable rw::rng rng; // (rolled from the const helpers too)
             creature::overseer_payload& p;
             body_state& b;
             ai_state& ai;
             std::vector<uint16_t> const& prox;
             std::vector<dcon::creature_id>& crits;
 
-            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r)
-                : state(s), c(id), room(r), rng(s.world.creature_get_random(id)), p(pl(s, id)), b(bs(s, id)), ai(ais(s, id)),
+            // (each place it's made keys its own rolls: the source location)
+            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::source_location l = std::source_location::current())
+                : state(s), c(id), room(r), rng(rw::random(s.seed, s.tick, uint32_t(id.value), l)), p(pl(s, id)), b(bs(s, id)), ai(ais(s, id)),
                   prox(pathing::ai_terrain_proximity_map(s, r.id)), crits(creatures_buffer()) {}
 
             void fill_creatures() {
@@ -467,7 +469,7 @@ namespace overseer {
         // Overseer.PlaceInRoom: a random open tile with rock next to it (the
         // first 100 rolls), else `fallback`'s, else anywhere
         void place_randomly(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 fallback) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (room.width > 0 && room.height > 0)
                 for (int i = 0; i < 100; ++i) {
                     int32_t const tx = rng.range(0, room.width);
@@ -520,7 +522,7 @@ namespace overseer {
             auto& w = state.world;
             if (w.creature_get_dead(c))
                 return;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& p = pl(state, c);
             auto& b = bs(state, c);
             if (p.mode == mode::conversing) {
@@ -1200,7 +1202,7 @@ namespace overseer {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::overseer);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1230,8 +1232,6 @@ namespace overseer {
         p.mode = mode::watching;
         p.after_withdraw_mode = mode::watching;
         p.owner_iterator = roll_owner(state, room, rng);
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x0E5EE7u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -1247,8 +1247,8 @@ namespace overseer {
         ai_state ai;
         ai.look_at = at;
         ai.slow_look_at = at;
-        ai.random_bring_up_lens_bonus = w.creature_get_random(c).value();
-        ai.guide_counter = w.creature_get_random(c).range(200, 500);
+        ai.random_bring_up_lens_bonus = rng.value();
+        ai.guide_counter = rng.range(200, 500);
         w.overseer_data_set_ai(d, ai);
         w.overseer_data_set_graphics(d, graphics_state{});
         overseer_graphics::setup(state, c, seed);
@@ -1398,7 +1398,7 @@ namespace overseer {
         auto& p = pl(state, c);
         if (p.offscreen)
             return;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // Creature.Violence (HealthState); no damage resistances by type
         auto const k = chunk(state, c, 0);
         w.body_chunk_get_vel(k) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(k), 10.f);
@@ -1493,7 +1493,7 @@ namespace overseer {
         if (p.offscreen || w.creature_get_dead(c))
             return;
         auto& ai = ais(state, c);
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const my = w.body_chunk_get_pos(chunk(state, c, 0));
         auto const room = world::get_room_view(state, creature::room_of(state, c));
         if (!custom::dist_less(my, at, 600.f) || !room.visual_contact(my, at))
@@ -1519,16 +1519,11 @@ namespace overseer {
         uint32_t made = 0;
         // one overseer into `room`, at a random wall spot
         auto const spawn_one = [&](dcon::room_id room, int32_t seed, bool guide, uint8_t owner) {
-            auto const saved = state.random;
-            state.random = rw::rng{uint32_t(seed) * 0x9E3779B1u ^ 0x0E5EE7u};
-            if (state.random.state == 0)
-                state.random.state = 0x2545F491u;
             state.spawn_seed = seed;
             auto const view = world::get_room_view(state, room);
             vec2 const centre{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f};
             auto const c = create(state, room, centre);
             state.spawn_seed = -1;
-            state.random = saved;
             if (!c)
                 return;
             place_randomly(state, c, view, tile_of(centre));
@@ -1554,7 +1549,7 @@ namespace overseer {
             uint32_t h = 2166136261u;
             for (char const ch : name)
                 h = (h ^ uint8_t(ch)) * 16777619u;
-            rw::rng rng{(h ^ (state.random.state * 0x85EBCA6Bu)) | 1u};
+            auto rng = rw::random(state.seed, 0, h);
             if (!(name == "UW" || name == "LC" || name == "LM" || rng.value() < w.region_get_overseers_spawn_chance(region)))
                 return;
             int32_t const n = rng.range(int32_t(w.region_get_overseers_min(region)), int32_t(w.region_get_overseers_max(region)));

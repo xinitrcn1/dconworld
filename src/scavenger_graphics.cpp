@@ -1034,9 +1034,7 @@ namespace scavenger_graphics {
         auto const d = data(state, c);
         auto& g = w.scavenger_data_get_graphics(d);
         auto const& lk = w.scavenger_data_get_looks(d);
-        auto& rng = w.creature_get_graphics_random(c);
-        if (rng.state == 0x9E3779B9u || rng.state == 0u)
-            rng = rw::rng{uint32_t(w.scavenger_data_get_seed(d)) * 2654435761u | 1u};
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const head = chunk_pos(state, c, 2), chest = chunk_pos(state, c, 0), hips = chunk_pos(state, c, 1);
         g.draw_positions[0][0] = head;
         g.draw_positions[2][0] = chest;
@@ -1094,7 +1092,7 @@ namespace scavenger_graphics {
         g.eyes_pop = mathf::max(g.eyes_pop, mathf::pow(intensity, 0.5f));
         g.eyes_pop_go_back = mathf::max(g.eyes_pop_go_back, mathf::lerp(2.f, 20.f, mathf::pow(intensity, mathf::lerp(0.8f, 2.f, p.bravery))));
         g.shake = mathf::max(g.shake, mathf::max(0.f, intensity - custom::lerp_map(p.bravery, 0.75f, 1.f, 0.f, 0.5f)));
-        g.blink = w.creature_get_graphics_random(c).range(10, 40);
+        g.blink = rw::random(state.seed, state.tick, uint32_t(c.value)).range(10, 40);
         g.bristle = std::max({g.bristle, w.scavenger_data_get_ai(d).agitation, intensity});
     }
 
@@ -1109,7 +1107,7 @@ namespace scavenger_graphics {
         auto const& b = w.scavenger_data_get_body(d);
         auto const& a = w.scavenger_data_get_ai(d);
         auto const& p = w.scavenger_data_get_personality(d);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         ctx k{state, c, room, g, lk, x, b, a, rng};
         bool const awake = scavenger::consious(state, c);
         bool const dead = w.creature_get_dead(c) != 0;

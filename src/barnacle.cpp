@@ -378,7 +378,7 @@ namespace barnacle {
 
         // Barnacle.TryJump
         void try_jump(sys::game_state& state, dcon::creature_id c, vec2 towards) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             pl(state, c).delay_before_jumping = 0;
             if (!consious(state, c))
                 return;
@@ -1045,7 +1045,7 @@ namespace barnacle {
         // Creature.Violence (HealthState)
         void base_violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
             auto const hit = chunk(state, c, k < 2 ? k : 0);
             w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
             float const dmg = damage / base_damage_resistance;
@@ -1075,8 +1075,9 @@ namespace barnacle {
                 }
         }
 
-        void sparks(sys::game_state& state, dcon::room_id room, vec2 at, vec2 base_vel, int32_t n, float spread) {
-            auto& rng = state.room_random(room);
+        // keyed by the room and the barnacle they fly off
+        void sparks(sys::game_state& state, dcon::room_id room, dcon::creature_id c, vec2 at, vec2 base_vel, int32_t n, float spread) {
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), uint32_t(c.value)));
             for (int32_t i = 0; i < n; ++i) {
                 vec2 const off = custom::deg_to_vec(rng.value() * 360.f) * spread * rng.value();
                 vec2 const v = base_vel * -0.1f + custom::deg_to_vec(rng.value() * 360.f) * mathf::lerp(0.2f, 0.4f, rng.value()) * rw::magnitude(base_vel);
@@ -1157,7 +1158,7 @@ namespace barnacle {
         auto const room = creature::room_of(state, c);
         if (!room || w.creature_get_away(c) != 0)
             return;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& cp = prm(state, c);
         vec2 const m = pos(state, c, 0);
         float const rad = w.body_chunk_get_rad(chunk(state, c, 0));
@@ -1202,7 +1203,7 @@ namespace barnacle {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::barnacle);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1245,8 +1246,6 @@ namespace barnacle {
         }
         p.dominance = dominance;
         p.has_shell = 1;
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0xBA3AC1Eu) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -1274,7 +1273,7 @@ namespace barnacle {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
@@ -1353,7 +1352,7 @@ namespace barnacle {
             return;
         // it shakes the bothersome creature off (no
         // Barnacle_Push_Away_Nearby_Creatures)
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(t.value)));
         p.shake_time = int16_t(rng.range(10, 20));
         p.shake_cooldown = 160;
         auto const theirs = creature::chunk_of(state, t, j);
@@ -1365,7 +1364,7 @@ namespace barnacle {
             auto const tk = creature::chunk_of(state, t, k);
             w.body_chunk_set_vel(tk, custom::dir_vec(m, w.body_chunk_get_pos(tk)) * mathf::lerp(3.f, 8.f, rng.value()));
         }
-        sparks(state, room.id, a, w.body_chunk_get_vel(theirs), 5, 10.f);
+        sparks(state, room.id, c, a, w.body_chunk_get_vel(theirs), 5, 10.f);
         set_group_discomfort_tick(state, c, 0.25f);
     }
 
@@ -1387,11 +1386,11 @@ namespace barnacle {
             auto const hit = chunk(state, c, k < 2 ? k : 0);
             auto const room = creature::room_of(state, c);
             if (room)
-                sparks(state, room, w.body_chunk_get_pos(hit), w.body_chunk_get_vel(hit), n, 5.f);
+                sparks(state, room, c, w.body_chunk_get_pos(hit), w.body_chunk_get_vel(hit), n, 5.f);
             damage = 0.f;
             stun_bonus = 0.f;
             set_group_discomfort_tick(state, c, 0.65f);
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
             p.temporary_panic = int16_t(rng.range(400, 1800));
             if (room && w.creature_get_away(c) == 0) {
                 auto const view = world::get_room_view(state, room);

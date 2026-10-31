@@ -143,7 +143,6 @@ namespace tube_worm_graphics {
         auto& w = state.world;
         auto& g = graphics(state, c);
         g = tube_worm::graphics_state{};
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x7B3E4u};
         // the colour, from the creature's seed (Random.InitState(ID.RandomSeed))
         rw::unity_random r{w.tube_worm_data_get_seed(creature::tube_worm_data(w, c))};
         float const h = mathf::lerp(0.52f, 0.68f, r.value());
@@ -157,7 +156,7 @@ namespace tube_worm_graphics {
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& g = graphics(state, c);
-        auto& rng = state.world.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const at = chunk_pos(state, c, 0);
         // BodyPart.Reset(firstChunk.pos)
         for (auto& b : g.body) {

@@ -82,7 +82,7 @@ namespace tentacle_plant {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
-            rw::rng& rng;
+            rw::rng rng;
             dcon::tentacle_plant_data_id d;
             creature::tentacle_plant_payload& p;
             tentacle& t;
@@ -93,8 +93,9 @@ namespace tentacle_plant {
             dcon::body_chunk_id b[2];
             std::vector<uint16_t> const* prox;
 
-            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r)
-                : state(s), c(id), room(r), rng(s.world.creature_get_random(id)), d(data(s, id)), p(pl(s, id)), t(s.world.tentacle_plant_data_get_tentacle(d)),
+            // `salt` tells apart the ctxs made for one plant in one tick
+            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, uint32_t salt)
+                : state(s), c(id), room(r), rng(rw::random(s.seed, s.tick, rw::ids(uint32_t(id.value), salt))), d(data(s, id)), p(pl(s, id)), t(s.world.tentacle_plant_data_get_tentacle(d)),
                   ch(s.world.tentacle_plant_data_get_chunks(d).c), segments(segments_buffer()), grab_path(grab_path_buffer()), scratch(scratch_buffer()),
                   prox(&pathing::ai_terrain_proximity_map(s, r.id)) {
                 b[0] = creature::chunk(s, id, 0);
@@ -971,6 +972,8 @@ namespace tentacle_plant {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
+            // the plant's stream: the hooks roll many times a tick
+            rw::rng& rng;
         };
         // ArtificialIntelligence.VisualContact from TentaclePlant.VisionPoint
         // (a random tentacle chunk), with BodyChunk.VisibilityBonus by
@@ -978,7 +981,7 @@ namespace tentacle_plant {
         bool visual_contact(hook_ctx& x, vec2 look, float bonus) {
             auto& w = x.state.world;
             auto const& cs = w.tentacle_plant_data_get_chunks(data(x.state, x.c)).c;
-            vec2 const vp = cs[uint32_t(w.creature_get_random(x.c).range(0, int32_t(chunk_count)))].pos;
+            vec2 const vp = cs[uint32_t(x.rng.range(0, int32_t(chunk_count)))].pos;
             float const r = visual_radius * (1.f + bonus);
             if (!custom::dist_less(vp, look, r))
                 return false;
@@ -1013,7 +1016,7 @@ namespace tentacle_plant {
 
         // TentaclePlantAI.Update (the item interest left out)
         void ai_update(ctx& x) {
-            hook_ctx hx{x.state, x.c, x.room};
+            hook_ctx hx{x.state, x.c, x.room, x.rng};
             tracker::hooks h;
             h.user = &hx;
             h.sees = hook_sees;
@@ -1063,7 +1066,7 @@ namespace tentacle_plant {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::tentacle_plant);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1081,8 +1084,6 @@ namespace tentacle_plant {
         w.body_chunk_set_collide_with_terrain(root, 0);
         physics::set_go_through_floors(state, o, true);
         w.try_create_creature_body(c, o);
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{rng.next() | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -1131,7 +1132,7 @@ namespace tentacle_plant {
 
     void place_in_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, vec2 at) {
         auto const view = world::get_room_view(state, room);
-        ctx x(state, c, view);
+        ctx x(state, c, view, 1);
         new_room(x, at);
         x.p.extended = 1.f;
         x.p.attack = 0.f;
@@ -1145,7 +1146,7 @@ namespace tentacle_plant {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        ctx x(state, c, room);
+        ctx x(state, c, room, 0);
         auto& p = x.p;
         auto& t = x.t;
         // (the sound loops have no sound ids here)
@@ -1406,7 +1407,7 @@ namespace tentacle_plant {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         // TentaclePlant.Violence: a spear stuns it longer
         if (type == creature::damage_type::stab)
             stun_bonus += 50.f;

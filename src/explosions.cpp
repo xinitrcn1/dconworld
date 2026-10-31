@@ -40,11 +40,12 @@ namespace explosions {
         if (room.water && room.point_submerged(at))
             water::disturb(state, room.id, at.x, 4.f + d.force, d.rad * 0.7f);
 
-        // the look of it (rolled from the room's cosmetic generator, only
-        // where a camera looks)
+        // the look of it (only where a camera looks), keyed by the room, the
+        // source and the spot: two blasts of a tick don't roll the same
         if (!state.viewed(room.id))
             return;
-        auto& r = state.runtime(room.id).cosmetic;
+        uint32_t const spot = uint32_t(int32_t(at.x)) ^ uint32_t(int32_t(at.y)) << 16;
+        auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(source.value) ^ spot));
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, d.rad * 0.45f, 0.35f, rw::vec3{1.f, 0.95f, 0.85f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, d.rad * 0.2f, 0.2f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
         for (int i = 0; i < 24; ++i) {

@@ -40,8 +40,8 @@ namespace leech_graphics {
         variant const v = pl(state, c).variant;
         uint32_t const n = body_count(v);
         g = leech::graphics_state{};
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x1EEC4u};
-        auto& rng = w.creature_get_graphics_random(c);
+        // the same rolls whenever it's reset
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         for (uint32_t j = 0; j < n; ++j)
             g.radiuses[j] = radius(v, float(j) / float(n));
         g.sin_counter = rng.value();
@@ -59,17 +59,15 @@ namespace leech_graphics {
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto const keep_random = w.creature_get_graphics_random(c);
         float const keep_sin = w.leech_data_get_graphics(creature::leech_data(w, c)).sin_counter;
         reset(state, c);
-        w.creature_set_graphics_random(c, keep_random);
         w.leech_data_get_graphics(creature::leech_data(w, c)).sin_counter = keep_sin;
     }
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = w.leech_data_get_graphics(creature::leech_data(w, c));
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& x = pl(state, c);
         variant const v = x.variant;
         bool const sea = v == variant::sea;

@@ -41,7 +41,7 @@ namespace garbage_worm_graphics {
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const&) {
         auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         uint32_t const n = tentacle(state, c).count;
         if (creature::consious(state, c) && n > 0) {
             int32_t const attack = garbage_worm::attack_counter(state, c);

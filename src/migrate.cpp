@@ -305,7 +305,7 @@ namespace migrate {
     }
 
     void random_move(sys::game_state& state, dcon::creature_id c, room_view const& room, int32_t max_roam) {
-        auto& rng = state.world.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // the walk, newest room first like vanilla's list (a room and the
         // exit of the room before it)
         std::vector<std::pair<dcon::room_id, uint8_t>> list;
@@ -355,7 +355,7 @@ namespace migrate {
     }
 
     void move_to_more_attractive_neighbor(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-        auto& rng = state.world.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const t = creature::template_of(state, c);
         if (state.world.room_get_attraction(room.id).v[size_t(t)] == attr::stay)
             return;
@@ -418,7 +418,7 @@ namespace migrate {
         // the rooms of other regions a few hops away, through a gate or a
         // warp: one of them at random
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const here = w.room_get_region_from_region_membership(room.id);
         std::vector<dcon::room_id> seen{room.id}, options;
         for (size_t qi = 0; qi < seen.size() && seen.size() < 64; ++qi)
@@ -438,7 +438,7 @@ namespace migrate {
         auto& w = state.world;
         if (want_to(state, c))
             return;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const t = creature::template_of(state, c);
         float const roam = roam_chance(t);
         bool const forbidden = w.room_get_attraction(room.id).v[size_t(t)] == attr::forbidden;
@@ -461,7 +461,7 @@ namespace migrate {
     void idle_roll(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         // LizardAI.RoomLike without the other lizards: the size dependent attraction
         float const like = size_dependent_attraction(state, c, room.id);
-        if (state.world.creature_get_random(c).value() < 1.f / rw::custom::lerp_map(like, 0.35f, 1.f, 10.f, 1000.f))
+        if (rw::random(state.seed, state.tick, uint32_t(c.value)).value() < 1.f / rw::custom::lerp_map(like, 0.35f, 1.f, 10.f, 1000.f))
             abstract_behavior(state, c, room);
     }
 

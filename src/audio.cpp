@@ -161,7 +161,10 @@ namespace audio {
         std::unordered_map<std::string, int> variants;
         uint32_t last_room = 0xFFFFFFFFu;
         double clock = 0.0;
-        rw::rng random;
+        // the audio thread's rolls (rw::random): its seed, and the sounds it
+        // has started, its own clock (it doesn't follow the world's ticks)
+        uint32_t seed = 0x9E3779B9u;
+        uint32_t plays = 0;
         std::vector<float> scratch;
         // the loops (game_state::loops of the last tick seen)
         std::vector<loop_state> loops;
@@ -377,7 +380,7 @@ namespace audio {
             }
             if (it->second == 0)
                 return name;
-            return name + "_" + std::to_string(a.random.range(1, it->second + 1));
+            return name + "_" + std::to_string(rw::random(a.seed, ++a.plays, 0).range(1, it->second + 1));
         }
 
         // How loud a sound at `pos` is heard and where it pans: panned across
@@ -424,10 +427,11 @@ namespace audio {
         }
 
         void play_request(state& a, sound::sound_request const& r, uint32_t viewed_room, vec2 center, vec2 size) {
+            auto rng = rw::random(a.seed, ++a.plays, 0);
             auto const& d = a.defs[size_t(r.id)];
             if (d.samples.empty())
                 return;
-            if (d.silent_chance > 0.f && a.random.value() < d.silent_chance)
+            if (d.silent_chance > 0.f && rng.value() < d.silent_chance)
                 return;
             float gain = r.vol * sfx_volume;
             float pan = 0.f;
@@ -437,15 +441,15 @@ namespace audio {
                 gain *= place(r.pos, center, size, d.range, pan);
             }
             auto const one = [&](sample_ref const& s) {
-                float const v = mathf::lerp(s.min_vol, s.max_vol, a.random.value()) * mathf::lerp(d.min_vol, d.max_vol, a.random.value());
-                float const p = mathf::lerp(s.min_pitch, s.max_pitch, a.random.value()) * mathf::lerp(d.min_pitch, d.max_pitch, a.random.value());
+                float const v = mathf::lerp(s.min_vol, s.max_vol, rng.value()) * mathf::lerp(d.min_vol, d.max_vol, rng.value());
+                float const p = mathf::lerp(s.min_pitch, s.max_pitch, rng.value()) * mathf::lerp(d.min_pitch, d.max_pitch, rng.value());
                 play_voice(a, sample(a, pick_variant(a, s.name)), gain * v, pan, p * r.pitch);
             };
             if (d.play_all) {
                 for (auto const& s : d.samples)
                     one(s);
             } else {
-                one(d.samples[size_t(a.random.range(0, int32_t(d.samples.size())))]);
+                one(d.samples[size_t(rng.range(0, int32_t(d.samples.size())))]);
             }
         }
 
@@ -703,8 +707,9 @@ namespace audio {
         // (every one for PLAYALL) with SoundLoader's random volume and pitch,
         // looped from its start
         void start_voice(state& a, loop_state& l) {
+            auto rng = rw::random(a.seed, ++a.plays, 0);
             auto const& d = a.defs[size_t(l.req.id)];
-            if (d.samples.empty() || (d.silent_chance > 0.f && a.random.value() < d.silent_chance))
+            if (d.samples.empty() || (d.silent_chance > 0.f && rng.value() < d.silent_chance))
                 return; // tracked all the same: silent, like a missing trigger
             uint32_t v = 0;
             while (v < a.loop_voices.size() && a.loop_voices[v].used)
@@ -719,8 +724,8 @@ namespace audio {
                     return;
                 loop_voice::layer layer;
                 layer.data = data;
-                layer.vol = mathf::lerp(sr.min_vol, sr.max_vol, a.random.value()) * mathf::lerp(d.min_vol, d.max_vol, a.random.value());
-                layer.pitch = mathf::lerp(sr.min_pitch, sr.max_pitch, a.random.value()) * mathf::lerp(d.min_pitch, d.max_pitch, a.random.value());
+                layer.vol = mathf::lerp(sr.min_vol, sr.max_vol, rng.value()) * mathf::lerp(d.min_vol, d.max_vol, rng.value());
+                layer.pitch = mathf::lerp(sr.min_pitch, sr.max_pitch, rng.value()) * mathf::lerp(d.min_pitch, d.max_pitch, rng.value());
                 layer.stream = SDL_CreateAudioStream(&a.spec, &a.spec);
                 if (layer.stream == nullptr)
                     return;
@@ -733,7 +738,7 @@ namespace audio {
                 for (auto const& sr : d.samples)
                     one(sr);
             } else {
-                one(d.samples[size_t(a.random.range(0, int32_t(d.samples.size())))]);
+                one(d.samples[size_t(rng.range(0, int32_t(d.samples.size())))]);
             }
             if (lv.layers.empty())
                 return;
@@ -937,7 +942,7 @@ namespace audio {
             a->fs = &gs.fs;
             a->offline = offline;
             if (!offline) {
-                a->random.state ^= uint32_t(SDL_GetTicksNS()) | 1u;
+                a->seed ^= uint32_t(SDL_GetTicksNS()) | 1u;
                 a->device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &a->spec);
                 if (a->device == 0) {
                     reports::add_log(std::string{"audio: no playback device: "} + SDL_GetError());
@@ -1093,7 +1098,7 @@ namespace audio {
             return;
         if (a.current && songs.size() > 1)
             std::erase_if(songs, [&](auto const& s) { return s.first == a.current->name; });
-        auto const& pick = songs[size_t(a.random.range(0, int32_t(songs.size())))];
+        auto const& pick = songs[size_t(rw::random(a.seed, ++a.plays, 0).range(0, int32_t(songs.size())))];
         start_song(a, pick.first, pick.second, 0.5f, 1.f, -1);
     }
 

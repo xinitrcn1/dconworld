@@ -140,7 +140,7 @@ namespace needle_worm_graphics {
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = graphics(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const d = creature::needle_worm_data(w, c);
         auto const& p = w.creature_get_payload(c).needle_worm;
         auto const& a = w.needle_worm_data_get_attack(d);

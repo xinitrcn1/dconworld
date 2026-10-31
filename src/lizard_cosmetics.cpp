@@ -791,7 +791,7 @@ namespace lizard_cosmetics {
         // LongBodyScales.Update (LizardScale.Update included)
         void update_long_body_scales(sys::game_state& state, dcon::creature_id l, cosmetic const& c, shared::spine_frame const& fr, room_view const& room) {
             auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-            auto& rng = state.world.creature_get_graphics_random(l);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(c.first)));
             float const head_rot = lizard_graphics::head_rotation(state, l, 1.f);
             float const backwards_exponent = mathf::lerp(1.f, 15.f, g.show_dominance);
             for (int32_t i = 0; i < c.count; ++i) {
@@ -828,7 +828,7 @@ namespace lizard_cosmetics {
         // Whiskers.Update
         void update_whiskers(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-            auto& rng = state.world.creature_get_graphics_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             auto& wh = g.cosmetics.whiskers;
             vec2 const host_vel = chunk_vel(state, l, 0);
             float const light = mathf::inverse_lerp(0.f, 0.3f, g.black_lizard_light_up_head);
@@ -858,7 +858,7 @@ namespace lizard_cosmetics {
         // Antennae.Update
         void update_antennae(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-            auto& rng = state.world.creature_get_graphics_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             auto& an = g.cosmetics.antennae;
             float num = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).comm_flicker;
             if (!lizard::consious(state, l))
@@ -903,7 +903,7 @@ namespace lizard_cosmetics {
         // WingScales.Update
         void update_wing_scales(sys::game_state& state, dcon::creature_id l, shared::spine_frame const& fr, room_view const& room) {
             auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-            auto& rng = state.world.creature_get_graphics_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             auto& ws = g.cosmetics.wings;
             vec2 const host_vel = chunk_vel(state, l, 1);
             for (int32_t i = 0; i < ws.per_side; ++i) {
@@ -1529,7 +1529,7 @@ namespace lizard_cosmetics {
 
     void add_cosmetics(sys::game_state& state, dcon::creature_id l) {
         auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-        auto& rng = state.world.creature_get_graphics_random(l);
+        auto rng = rw::random(state.seed, 0, uint32_t(l.value));
         breed const b = lizard::breed_of(state, l);
         maker m{state, l, g, rng, b, lizard::params_of(state, l), cosmetic{}, {}};
         g.cosmetics.count = 0;
@@ -1686,7 +1686,7 @@ namespace lizard_cosmetics {
 
     void reset(sys::game_state& state, dcon::creature_id l) {
         auto& g = state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l));
-        auto& rng = state.world.creature_get_graphics_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         auto& cs = g.cosmetics;
         for (int32_t k = 0; k < cs.count; ++k) {
             switch (cs.list[k].type) {
@@ -1750,9 +1750,11 @@ namespace lizard_cosmetics {
                 case cosmetic_type::blizzard_beam:
                     update_beam(state, l);
                     break;
-                case cosmetic_type::blizzard_steam:
-                    update_steam(g, state.world.creature_get_graphics_random(l));
+                case cosmetic_type::blizzard_steam: {
+                    auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
+                    update_steam(g, rng);
                     break;
+                }
                 default:
                     break;
             }

@@ -209,7 +209,7 @@ namespace barnacle_graphics {
         // CreatureLooker (simplified): every so often the closest creature
         // it tracks that is out in the room
         void pick_look(sys::game_state& state, dcon::creature_id c, graphics_state& g, world::room_view const& room) {
-            auto& rng = state.world.creature_get_graphics_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (g.look && !creature::here(state, g.look, room.id))
                 g.look = dcon::creature_id{};
             if (--g.look_counter > 0)
@@ -255,7 +255,7 @@ namespace barnacle_graphics {
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
         auto& w = state.world;
         auto& g = gs(state, c);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& p = pl(state, c);
         bool const awake = barnacle::consious(state, c);
         float const sub = physics::object_submersion(state, room, barnacle::body(state, c));

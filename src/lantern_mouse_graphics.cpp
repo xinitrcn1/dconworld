@@ -114,7 +114,7 @@ namespace lantern_mouse_graphics {
 
     void reset_unconsious_profile(sys::game_state& state, dcon::creature_id c) {
         auto& g = gs(state, c);
-        auto& r = state.world.creature_get_graphics_random(c);
+        auto r = rw::random(state.seed, state.tick, uint32_t(c.value));
         if (r.value() < 0.5f)
             g.unconsious_profile_fac = 0.f;
         else
@@ -124,7 +124,7 @@ namespace lantern_mouse_graphics {
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         auto& g = gs(state, c);
-        auto& r = w.creature_get_graphics_random(c);
+        auto r = rw::random(state.seed, state.tick, uint32_t(c.value));
         vec2 const at = w.body_chunk_get_pos(ch(state, c, 0));
         // GraphicsModule.Reset: every body part on the main chunk
         auto const reset = [&](vec2& pos, vec2& last, vec2& vel) {
@@ -188,7 +188,7 @@ namespace lantern_mouse_graphics {
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = gs(state, c);
-        auto& r = w.creature_get_graphics_random(c);
+        auto r = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& x = w.creature_get_payload(c).lantern_mouse;
         auto const d = data(state, c);
         auto const& rope = w.lantern_mouse_data_get_rope(d);
@@ -421,7 +421,7 @@ namespace lantern_mouse_graphics {
         vec3 const decal = decal_color(g, hue, batt, black, lit_room);
         vec3 const eyes = eyes_color(g, black);
         // DrawSprites' UnityEngine.Random (the shakes), not the simulation's
-        rw::rng r{(uint32_t(c.index()) * 0x9E3779B1u ^ state.tick * 0x85EBCA6Bu) | 1u};
+        auto r = rw::random(state.seed, state.tick, uint32_t(c.value));
 
         sprites::draw_cmd cmds[total_sprites];
         bool vis[total_sprites] = {};

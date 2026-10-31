@@ -85,7 +85,7 @@ namespace piggyback {
             return;
         unlink(state, p, r);
         // (off with a little push, its hips a bit higher)
-        auto& rng = w.creature_get_random(player::creature_of(state, r));
+        auto rng = rw::random(state.seed, state.tick, uint32_t(player::creature_of(state, r).value));
         auto const c0 = player::body_chunk(state, r, 0);
         auto const c1 = player::body_chunk(state, r, 1);
         w.body_chunk_set_vel(c0, w.body_chunk_get_vel(player::body_chunk(state, p, 0)) + custom::deg_to_vec(rng.value() * 360.f) * 3.f * rng.value());

@@ -76,9 +76,8 @@ namespace cicada_graphics {
         auto& w = state.world;
         auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
         g = cicada::graphics_state{};
-        // vanilla seeds these from the creature's ID
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x5bd1e995u};
-        auto& rng = w.creature_get_graphics_random(c);
+        // vanilla seeds these from the creature's ID: the same at every reset
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
         g.wing_offset = rng.value();
         vec2 const p0 = chunk_pos(state, c, 0);
@@ -106,11 +105,9 @@ namespace cicada_graphics {
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
-        auto const keep_random = w.creature_get_graphics_random(c);
         auto const keep = w.cicada_data_get_graphics(creature::cicada_data(w, c));
         reset(state, c);
         auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
-        w.creature_set_graphics_random(c, keep_random);
         g.wing_offset = keep.wing_offset;
         g.lazy_wing = keep.lazy_wing;
     }
@@ -118,7 +115,7 @@ namespace cicada_graphics {
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
         auto& g = w.cicada_data_get_graphics(creature::cicada_data(w, c));
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& iv = w.cicada_data_get_ivars(creature::cicada_data(w, c));
         vec2 const p0 = chunk_pos(state, c, 0), p1 = chunk_pos(state, c, 1);
         vec2 const v0 = chunk_vel(state, c, 0);

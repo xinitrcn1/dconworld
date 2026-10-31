@@ -140,8 +140,8 @@ namespace centipede_graphics {
         variant const v = centipede::variant_of(w, c);
         float const size = w.creature_get_payload(c).centipede.size;
         g = centipede::graphics_state{};
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x5bd1e995u};
-        auto& rng = w.creature_get_graphics_random(c);
+        // the parts' scatter comes out the same at every reset
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         // the constructor's layout, from Random.InitState(ID.RandomSeed)
         rw::unity_random r{w.centipede_data_get_seed(d)};
         g.default_rotat = mathf::lerp(-5.f, 5.f, r.value());
@@ -214,11 +214,8 @@ namespace centipede_graphics {
     }
 
     void reset_positions(sys::game_state& state, dcon::creature_id c) {
-        // the layout comes from the seed again; the graphics' generator goes on
-        auto& w = state.world;
-        auto const keep_random = w.creature_get_graphics_random(c);
+        // the layout comes from the seed again
         reset(state, c);
-        w.creature_set_graphics_random(c, keep_random);
     }
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
@@ -235,7 +232,7 @@ namespace centipede_graphics {
         bool const body_direction = pl.body_direction != 0;
         float const size = pl.size;
         variant const v = pl.variant;
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
 
         // soundLoop (ChunkDynamicSoundLoop on the main chunk): the charge's
         // crackle, the centiwing's buzz while it flies, else the legs' crawl

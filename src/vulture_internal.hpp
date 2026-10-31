@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <vector>
 
@@ -70,7 +71,7 @@ namespace vulture::detail {
         sys::game_state& state;
         dcon::creature_id c;
         world::room_view const& room;
-        rw::rng& rng;
+        rw::rng rng;
         creature::vulture_payload& p;
         dcon::vulture_data_id d;
         body_state& b;
@@ -86,7 +87,8 @@ namespace vulture::detail {
         // the path field to the destination, once asked for
         std::optional<pathing::field_id> field;
 
-        ctx(sys::game_state& s, dcon::creature_id cc, world::room_view const& r);
+        // (each place it's made keys its own rolls: the source location)
+        ctx(sys::game_state& s, dcon::creature_id cc, world::room_view const& r, std::source_location l = std::source_location::current());
         ~ctx();
         ctx(ctx const&) = delete;
         ctx& operator=(ctx const&) = delete;

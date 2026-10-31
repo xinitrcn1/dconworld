@@ -165,8 +165,6 @@ namespace player {
         rw::vec2 look_direction{0.f, 0.f};
         rw::vec2 last_look_direction{0.f, 0.f};
         int32_t blink = 0;
-        // cosmetic randomness, kept apart from the gameplay rng
-        rw::rng random{0x2545F491u};
         uint8_t initialized = 0;
     };
 

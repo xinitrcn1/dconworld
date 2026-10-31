@@ -398,14 +398,9 @@ namespace spawns {
             for (int32_t i = 0; i < n; ++i) {
                 int32_t const number = ++state.next_issued_id;
                 int32_t const seed = gdata.seed >= 0 ? gdata.seed : number;
-                auto const saved = state.random;
-                state.random = rw::rng{uint32_t(seed) * 0x9E3779B1u ^ 0x5BD1E995u};
-                if (state.random.state == 0)
-                    state.random.state = 0x2545F491u;
                 state.spawn_seed = seed;
                 auto const c = garbage_worm::create(state, room, rw::vec2{view.pixel_width() * 0.5f, view.pixel_height() * 0.5f});
                 state.spawn_seed = -1;
-                state.random = saved;
                 if (!c)
                     continue;
                 w.creature_set_spawn_flags(c, gdata.flags);
@@ -439,14 +434,9 @@ namespace spawns {
             int32_t const seed = data.seed >= 0 ? data.seed : number;
             if (d.kind == creature::type::cicada && k->size < -1.f)
                 d.size = number % 2 != 0 ? 1.f : 0.f;
-            auto const saved = state.random;
-            state.random = rw::rng{uint32_t(seed) * 0x9E3779B1u ^ 0x5BD1E995u};
-            if (state.random.state == 0)
-                state.random.state = 0x2545F491u;
             state.spawn_seed = seed;
             auto const c = creature::create(state, room, world::room_view::middle_of_tile(*entrance), d);
             state.spawn_seed = -1;
-            state.random = saved;
             if (!c)
                 continue;
             // (keeping the TentacleImmune a loach gives itself in create)
@@ -455,7 +445,7 @@ namespace spawns {
                 w.creature_get_payload(c).lizard.spawn_data_evil = data.mean;
             dens::set_home(state, c, room, uint8_t(s.den));
             // AbstractCreature's constructor: out of the den in 100 to 1000 ticks
-            dens::put_in_den(state, c, w.creature_get_random(c).range(100, 1000));
+            dens::put_in_den(state, c, rw::random(state.seed, 0, uint32_t(c.value)).range(100, 1000));
             // (the plants' remainInDenCounter is 0: out at once, a pole
             // plant to stand as a pole, a monster kelp to root)
             if (d.kind == creature::type::pole_mimic || d.kind == creature::type::tentacle_plant)

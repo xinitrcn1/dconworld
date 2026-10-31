@@ -174,7 +174,7 @@ namespace player_graphics {
     namespace {
         // SlugcatHand.EngageInMovement: true when the hand is free to do
         // something else (hold an item, or retract)
-        bool engage_in_movement(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room) {
+        bool engage_in_movement(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room, rw::rng& rng) {
             auto const& w = state.world;
             auto& h = g.hands[limb];
             using player::limb_mode;
@@ -284,7 +284,7 @@ namespace player_graphics {
                     // flailing for something to hold on to
                     flag = false;
                     h.retract_counter = 0;
-                    vec2 const b = custom::deg_to_vec(g.random.value() * 360.f) * 40.f * g.random.value();
+                    vec2 const b = custom::deg_to_vec(rng.value() * 360.f) * 40.f * rng.value();
                     vec2 const probe = c0 + v0 * 4.f + b;
                     if (room.get_tile(probe).t != terrain::air) {
                         h.mode = limb_mode::hunt_absolute_position;
@@ -297,7 +297,7 @@ namespace player_graphics {
                         h.relative_hunt_pos.x = (std::fabs(v0.x * (upright ? 2.1f : 1.f)) + 4.f) * (-1.f + 2.f * float(limb));
                         h.relative_hunt_pos.y = v0.y * (upright ? -3.f : -0.9f) + std::fabs(v0.x * 0.6f) + 1.f;
                         if (rw::magnitude(v0) > 10.f)
-                            h.relative_hunt_pos += custom::deg_to_vec(g.random.value() * 360.f) * g.random.value() * g.random.value() * rw::magnitude(v0);
+                            h.relative_hunt_pos += custom::deg_to_vec(rng.value() * 360.f) * rng.value() * rng.value() * rw::magnitude(v0);
                         h.hunt_speed = 8.f;
                         h.quickness = 0.6f;
                     }
@@ -329,7 +329,7 @@ namespace player_graphics {
         }
 
         // SlugcatHand.Update
-        void hand_update(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room) {
+        void hand_update(sys::game_state& state, dcon::player_id p, player::graphics_state& g, int limb, room_view const& room, rw::rng& rng) {
             auto const& w = state.world;
             auto& h = g.hands[limb];
             using player::limb_mode;
@@ -344,7 +344,7 @@ namespace player_graphics {
                 flag = false;
                 h.reaching_for_object = 0;
             } else {
-                flag = engage_in_movement(state, p, g, limb, room);
+                flag = engage_in_movement(state, p, g, limb, room, rng);
             }
             // HeavyCarry (a cicada): the first hand always holds on to it, the
             // other one unless it is busy climbing (no Remix)
@@ -621,8 +621,10 @@ namespace player_graphics {
                 }
             }
         }
+        // this tick's cosmetic rolls
+        auto rng = rw::random(state.seed, state.tick, uint32_t(player::creature_of(state, p).value));
         for (int i = 0; i < 2; ++i) {
-            hand_update(state, p, g, i, room);
+            hand_update(state, p, g, i, room, rng);
             if (!std::isfinite(g.hands[i].pos.x) || !std::isfinite(g.hands[i].pos.y))
                 g.hands[i].pos = c0;
         }
@@ -630,15 +632,15 @@ namespace player_graphics {
         // Spearmaster shuts its eyes while pulling a needle out
         if (w.player_get_stats(p).name == player::slugcat_name::spear && w.player_get_spear_prog(p) > 0.1f)
             g.blink = 5;
-        if (g.random.value() < 0.1f)
-            g.halo_flux = mathf::lerp(0.6f, 1.f, g.random.value());
+        if (rng.value() < 0.1f)
+            g.halo_flux = mathf::lerp(0.6f, 1.f, rng.value());
         ++g.ticks;
 
         // blinking
         g.last_look_direction = g.look_direction;
         --g.blink;
-        if (g.blink < -g.random.range(2, 1800))
-            g.blink = g.random.range(3, g.random.range(3, 10));
+        if (g.blink < -rng.range(2, 1800))
+            g.blink = rng.range(3, rng.range(3, 10));
     }
 
     void build(sys::game_state const& state, dcon::player_id p, float alpha, std::vector<draw_cmd>& out) {

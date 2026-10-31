@@ -91,26 +91,64 @@ namespace water {
             return row(z0) + (row(z1) - row(z0)) * tz;
         }
 
+        // the wave equation over the grid; the inner columns ve::vector_size
+        // at a time (a wall's mask choosing the node's own height for its
+        // side, and zero speed for itself), the two edge columns one by one,
+        // so no neighbour read leaves its row. Same operations in the same
+        // order as the scalar node: the same floats
         void step(surface_t& s) {
             uint32_t const nx = s.nx;
+            float* const h = s.h.data();
+            float* const v = s.v.data();
+            uint8_t const* const wall = s.wall.data();
+            using tags = ve::unaligned_contiguous_tags<int32_t>;
+            uint32_t const lanes = uint32_t(ve::vector_size);
             for (uint32_t z = 0; z < rows; ++z) {
                 uint32_t const zm = z > 0 ? z - 1 : 0;
                 uint32_t const zp = std::min(z + 1, rows - 1);
-                for (uint32_t x = 0; x < nx; ++x) {
-                    uint32_t const i = at(s, x, z);
-                    if (s.wall[x]) {
-                        s.v[i] = 0.f;
-                        continue;
+                uint32_t const row = z * nx, up = zm * nx, down = zp * nx;
+                auto const node = [&](uint32_t x) {
+                    uint32_t const i = row + x;
+                    if (wall[x]) {
+                        v[i] = 0.f;
+                        return;
                     }
                     // a wall reflects: its side counts as this node's own height
-                    float const left = x > 0 && !s.wall[x - 1] ? s.h[at(s, x - 1, z)] : s.h[i];
-                    float const right = x + 1 < nx && !s.wall[x + 1] ? s.h[at(s, x + 1, z)] : s.h[i];
-                    float const lap = left + right - 2.f * s.h[i] + (s.h[at(s, x, zm)] + s.h[at(s, x, zp)] - 2.f * s.h[i]) * depth_coupling;
-                    s.v[i] = (s.v[i] + c2 * lap - restore * s.h[i]) * damping;
+                    float const left = x > 0 && !wall[x - 1] ? h[i - 1] : h[i];
+                    float const right = x + 1 < nx && !wall[x + 1] ? h[i + 1] : h[i];
+                    float const lap = left + right - 2.f * h[i] + (h[up + x] + h[down + x] - 2.f * h[i]) * depth_coupling;
+                    v[i] = (v[i] + c2 * lap - restore * h[i]) * damping;
+                };
+                if (nx == 0)
+                    continue;
+                node(0);
+                uint32_t x = 1;
+                for (; x + lanes < nx; x += lanes) {
+                    ve::int_vector const zero{0};
+                    ve::mask_vector const self_wall = ve::load(tags{x}, wall) != zero;
+                    ve::mask_vector const left_wall = ve::load(tags{x - 1}, wall) != zero;
+                    ve::mask_vector const right_wall = ve::load(tags{x + 1}, wall) != zero;
+                    ve::fp_vector const hc = ve::load(tags{row + x}, h);
+                    ve::fp_vector const left = ve::select(left_wall, hc, ve::load(tags{row + x - 1}, h));
+                    ve::fp_vector const right = ve::select(right_wall, hc, ve::load(tags{row + x + 1}, h));
+                    ve::fp_vector const vert = ve::load(tags{up + x}, h) + ve::load(tags{down + x}, h);
+                    ve::fp_vector const lap = left + right - 2.f * hc + (vert - 2.f * hc) * depth_coupling;
+                    ve::fp_vector const nv = (ve::load(tags{row + x}, v) + c2 * lap - restore * hc) * damping;
+                    ve::store(tags{row + x}, v, ve::select(self_wall, ve::fp_vector{0.f}, nv));
                 }
+                for (; x < nx; ++x)
+                    node(x);
             }
-            for (size_t i = 0; i < s.h.size(); ++i)
-                s.h[i] = mathf::clamp(s.h[i] + s.v[i], -max_height, max_height);
+            // h = clamp(h + v, -max_height, max_height)
+            uint32_t const n = uint32_t(s.h.size());
+            uint32_t i = 0;
+            ve::fp_vector const lo{-max_height}, hi{max_height};
+            for (; i + lanes <= n; i += lanes) {
+                ve::fp_vector const t = ve::load(tags{i}, h) + ve::load(tags{i}, v);
+                ve::store(tags{i}, h, ve::select(t < lo, lo, ve::select(t > hi, hi, t)));
+            }
+            for (; i < n; ++i)
+                h[i] = mathf::clamp(h[i] + v[i], -max_height, max_height);
         }
 
         // Water.Update's bodies: entering, leaving and moving along the surface

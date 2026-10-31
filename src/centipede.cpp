@@ -157,7 +157,8 @@ namespace centipede {
         void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
             auto& w = state.world;
             bool const wing = is(state, c, variant::wing);
-            if (w.creature_get_random(c).value() < 0.5f || wing)
+            // (the stun's length in the key: two stuns of a tick roll apart)
+            if (rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(st))).value() < 0.5f || wing)
                 lose_all_grasps(state, c);
             if (wing)
                 st *= 2;
@@ -270,7 +271,7 @@ namespace centipede {
         // Centipede.Shock
         void shock(sys::game_state& state, dcon::creature_id c, dcon::creature_id p) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(p.value)));
             auto const room = room_of(state, c);
             uint32_t const n = chunk_count(state, c);
             auto const me = creature::template_of(state, c);
@@ -340,7 +341,7 @@ namespace centipede {
             constexpr float rad = 80.f, damage = 1.f;
             vec2 const at = w.centipede_data_get_underwater_shock_pos(d);
             float const r = rad * (0.25f + 0.75f * std::sin(mathf::inverse_lerp(0.f, float(life), float(frame)) * mathf::pi));
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const me = creature::template_of(state, c);
             auto const hit = [&](dcon::creature_id t) {
                 if (!creature::here(state, t, room.id))
@@ -391,7 +392,7 @@ namespace centipede {
                 release(state, c, g);
                 return;
             }
-            if (w.creature_get_random(c).value() < 0.025f && (!want_to_shock(state, c, p) || !consious(state, c) || grasped(state, c, 1 - g))) {
+            if (rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(g))).value() < 0.025f && (!want_to_shock(state, c, p) || !consious(state, c) || grasped(state, c, 1 - g))) {
                 release(state, c, g);
                 return;
             }
@@ -539,8 +540,7 @@ namespace centipede {
         }
 
         // CentipedeAI.CheckRandomIdlePos
-        void check_random_idle_pos(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& rng = state.world.creature_get_random(c);
+        void check_random_idle_pos(sys::game_state& state, dcon::creature_id c, room_view const& room, rw::rng& rng) {
             int32_t const x = rng.range(0, room.width);
             ivec2 const test{x, rng.range(0, room.height)};
             if (idle_score(state, c, room, test) > idle_score(state, c, room, pl(state, c).temp_idle_pos)) {
@@ -552,7 +552,7 @@ namespace centipede {
         // CentipedeAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const d = data(state, c);
             variant const v = pl(state, c).variant;
             if (pl(state, c).annoying_collisions > 0)
@@ -676,7 +676,7 @@ namespace centipede {
         // Centipede.Crawl
         void crawl(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             uint32_t const n = chunk_count(state, c);
             float const size = pl(state, c).size;
             variant const v = pl(state, c).variant;
@@ -802,7 +802,7 @@ namespace centipede {
         // follows its path along the surface
         void swim(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             uint32_t const n = chunk_count(state, c);
             auto const head = chunk(state, c, head_index(state, c));
             ivec2 from = room_view::get_tile_position(w.body_chunk_get_pos(head));
@@ -960,7 +960,7 @@ namespace centipede {
                     }
                     pl(state, c).no_follow_con_counter = 0;
                 } else if (++pl(state, c).no_follow_con_counter > 40) {
-                    uint32_t const k = uint32_t(w.creature_get_random(c).range(0, int32_t(n)));
+                    uint32_t const k = uint32_t(rw::random(state.seed, state.tick, uint32_t(c.value)).range(0, int32_t(n)));
                     if (accessible(state, c, room, pos(state, c, k)))
                         pl(state, c).move_to_pos = pos(state, c, k);
                 }
@@ -1042,7 +1042,7 @@ namespace centipede {
             auto const room = room_of(state, c);
             if (!state.viewed(room))
                 return;
-            auto& rng = state.runtime(room).cosmetic;
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), rw::ids(uint32_t(c.value), k)));
             auto const hit = chunk(state, c, k);
             float const rad = w.body_chunk_get_rad(hit);
             int const count = is(state, c, variant::red) ? 3 : 1;
@@ -1075,7 +1075,7 @@ namespace centipede {
         uint32_t const n = chunk_count(state, c);
         float const size = pl(state, c).size;
         variant const v = pl(state, c).variant;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         if (v == variant::aqua)
             underwater_shock(state, c, room);
         // the aquapede's Glower: lit while it is calm
@@ -1174,7 +1174,7 @@ namespace centipede {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::centipede);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         // AbstractCreature.ID.RandomSeed: Centipede.GenerateSize and the
         // graphics' layout roll from it
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
@@ -1264,12 +1264,11 @@ namespace centipede {
         x.size = size;
         x.variant = v;
         x.flying = v == variant::wing ? 1 : 0;
-        w.creature_set_random(c, rng);
         w.centipede_data_set_seed(d, seed);
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
-        x.body_direction = w.creature_get_random(c).value() < 0.5f;
+        x.body_direction = rng.value() < 0.5f;
         x.moving = 0;
         x.move_to_pos = at;
         x.change_dir_counter = 0;
@@ -1340,7 +1339,8 @@ namespace centipede {
             bool ok = !creature::holds(w, p, c);
             if (is(state, c, variant::wing)) {
                 auto const room = world::get_room_view(state, room_of(state, c));
-                if (lizard::ai::fall_risk_tile(room, room_view::get_tile_position(pos(state, c, i))).y < 0 || w.creature_get_random(c).value() < 0.5f)
+                if (lizard::ai::fall_risk_tile(room, room_view::get_tile_position(pos(state, c, i))).y < 0
+                || rw::random(state.seed, state.tick, rw::ids(rw::ids(uint32_t(c.value), uint32_t(p.value)), rw::ids(i, j * 2u + uint32_t(g)))).value() < 0.5f)
                     ok = false;
             }
             if (pl(state, c).shock_give_up_counter > 0)
@@ -1350,19 +1350,22 @@ namespace centipede {
         }
     }
 
-    void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t, dcon::creature_id other, uint32_t) {
+    void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t ci, dcon::creature_id other, uint32_t oi) {
         // Centipede.Collide with a bigger centipede: it looks for another
         // idle spot (both ways: the pair's collision is reported once)
         auto const room = world::get_room_view(state, room_of(state, c));
+        // the pair and its chunks in the key: each collision of a tick rolls apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(rw::ids(uint32_t(c.value), uint32_t(other.value)), rw::ids(ci, oi)));
         if (consious(state, c) && pl(state, other).size > pl(state, c).size)
-            check_random_idle_pos(state, c, room);
+            check_random_idle_pos(state, c, room, rng);
         if (consious(state, other) && pl(state, c).size > pl(state, other).size)
-            check_random_idle_pos(state, other, room);
+            check_random_idle_pos(state, other, room, rng);
     }
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        // the hit chunk in the key: two hits of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         auto const d = data(state, c);
         uint32_t const n = chunk_count(state, c);
         variant const v = pl(state, c).variant;
@@ -1416,7 +1419,7 @@ namespace centipede {
                 if (directed && sparks > 5) {
                     auto const room = room_of(state, c);
                     if (state.viewed(room)) {
-                        auto& cr = state.runtime(room).cosmetic;
+                        auto cr = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), rw::ids(uint32_t(c.value), k)));
                         vec2 const at = pos(state, c, k);
                         float const speed = rw::magnitude(momentum) * 10.f;
                         for (int32_t s = 0; s < sparks; ++s) {

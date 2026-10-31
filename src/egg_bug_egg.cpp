@@ -95,7 +95,8 @@ namespace egg_bug_egg {
         s.segment_count = uint8_t(fire ? 3 : 5);
         s.swell = 1.f;
         s.bites = 2;
-        s.liquid_deplete = mathf::lerp(40.f, 80.f, w.item_get_random(it).value());
+        auto rng = rw::random(state.seed, state.tick, uint32_t(it.value));
+        s.liquid_deplete = mathf::lerp(40.f, 80.f, rng.value());
         w.body_chunk_set_rad(c, 4.f * swell_fac(s));
         w.body_chunk_set_mass(c, 0.2f);
         w.item_set_rotation_speed(it, 0.f);
@@ -110,7 +111,8 @@ namespace egg_bug_egg {
         auto const d = data(state, it);
         if (!d)
             return;
-        vec2 const rot = custom::rnv(w.item_get_random(it));
+        auto rng = rw::random(state.seed, state.tick, uint32_t(it.value));
+        vec2 const rot = custom::rnv(rng);
         w.item_set_rotation(it, rot);
         w.item_set_last_rotation(it, rot);
         w.item_set_rotation_speed(it, 0.f);
@@ -147,7 +149,7 @@ namespace egg_bug_egg {
         if (!d)
             return false;
         auto& s = w.egg_bug_egg_data_get_s(d);
-        auto& rng = w.item_get_random(it);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(it.value));
         auto const o = items::body(state, it);
         auto const c = items::chunk(state, it);
         bool const fire = s.fire != 0;

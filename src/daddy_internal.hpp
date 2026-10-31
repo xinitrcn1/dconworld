@@ -8,6 +8,7 @@
 // helpers both use.
 
 #include <cstdint>
+#include <source_location>
 #include <span>
 #include <vector>
 
@@ -40,7 +41,7 @@ namespace daddy::detail {
         sys::game_state& state;
         dcon::creature_id d;
         world::room_view const& room;
-        rw::rng& rng;
+        rw::rng rng;
         body_state& z;
         ai_state& a;
         // the Tracker's one representation (what it hunts, felt this tick,
@@ -59,7 +60,10 @@ namespace daddy::detail {
         // AImap.getTerrainProximity of the room (pathing's map)
         std::vector<uint16_t> const* prox = nullptr;
 
-        ctx(sys::game_state& s, dcon::creature_id id, world::room_view const& r, std::vector<tentacle_work>& t, std::vector<rw::ivec2>& sc);
+        // (keyed by the constructing call site too: several ctxs of one
+        // daddy in one tick roll apart)
+        ctx(sys::game_state& s, dcon::creature_id id, world::room_view const& r, std::vector<tentacle_work>& t, std::vector<rw::ivec2>& sc,
+            std::source_location const l = std::source_location::current());
 
         rw::vec2& pos(uint32_t i) { return state.world.body_chunk_get_pos(chunks[i]); }
         rw::vec2& vel(uint32_t i) { return state.world.body_chunk_get_vel(chunks[i]); }

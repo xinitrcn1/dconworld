@@ -762,7 +762,7 @@ namespace rot {
             auto& w = state.world;
             if (w.rot_bulb_get_felt_something_delay(b) > 0 || intensity <= 0.f || passive(state, b))
                 return;
-            auto& r = w.rot_system_get_random(system_of_bulb(state, b));
+            auto r = rw::random(state.seed, state.tick, uint32_t(b.value));
             w.rot_bulb_set_felt_something_intensity(b, intensity);
             w.rot_bulb_set_felt_something_at(b, at);
             w.rot_bulb_set_look_dir(b, custom::dir_vec(w.rot_bulb_get_stuck_pos(b), at));
@@ -1098,9 +1098,8 @@ namespace rot {
         auto const s = w.create_rot_system();
         w.try_create_rot_system_location(s, room);
         // UnityEngine.Random.InitState(places[0].pos.x + places[0].pos.y)
-        rw::rng r{uint32_t(int32_t(places[0].pos.x) + int32_t(places[0].pos.y)) * 0x9E3779B1u ^ 0x2545F491u};
-        if (r.state == 0)
-            r.state = 0x2545F491u;
+        // (from a fixed key: the same layout whenever the room is loaded)
+        rw::rng r{rw::keyed::key(0u, 0u, uint32_t(int32_t(places[0].pos.x) + int32_t(places[0].pos.y)), rw::site())};
 
         // the air tiles touching a wall within the areas
         std::vector<ivec2> tiles;
@@ -1225,7 +1224,8 @@ namespace rot {
         auto const s = system_of(state, room.id);
         if (!s)
             return;
-        auto& r = w.rot_system_get_random(s);
+        // this tick's rolls of the system
+        auto r = rw::random(state.seed, state.tick, uint32_t(s.value));
         // DaddyCorruption.NoiseInRoom
         for (auto const& n : state.noises(room.id)) {
             w.rot_system_for_each_rot_bulb_membership(s, [&](dcon::rot_bulb_membership_id m) {

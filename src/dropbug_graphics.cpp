@@ -57,9 +57,9 @@ namespace dropbug_graphics {
         auto& w = state.world;
         auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         g = dropbug::graphics_state{};
-        // vanilla seeds these from the creature's ID
-        w.creature_get_graphics_random(d) = rw::rng{w.creature_get_random(d).state ^ 0x5bd1e995u};
-        auto& rng = w.creature_get_graphics_random(d);
+        // vanilla seeds these from the creature's ID (tick 0: the same looks
+        // whenever it's reset)
+        auto rng = rw::random(state.seed, 0, uint32_t(d.value));
         g.leg_length = 45.f;
         g.body_thickness = mathf::lerp(0.6f, 1.4f, rng.value());
         g.legs_thickness = mathf::lerp(0.6f, 1.4f, rng.value());
@@ -102,11 +102,9 @@ namespace dropbug_graphics {
 
     void reset_positions(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
-        auto const keep_random = w.creature_get_graphics_random(d);
         auto const keep = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         reset(state, d);
         auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
-        w.creature_set_graphics_random(d, keep_random);
         g.body_thickness = keep.body_thickness;
         g.legs_thickness = keep.legs_thickness;
         g.antennae_length = keep.antennae_length;
@@ -118,7 +116,7 @@ namespace dropbug_graphics {
     void update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
         auto& w = state.world;
         auto& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
-        auto& rng = w.creature_get_graphics_random(d);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(d.value));
         vec2 const p0 = chunk_pos(state, d, 0), p1 = chunk_pos(state, d, 1), p2 = chunk_pos(state, d, 2);
         vec2 const v0 = chunk_vel(state, d, 0), v1 = chunk_vel(state, d, 1), v2 = chunk_vel(state, d, 2);
         bool const awake = dropbug::consious(state, d);
@@ -331,7 +329,7 @@ namespace dropbug_graphics {
         auto const& w = state.world;
         auto const& g = w.dropbug_data_get_graphics(creature::dropbug_data(w, d));
         // UnityEngine.Random in DrawSprites: the body's shiver
-        rw::rng rng{(state.tick * 2654435761u) ^ (uint32_t(d.index()) * 40503u) ^ 0x9E3779B9u};
+        auto rng = rw::random(state.seed, state.tick, uint32_t(d.value));
         float const flip = mathf::lerp(g.last_flip, g.flip, alpha);
         float const vib = mathf::lerp(g.last_vibrate, g.vibrate, alpha);
         float const deep = mathf::lerp(g.last_deep_ceiling_mode, g.deep_ceiling_mode, alpha);

@@ -82,15 +82,17 @@ namespace garbage_worm {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
-            rw::rng& rng;
+            rw::rng rng;
             dcon::garbage_worm_data_id d;
             creature::garbage_worm_payload& p;
             tentacle_state& t;
             ai_state& a;
             dcon::body_chunk_id b[2];
 
-            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r)
-                : state(s), c(id), room(r), rng(s.world.creature_get_random(id)), d(data(s, id)), p(pl(s, id)), t(s.world.garbage_worm_data_get_tentacle(d)),
+            // (keyed by the constructing call site too: several ctxs of one
+            // worm in one tick roll apart)
+            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::source_location const l = std::source_location::current())
+                : state(s), c(id), room(r), rng(rw::random(s.seed, s.tick, uint32_t(id.value), l)), d(data(s, id)), p(pl(s, id)), t(s.world.garbage_worm_data_get_tentacle(d)),
                   a(s.world.garbage_worm_data_get_ai(d)) {
                 b[0] = creature::chunk(s, id, 0);
                 b[1] = creature::chunk(s, id, 1);
@@ -798,7 +800,7 @@ namespace garbage_worm {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::garbage_worm);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -822,8 +824,6 @@ namespace garbage_worm {
         w.body_chunk_set_collide_with_terrain(root, 0);
         physics::set_go_through_floors(state, o, true);
         w.try_create_creature_body(c, o);
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{rng.next() | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -859,7 +859,7 @@ namespace garbage_worm {
         }
         w.garbage_worm_data_set_tentacle(d, t);
         ai_state a;
-        a.shake_dir = custom::deg_to_vec(mathf::lerp(-140.f, 140.f, w.creature_get_random(c).value()));
+        a.shake_dir = custom::deg_to_vec(mathf::lerp(-140.f, 140.f, rng.value()));
         w.garbage_worm_data_set_ai(d, a);
         // GarbageWormAI's constructor: the anger of every live garbage worm
         // of the world

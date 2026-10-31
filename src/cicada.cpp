@@ -163,9 +163,9 @@ namespace cicada {
         }
 
         // Cicada.TakeOff
-        void take_off(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 dir) {
+        // (the caller's stream: it can take off twice in a tick)
+        void take_off(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 dir, rw::rng& rng) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
             w.creature_get_payload(c).cicada.wait_to_fly_counter = 0;
             w.creature_get_payload(c).cicada.flying = 1;
             int32_t num = 0;
@@ -376,7 +376,7 @@ namespace cicada {
         // the field to its destination (flyers can go back the way they came)
         void stuck_update(sys::game_state& state, dcon::creature_id c, room_view const& room, bool satisfied) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& s = w.cicada_data_get_stuck(creature::cicada_data(w, c));
             ivec2 const at = here(state, c);
             if (s.counter > 0) {
@@ -459,13 +459,13 @@ namespace cicada {
                     for_each_member(state, c, [&](dcon::creature_id o) { w.cicada_data_set_circle_leader(creature::cicada_data(w, o), uint16_t(next.index() + 1)); });
                 }
             }
-            w.cicada_data_set_no_circle_group_counter(creature::cicada_data(w, c), w.creature_get_random(c).range(10, 140));
+            w.cicada_data_set_no_circle_group_counter(creature::cicada_data(w, c), rw::random(state.seed, state.tick, uint32_t(c.value)).range(10, 140));
         }
 
         // CircleGroup constructor
         void start_circle(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 center) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             circle_group g;
             g.center = center;
             g.radius = mathf::lerp(40.f, float(proximity(state, room, center) - 3) * 15.f, rng.value());
@@ -479,7 +479,7 @@ namespace cicada {
         // CircleGroup.Update, run by the group's first cicada
         void circle_update(sys::game_state& state, dcon::creature_id leader, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(leader);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(leader.value));
             auto& g = w.cicada_data_get_circle(creature::cicada_data(w, leader));
             if (rng.value() < 0.00066666666f)
                 g.rotation_dir = -g.rotation_dir;
@@ -528,7 +528,7 @@ namespace cicada {
         // CicadaAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             w.cicada_data_set_focus(creature::cicada_data(w, c), dcon::creature_id{});
             if (w.cicada_data_get_no_circle_group_counter(creature::cicada_data(w, c)) > 0)
                 --w.cicada_data_get_no_circle_group_counter(creature::cicada_data(w, c));
@@ -756,7 +756,7 @@ namespace cicada {
         // struggling when the slugcat stands still
         void grabbed_by_player(sys::game_state& state, dcon::creature_id c, dcon::player_id p) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             float& stamina = w.creature_get_payload(c).cicada.stamina;
             bool const lifting = w.creature_get_payload(c).cicada.currently_lifting_player != 0;
             w.creature_get_payload(c).cicada.flying = stamina > 0.33333334f ? 1 : 0;
@@ -806,7 +806,7 @@ namespace cicada {
         // Cicada.Act
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             ai_update(state, c, room);
             float& stamina = w.creature_get_payload(c).cicada.stamina;
             if (!w.creature_get_payload(c).cicada.sticky)
@@ -963,14 +963,14 @@ namespace cicada {
                     return;
                 }
                 if (room.get_tile(*conn).t == world::terrain::slope)
-                    take_off(state, c, room, custom::deg_to_vec(rng.value() * 360.f));
+                    take_off(state, c, room, custom::deg_to_vec(rng.value() * 360.f), rng);
                 if (climbable(state, room, *conn)) {
                     // crawling along the terrain
                     vel(state, c, 0) += custom::dir_vec(pos(state, c, 0), room_view::middle_of_tile(*conn)) * mathf::lerp(0.4f, 1.8f, stuck_utility(state, c));
                     return;
                 }
                 if (++w.creature_get_payload(c).cicada.wait_to_fly_counter > 30)
-                    take_off(state, c, room, custom::dir_vec(pos(state, c, 0), room_view::middle_of_tile(*conn)));
+                    take_off(state, c, room, custom::dir_vec(pos(state, c, 0), room_view::middle_of_tile(*conn)), rng);
                 return;
             }
             int32_t& counter = w.creature_get_payload(c).cicada.charge_counter;
@@ -1055,7 +1055,8 @@ namespace cicada {
         // clinging to what it antagonizes
         void collide_with(sys::game_state& state, dcon::creature_id c, room_view const& room, uint32_t i, dcon::creature_id p, uint32_t j) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            // the pair and its chunks in the key: each collision of a tick rolls apart
+            auto rng = rw::random(state.seed, state.tick, rw::ids(rw::ids(uint32_t(c.value), uint32_t(p.value)), rw::ids(i, j)));
             hook_ctx hx{state, c, room};
             tracker::see(state, c, room, p, make_hooks(hx));
             auto const pc = creature::chunk_of(state, p, j);
@@ -1101,7 +1102,7 @@ namespace cicada {
     // Cicada.Update
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // the slugcat holding it: let go when it can't (it carries it
         // through shortcuts, see follow_player)
         if (auto const p = holder(state, c); p && !player_here(state, p, room.id) && !player::in_shortcut(state, p))
@@ -1145,7 +1146,7 @@ namespace cicada {
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, bool gender) {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::cicada);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         auto const view = world::get_room_view(state, room);
         physics::object_desc desc;
         desc.air_friction = 0.999f;
@@ -1222,10 +1223,8 @@ namespace cicada {
         stuck_tracker st;
         st.unstuck_goal = room_view::get_tile_position(at);
         w.cicada_data_set_stuck(creature::cicada_data(w, c), st);
-        w.creature_set_random(c, rng);
         // CicadaAI.NewRoom: a random idle sit spot
-        auto& r = w.creature_get_random(c);
-        ivec2 const spot = random_tile(r, view);
+        ivec2 const spot = random_tile(rng, view);
         w.cicada_data_set_idle_sit_spot(creature::cicada_data(w, c), spot);
         w.cicada_data_set_forbidden_idle_pos(creature::cicada_data(w, c), ivec2{-1, -1});
         w.creature_set_destination(c, room_view::get_tile_position(at));
@@ -1256,7 +1255,8 @@ namespace cicada {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        // the hit chunk in the key: two hits of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         // Creature.Violence
         auto const hit = chunk(state, c, k);
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);

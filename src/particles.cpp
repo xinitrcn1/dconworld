@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <source_location>
 
 #include "particles.hpp"
 #include "water.hpp"
@@ -27,12 +29,13 @@ namespace particles {
         vec2 rnv(rw::rng& r) { return rw::custom::deg_to_vec(r.value() * 360.f); }
         float range(rw::rng& r, float lo, float hi) { return lo + (hi - lo) * r.value(); }
 
-        // the particles keep their own random numbers: cosmetic rolls must not
-        // change the gameplay's (item spawns, AI) between runs. Every room
-        // has its own, rooms spawn them while updating in parallel
-        rw::rng& random(sys::game_state& state, dcon::room_id room) {
-            return state.runtime(room).cosmetic;
+        // the rolls of one effect this tick: keyed by its room, `what` it is
+        // about (where it is, or the particle / sound it is for) and the call
+        // site
+        rw::rng random(sys::game_state const& state, dcon::room_id room, uint32_t what, std::source_location const l = std::source_location::current()) {
+            return rw::random_salted(state.seed, state.tick, rw::ids(uint32_t(room.value), what), rw::site(l));
         }
+        uint32_t key_of(vec2 at) { return rw::ids(std::bit_cast<uint32_t>(at.x), std::bit_cast<uint32_t>(at.y)); }
 
         // where the water's front surface is at `x` (waves included)
         float surface_y(sys::game_state const& state, room_view const& view, float x) {
@@ -42,7 +45,7 @@ namespace particles {
         }
 
         void dust(sys::game_state& state, dcon::room_id room, vec2 at, int count, float strength) {
-            auto& r = random(state, room);
+            auto r = random(state, room, key_of(at));
             for (int i = 0; i < count; ++i) {
                 vec2 const v{range(r, -1.f, 1.f) * (1.f + strength), range(r, 0.f, 0.6f) * strength};
                 spawn(state, room, kind::dust, at + vec2{range(r, -6.f, 6.f), 0.f}, v, range(r, 3.f, 6.f), range(r, 0.35f, 0.7f), dust_color, 0.35f);
@@ -50,7 +53,7 @@ namespace particles {
         }
 
         void sparks(sys::game_state& state, dcon::room_id room, vec2 at, int count, float speed, vec3 color) {
-            auto& r = random(state, room);
+            auto r = random(state, room, key_of(at));
             for (int i = 0; i < count; ++i)
                 spawn(state, room, kind::spark, at, rnv(r) * range(r, 0.3f, 1.f) * speed, range(r, 1.f, 2.f), range(r, 0.12f, 0.35f), color);
         }
@@ -80,7 +83,7 @@ namespace particles {
     void splash(sys::game_state& state, dcon::room_id room, vec2 pos, float strength) {
         if (!state.viewed(room))
             return;
-        auto& r = random(state, room);
+        auto r = random(state, room, key_of(pos));
         int const n = int(mathf::min(strength * 2.5f, 28.f));
         for (int i = 0; i < n; ++i) {
             float const spread = range(r, -1.f, 1.f);
@@ -92,7 +95,7 @@ namespace particles {
     void bubbles(sys::game_state& state, dcon::room_id room, vec2 pos, int count, float spread) {
         if (!state.viewed(room))
             return;
-        auto& r = random(state, room);
+        auto r = random(state, room, key_of(pos));
         for (int i = 0; i < count; ++i)
             spawn(state, room, kind::bubble, pos + rnv(r) * spread * r.value(), rnv(r) * 0.6f, range(r, 1.2f, 3.2f), range(r, 1.5f, 3.f), water_color, 0.8f);
     }
@@ -105,7 +108,7 @@ namespace particles {
         auto& out = state.parallel ? state.runtime(room).particles : state.particles;
         if (out.size() == before)
             return;
-        auto& r = random(state, room);
+        auto r = random(state, room, key_of(pos));
         auto& p = out.back();
         // CentipedeShell's constructor; it goes when its counters say so
         p.last_pos = pos;
@@ -129,7 +132,7 @@ namespace particles {
             dcon::room_id const room{dcon::room_id::value_base_t(snd.room)};
             if (!state.viewed(room))
                 continue;
-            auto& r = random(state, room);
+            auto r = random(state, room, uint32_t(i));
             vec2 const at = snd.pos;
             vec2 const feet = at - vec2{0.f, 14.f};
             switch (snd.id) {
@@ -187,7 +190,7 @@ namespace particles {
         auto& w = state.world;
         if (!state.viewed(room.id))
             return;
-        auto& r = random(state, room.id);
+        auto r = random(state, room.id, 0u);
         // RoomRain: streaks from the top of the room, as thick as the room's
         // rain (RoomRain.intensity through the DeathRain shader's
         // InverseLerp(0, 0.5)), denser and faster as the deadly rain gets
@@ -252,7 +255,7 @@ namespace particles {
                 view_room = p.room;
                 view = world::get_room_view(state, p.room);
             }
-            auto& r = random(state, p.room);
+            auto r = random(state, p.room, uint32_t(i));
             p.last_pos = p.pos;
             p.life += p.decay;
             auto const k = kind(p.kind);

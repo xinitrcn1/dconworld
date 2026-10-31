@@ -673,7 +673,6 @@ namespace daddy_graphics {
             e.jag_seed = uint32_t(w.creature_get_payload(d).daddy.graphics_seed) * 2654435761u + uint32_t(m) * 40503u;
         }
         w.daddy_data_set_graphics(creature::daddy_data(w, d), g);
-        w.creature_set_graphics_random(d, rw::rng{uint32_t(w.creature_get_payload(d).daddy.graphics_seed) | 1u});
         reset(state, d);
     }
 
@@ -716,7 +715,7 @@ namespace daddy_graphics {
 
     void update(sys::game_state& state, dcon::creature_id d, room_view const& room) {
         auto& w = state.world;
-        auto& r = w.creature_get_graphics_random(d);
+        auto r = rw::random(state.seed, state.tick, uint32_t(d.value));
         uint32_t const nt = w.creature_get_payload(d).daddy.tentacle_count;
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i) {
             auto const t = daddy::tube_of(state, d, i);
@@ -786,7 +785,8 @@ namespace daddy_graphics {
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         if (g.feel_something_reaction_delay > 0)
             return;
-        g.feel_something_reaction_delay = w.creature_get_graphics_random(d).range(10, 40);
+        auto r = rw::random(state.seed, state.tick, uint32_t(d.value));
+        g.feel_something_reaction_delay = r.range(10, 40);
         // (Bro_React_To_Tentacle_Touch and Daddy_React_To_Tentacle_Touch have
         // no sound in sounds.txt)
         if (!daddy::size_class(state, d))
@@ -795,7 +795,7 @@ namespace daddy_graphics {
         // Eye.ReactToCreature
         e.sound_source = 0;
         e.creature_seen = felt;
-        e.light = mathf::max(e.light, w.creature_get_graphics_random(d).value());
+        e.light = mathf::max(e.light, r.value());
     }
 
     void react_to_noise(sys::game_state& state, dcon::creature_id d, uint16_t source, vec2 noise_pos, float strength) {
@@ -824,8 +824,10 @@ namespace daddy_graphics {
         if (num4 * 40.f > float(g.reaction_sound_delay)) {
             // (the DaddyBubbles and DaddyRipple it lets out aren't ported, nor
             // Daddy_React_To_Noise, which has no sound)
-            w.creature_get_graphics_random(d).value();
-            g.reaction_sound_delay = std::max(g.reaction_sound_delay, w.creature_get_graphics_random(d).range(10, 40));
+            // (keyed by the sound too: several noises in one tick)
+            auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(d.value), source));
+            r.value();
+            g.reaction_sound_delay = std::max(g.reaction_sound_delay, r.range(10, 40));
         }
     }
 

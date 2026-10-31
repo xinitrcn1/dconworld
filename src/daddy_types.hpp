@@ -259,6 +259,6 @@ namespace daddy {
         int32_t feel_something_reaction_delay = 0;
         eye eyes[max_chunks];
         hunter_dummy dummy;
-        // (its UnityEngine.Random is the creature's graphics_random)
+        // (its UnityEngine.Random: rw::random of the creature and the tick)
     };
 }

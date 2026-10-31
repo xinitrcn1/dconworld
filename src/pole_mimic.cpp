@@ -203,7 +203,7 @@ namespace pole_mimic {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
-            rw::rng& rng;
+            rw::rng rng;
             creature::pole_mimic_payload& p;
             dcon::pole_mimic_data_id d;
             body_state& b;
@@ -218,8 +218,10 @@ namespace pole_mimic {
             // AImap.getTerrainProximity of the room (null: none asked for)
             std::vector<uint16_t> const* prox = nullptr;
 
-            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r)
-                : state(s), c(id), room(r), rng(s.world.creature_get_random(id)), p(pl(s, id)), d(data(s, id)), b(s.world.pole_mimic_data_get_body(d)) {
+            // (keyed by the constructing call site too: several ctxs of one
+            // creature in one tick roll apart)
+            ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::source_location const l = std::source_location::current())
+                : state(s), c(id), room(r), rng(rw::random(s.seed, s.tick, uint32_t(id.value), l)), p(pl(s, id)), d(data(s, id)), b(s.world.pole_mimic_data_get_body(d)) {
                 auto& w = state.world;
                 auto const segs = w.pole_mimic_data_get_segments(d);
                 segments.assign(segs.begin(), segs.end());
@@ -878,7 +880,8 @@ namespace pole_mimic {
             auto leaves = w.pole_mimic_data_get_leaves(x.d);
             if (!g.initiated || g.leaf_pairs <= 0 || leaves.size() < uint32_t(g.leaf_pairs) * 2u)
                 return;
-            auto& gr = w.creature_get_graphics_random(x.c);
+            // (the caller's stream: called in a loop over the chunks)
+            auto& gr = x.rng;
             for (int32_t j = gr.range(2, 6); j >= 0; --j) {
                 int32_t const num6 = custom::int_clamp(int32_t(num2 * float(g.leaf_pairs)) - 2 + gr.range(0, 5), 0, g.leaf_pairs - 1);
                 int32_t const num7 = gr.value() < 0.5f ? 0 : 1;
@@ -1350,7 +1353,7 @@ namespace pole_mimic {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::pole_mimic);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1368,8 +1371,6 @@ namespace pole_mimic {
         w.body_chunk_set_collide_with_terrain(c1, false);
         physics::set_go_through_floors(state, o, true);
         w.try_create_creature_body(c, o);
-        w.creature_set_random(c, rng);
-        w.creature_get_graphics_random(c) = rw::rng{rng.state ^ 0x51ED27u};
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -1472,7 +1473,7 @@ namespace pole_mimic {
     void violence(sys::game_state& state, dcon::creature_id c, creature::hit_part const& part, vec2 momentum, float damage, float stun_bonus,
         creature::damage_type type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         if (part.chunk >= 0 && uint32_t(part.chunk) < creature::chunk_count(state, c)) {
             auto const hit = creature::chunk(state, c, uint32_t(part.chunk));
             w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);

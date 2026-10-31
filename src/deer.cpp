@@ -265,14 +265,16 @@ namespace deer {
             creature::deer_payload& p;
             dcon::deer_data_id d;
             ai_state& ai;
-            rw::rng& rng;
+            rw::rng rng;
             dcon::body_chunk_id ch[6];
             std::vector<leg_work>& legs;
             std::vector<ivec2>& scratch;
             std::optional<pathing::field_id> field;
 
-            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r)
-                : state(s), c(cc), room(r), p(pl(s, cc)), d(data(s, cc)), ai(s.world.deer_data_get_ai(data(s, cc))), rng(s.world.creature_get_random(cc)),
+            // (keyed by the constructing call site too: several ctxs of one
+            // deer in one tick roll apart)
+            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r, std::source_location const l = std::source_location::current())
+                : state(s), c(cc), room(r), p(pl(s, cc)), d(data(s, cc)), ai(s.world.deer_data_get_ai(data(s, cc))), rng(rw::random(s.seed, s.tick, uint32_t(cc.value), l)),
                   legs(work_buffer()), scratch(scratch_buffer()) {
                 for (uint32_t i = 0; i < 6; ++i)
                     ch[i] = creature::chunk(s, cc, i);
@@ -1847,7 +1849,7 @@ namespace deer {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::deer);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -1908,7 +1910,6 @@ namespace deer {
         p.bod_dir = vec2{p.flip_dir, 0.f};
         p.move_direction = vec2{0.f, 0.f};
         p.preferred_height = 55.f;
-        w.creature_set_random(c, rng);
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -2029,7 +2030,7 @@ namespace deer {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto& p = pl(state, c);
         // Deer.Violence: hurt, it goes home
         if (damage > 0.9f) {
@@ -2070,9 +2071,10 @@ namespace deer {
         auto const view = world::get_room_view(state, room);
         vec2 const mid = room_view::middle_of_tile(at);
         uint32_t const n = creature::chunk_count(state, c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         for (uint32_t i = 0; i < n; ++i) {
             auto const ch = creature::chunk(state, c, i);
-            physics::hard_set_position(state, ch, mid + custom::rnv(w.creature_get_random(c)));
+            physics::hard_set_position(state, ch, mid + custom::rnv(rng));
             w.body_chunk_set_vel(ch, vec2{0.f, 0.f});
         }
         auto& p = pl(state, c);
@@ -2238,7 +2240,9 @@ namespace deer {
                         }
                     }
             }
-            auto& rng = s.room_random(room);
+            // (keyed by the room and the spores' tile: several puffs of a
+            // room in one tick roll apart)
+            auto rng = rw::random(s.seed, s.tick, rw::ids(uint32_t(room.value), uint32_t(t.x) | uint32_t(t.y) << 16));
             // a conscious deer of the room not after a puff ball
             std::vector<dcon::creature_id> list;
             rooms::for_each_creature(s, room, creature::type::deer, [&](dcon::creature_id d) {

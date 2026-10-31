@@ -51,6 +51,6 @@ namespace centipede {
         float last_wing_swim_cycle = 0.f;
         float wings_folded = 1.f;
         float last_wings_folded = 1.f;
-        // (the whiskers' twitching rolls the creature's graphics_random)
+        // (the whiskers' twitching rolls the graphics update's keyed stream)
     };
 }

@@ -166,7 +166,6 @@ namespace deer_graphics {
     void create(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         auto const d = data(state, c);
-        w.creature_get_graphics_random(c) = rw::rng{w.creature_get_random(c).state ^ 0x5DEECE6u};
         rw::unity_random r{w.deer_data_get_seed(d)};
         // Antlers(deer.antlers.rad, 1f)
         static thread_local std::vector<items::antler_point> points;
@@ -238,7 +237,7 @@ namespace deer_graphics {
         auto& w = state.world;
         auto const d = data(state, c);
         auto& g = w.deer_data_get_graphics(d);
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const& pl = w.creature_get_payload(c).deer;
         auto const& ai = w.deer_data_get_ai(d);
         vec2 const head = w.body_chunk_get_pos(creature::chunk(state, c, 0));

@@ -260,7 +260,7 @@ namespace vulture::detail {
             }
             // the smoke of the shot (dust puffs, where a camera looks)
             if (x.viewed && !x.room.point_submerged(x.pos(head))) {
-                auto& g = x.state.runtime(x.room.id).cosmetic;
+                auto g = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(x.room.id.value), rw::ids(uint32_t(x.c.value), side)));
                 vec2 const a2 = custom::dir_vec(x.pos(head), hang_pos);
                 for (int32_t i = 0; i < 8; ++i) {
                     float const f = float(i) / 8.f;
@@ -274,8 +274,9 @@ namespace vulture::detail {
         // the wire's look (cosmetic)
         void wire_update(ctx& x, tusk& t, uint32_t side, vec2 a) {
             if (t.last_wire_loose == 0.f && t.wire_loose == 0.f) {
+                auto g = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(x.room.id.value), rw::ids(uint32_t(x.c.value), side)));
                 for (auto& p : t.wire) {
-                    p.pos = x.pos(head) + custom::rnv(x.state.runtime(x.room.id).cosmetic);
+                    p.pos = x.pos(head) + custom::rnv(g);
                     p.last_pos = p.pos;
                     p.vel = vec2{0.f, 0.f};
                 }
@@ -579,9 +580,11 @@ namespace vulture::detail {
                 }
             } else {
                 t.has_rope = 0;
-                if (x.viewed)
+                if (x.viewed) {
+                    auto g = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(x.room.id.value), rw::ids(uint32_t(x.c.value), side)));
                     for (auto& p : t.wire)
-                        p.pos = x.pos(head) + custom::rnv(x.state.runtime(x.room.id).cosmetic);
+                        p.pos = x.pos(head) + custom::rnv(g);
+                }
             }
         }
 

@@ -71,11 +71,14 @@ namespace tracker {
             params const& p;
             hooks const& h;
             tracker_state& s;
-            rw::rng& rng;
+            rw::rng rng;
             uint32_t doomed = 0;
 
-            ctx(sys::game_state& st, dcon::creature_id cr, room_view const& rm, ivec2 a, params const& pp, hooks const& hh)
-                : state(st), c(cr), room(rm), at(a), p(pp), h(hh), s(st.world.creature_get_tracker(cr)), rng(st.world.creature_get_random(cr)) {}
+            // (`other`: what this construction is about, so two in a tick
+            // roll apart: 0 for the update, the seen creature for see)
+            ctx(sys::game_state& st, dcon::creature_id cr, room_view const& rm, ivec2 a, params const& pp, hooks const& hh, uint32_t other = 0)
+                : state(st), c(cr), room(rm), at(a), p(pp), h(hh), s(st.world.creature_get_tracker(cr)),
+                  rng(rw::random(st.seed, st.tick, rw::ids(uint32_t(cr.value), other))) {}
 
             bool sees(dcon::body_chunk_id k) const { return h.sees && h.sees(h.user, k); }
             bool sees_any_chunk(dcon::creature_id t) const {
@@ -482,7 +485,7 @@ namespace tracker {
         if (!creature::here(state, t, room.id))
             return;
         params const p;
-        ctx x{state, c, room, world::room_view::get_tile_position(creature::main_pos(state, c)), p, h};
+        ctx x{state, c, room, world::room_view::get_tile_position(creature::main_pos(state, c)), p, h, uint32_t(t.value)};
         notice(x, t);
     }
 
@@ -565,7 +568,7 @@ namespace tracker {
     ivec2 flee_to(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 at, int32_t reevaluations, int32_t max_distance, params const& p,
         hooks const& h) {
         auto& s = of(state, c);
-        auto& rng = state.world.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         int32_t const sac = p.see_around_corners;
         // EvaluateFlightDestThreat over the straight line there (vanilla
         // takes it when every tile on it is accessible, a QuickPath else)

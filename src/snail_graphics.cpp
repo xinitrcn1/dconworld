@@ -45,7 +45,7 @@ namespace snail_graphics {
         // CreatureLooker (simplified): the tracked creature most worth
         // looking at (CreatureInterestBonus: the unease), kept a while
         void look_update(sys::game_state& state, dcon::creature_id c, graphics_state& g) {
-            auto& rng = state.world.creature_get_graphics_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const& ts = tracker::of(state, c);
             bool const valid = g.look && creature::live(state, g.look) && tracker::find(ts, g.look) != nullptr;
             if (valid && rng.value() > 1.f / 30.f)
@@ -188,7 +188,7 @@ namespace snail_graphics {
         float const rad0 = w.body_chunk_get_rad(k0);
         float const rad1 = w.body_chunk_get_rad(k1);
         // DrawSprites' UnityEngine.Random: the shell's shake (a draw time roll)
-        rw::rng rng{((state.tick * 2654435761u) ^ (uint32_t(c.index()) * 40503u) ^ 0x9E3779B9u) | 1u};
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
 
         // 0 SnailTail
         vec2 const tail = rw::lerp(g.tail.last_pos, g.tail.pos, t);

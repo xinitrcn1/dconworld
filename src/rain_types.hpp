@@ -61,8 +61,5 @@ namespace rain {
         int32_t drain_ticks = 0;
         // cycles finished (the rain came and went)
         uint32_t cycles = 0;
-        // the cycle's own UnityEngine.Random (cycle lengths, death rain rolls,
-        // the rain's direction)
-        rw::rng random{0x3A1F00D5u};
     };
 }

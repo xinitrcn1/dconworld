@@ -328,7 +328,7 @@ namespace lizard::ai {
         void lurk_update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             auto& lk = a.lurk;
             ivec2 const look{rng.range(0, room.width), rng.range(0, room.height)};
             if (room.visual_contact(room_view::middle_of_tile(lk.lurk_position), room_view::middle_of_tile(look)) && rng.value() < 0.1f)
@@ -377,7 +377,7 @@ namespace lizard::ai {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto& s = a.spit;
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             if (!s.target_reachable && s.want_to_spit && !at_spit_pos(state, l))
                 s.go_to_spit_pos_counter = 200;
             else if (s.go_to_spit_pos_counter > 0)
@@ -480,7 +480,7 @@ namespace lizard::ai {
         void yellow_update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             if (a.communicating > 0)
                 --a.communicating;
             float const num = mathf::inverse_lerp(0.f, 14.f, float(a.communicating));
@@ -583,7 +583,7 @@ namespace lizard::ai {
             auto& w = state.world;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
             auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
             auto const& par = params_of(state, l);
             auto const p = target.who;
             a.casual_aggression = dcon::creature_id{};
@@ -735,7 +735,7 @@ namespace lizard::ai {
             if (!w.creature_is_valid(other) || w.creature_get_dead(other) || rooms::room_of(state, other) != room.id)
                 return;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(other.value)));
             a.focus = other;
             auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
             // (graphicsModule != null: rolled either way)
@@ -756,7 +756,7 @@ namespace lizard::ai {
             if (!sees_chunk(state, l, room, chunk(state, other, 0)))
                 return;
             auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(other.value)));
             auto const ot = other;
             a.focus = ot;
             if (signal == communication::aggression) {
@@ -779,7 +779,7 @@ namespace lizard::ai {
 
         // LizardAI.DoIWantToBiteThisCreature
         bool want_to_bite(sys::game_state& state, dcon::creature_id l, creature::tracked const& r) {
-            auto& rng = state.world.creature_get_random(l);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(r.who.value)));
             if (rng.value() < 0.1f && rng.value() > state.world.creature_get_health(l))
                 return true;
             return r.rel.go_for_kill() || (rng.value() < 0.5f && r.rel.type == creature::rel::agressive_rival);
@@ -887,7 +887,7 @@ namespace lizard::ai {
         auto& w = state.world;
         auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
         auto& s = a.spit;
-        auto& rng = w.creature_get_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         auto const* pr = prey_rep(state, l);
         if (!pr || !pr->visual || !creature::live(state, pr->who))
             return false;
@@ -913,13 +913,13 @@ namespace lizard::ai {
     void spit_aim_a_bit_up(sys::game_state& state, dcon::creature_id l, float am) {
         auto& s = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).spit;
         if (am < s.general_aim_up)
-            s.general_aim_up = mathf::clamp(s.general_aim_up + 0.3f * mathf::inverse_lerp(1.f, 0.5f, s.general_aim_up) * state.world.creature_get_random(l).value(), am, 1.f);
+            s.general_aim_up = mathf::clamp(s.general_aim_up + 0.3f * mathf::inverse_lerp(1.f, 0.5f, s.general_aim_up) * rw::random(state.seed, state.tick, uint32_t(l.value)).value(), am, 1.f);
     }
 
     void spit_aim_a_bit_down(sys::game_state& state, dcon::creature_id l, float am) {
         auto& s = state.world.lizard_data_get_ai(creature::lizard_data(state.world, l)).spit;
         if (am > s.general_aim_up)
-            s.general_aim_up = mathf::clamp(s.general_aim_up - 0.3f * mathf::inverse_lerp(0.f, 0.5f, s.general_aim_up) * state.world.creature_get_random(l).value(), 0.f, am);
+            s.general_aim_up = mathf::clamp(s.general_aim_up - 0.3f * mathf::inverse_lerp(0.f, 0.5f, s.general_aim_up) * rw::random(state.seed, state.tick, uint32_t(l.value)).value(), 0.f, am);
     }
 
     void collided(sys::game_state& state, dcon::creature_id l, dcon::creature_id t) {
@@ -933,7 +933,7 @@ namespace lizard::ai {
 
     void reset(sys::game_state& state, dcon::creature_id l) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         ai_state a;
         ivec2 const at = here(state, l);
         state.world.creature_get_destination(l) = at;
@@ -950,7 +950,7 @@ namespace lizard::ai {
         auto& w = state.world;
         auto& a = w.lizard_data_get_ai(creature::lizard_data(w, l));
         auto& z = w.lizard_data_get_core(creature::lizard_data(w, l));
-        auto& rng = w.creature_get_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         auto const& par = params_of(state, l);
         breed const b = breed_of(state, l);
         if (a.panic > 0)

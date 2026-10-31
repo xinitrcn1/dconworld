@@ -570,7 +570,8 @@ namespace worm_grass {
             w.try_create_worm_grass_location(p, room.id);
             // System.Random(LeftTile.x + LeftTile.y + room index)
             uint32_t seed = uint32_t(tiles[0].x + tiles[0].y + int32_t(room.id.index())) * 0x9E3779B1u ^ 0x2545F491u;
-            rw::rng r{seed != 0 ? seed : 0x2545F491u};
+            // (from a fixed key: the same patch whenever the room is loaded)
+            rw::rng r{rw::keyed::key(0u, 0u, seed, rw::site())};
             int32_t const n = int32_t(tiles.size());
             ivec2 const left = tiles[0];
             ivec2 const right = tiles[uint32_t(n - 1)];
@@ -630,7 +631,6 @@ namespace worm_grass {
             }
             for (auto const& c : cosmetic)
                 create_worm(state, p, c.base, c.reach, c.i_fac, c.length_fac, true, r);
-            w.worm_grass_patch_set_random(p, rw::rng{r.next() | 1u});
         }
 
         template<typename F>
@@ -689,7 +689,8 @@ namespace worm_grass {
             return;
         bool const culled = !state.viewed(room.id);
         for_each_patch(state, room.id, [&](dcon::worm_grass_patch_id p) {
-            auto& r = w.worm_grass_patch_get_random(p);
+            // this tick's rolls of the patch
+            auto r = rw::random(state.seed, state.tick, uint32_t(p.value));
             // the worms (updated before the WormGrass in vanilla's list); the
             // cosmetic ones only where a camera looks
             for_each_worm(state, p, [&](dcon::worm_grass_worm_id wm) {
@@ -725,14 +726,13 @@ namespace worm_grass {
 
     void explosion(sys::game_state& state, dcon::room_id room, vec2 at, float rad, float force) {
         auto& w = state.world;
-        auto& r = state.room_random(room);
         for_each_patch(state, room, [&](dcon::worm_grass_patch_id p) {
             for_each_worm(state, p, [&](dcon::worm_grass_worm_id wm) {
                 vec2 const pos = w.worm_grass_worm_get_pos(wm);
                 if (!custom::dist_less(pos, at, rad * 2.f))
                     return;
                 float const num = mathf::inverse_lerp(rad * 2.f, rad, rw::distance(pos, at));
-                if (r.value() < num) {
+                if (rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), uint32_t(wm.value))).value() < num) {
                     w.worm_grass_worm_get_vel(wm) += custom::dir_vec(at, pos) * force * 2.f * num;
                     w.worm_grass_worm_set_excitement(wm, 0.f);
                     w.worm_grass_worm_set_focus_creature(wm, dcon::creature_id{});

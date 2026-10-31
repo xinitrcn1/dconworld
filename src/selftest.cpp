@@ -15,6 +15,7 @@
 #include <tbb/global_control.h>
 
 #include "selftest.hpp"
+#include "keyed_random.hpp"
 #include "tracker.hpp"
 #include "gates.hpp"
 #include "audio.hpp"
@@ -346,6 +347,32 @@ namespace selftest {
         gs.world.region_set_never_rains(region, true);
         rain::new_cycle(gs, region);
         results r;
+
+        {
+            // keyed_random: the ve:: lanes roll what the scalar rolls
+            alignas(64) int32_t ids[64];
+            for (int32_t i = 0; i < 64; ++i)
+                ids[i] = i * 977 + 3;
+            bool same = true;
+            uint32_t const salt = rw::site();
+            for (uint32_t i = 0; i + uint32_t(ve::vector_size) <= 64; i += uint32_t(ve::vector_size)) {
+                ve::int_vector const v = ve::load(ve::unaligned_contiguous_tags<int32_t>{i}, ids);
+                auto const keys = keyed_random::key(0xC0FFEEu, 1234u, v, salt);
+                alignas(64) int32_t b[64];
+                alignas(64) float f[64];
+                ve::store(ve::unaligned_contiguous_tags<int32_t>{0}, b, keyed_random::draw(keys, 2u));
+                ve::store(ve::unaligned_contiguous_tags<int32_t>{0}, f, keyed_random::to_value(keyed_random::draw(keys, 3u)));
+                for (uint32_t k = 0; k < uint32_t(ve::vector_size); ++k) {
+                    auto rng = rw::random_salted(0xC0FFEEu, 1234u, uint32_t(ids[i + k]), salt);
+                    rng.next();
+                    rng.next();
+                    uint32_t const third = rng.next();
+                    float const fourth = rng.value();
+                    same = same && uint32_t(b[k]) == third && f[k] == fourth;
+                }
+            }
+            r.check("keyed random: vector lanes match the scalar", same, "");
+        }
 
         auto const flat = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
         float const floor_y = 20.f; // top of the y=0 solid row
@@ -1041,10 +1068,9 @@ namespace selftest {
             // a blue lizard's tongue catches the slugcat from a distance
             auto const hall = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
             sim s(gs, hall, feet_at(10, 1));
-            // the lizard's rolls (its personality, when it shoots and bites)
-            // from a fixed seed: what the other tests used up of
-            // game_state::random doesn't decide whether this one passes
-            gs.random.state = 99u;
+            // (the lizard's rolls, its personality, when it shoots and bites,
+            // are keyed by the fixed world seed, the tick and its id: no
+            // other test's rolls change them)
             auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(17, 1), lizard::breed::blue);
             bool shot = false;
             bool const caught = s.until(3000, [&] {
@@ -1062,7 +1088,6 @@ namespace selftest {
             // a salamander swims across the pool towards the slugcat on the bank
             auto const pool = make_room(gs, region, box(50, 20, [](int32_t x, int32_t y) { return x >= 40 && y < 9 ? '#' : ' '; }), 8);
             sim s(gs, pool, feet_at(45, 9));
-            gs.random.state = 7919u; // (a fixed seed, like the blue lizard's)
             auto const l = lizard::create(gs, pool, world::room_view::middle_of_tile(5, 3), lizard::breed::salamander);
             float const x0 = gs.world.body_chunk_get_pos(lizard::chunk(gs, l, 0)).x;
             bool swam = false;

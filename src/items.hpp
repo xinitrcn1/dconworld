@@ -39,6 +39,11 @@ namespace items {
     void spawn_room_items(sys::game_state& state, dcon::room_id room);
     // Weapon/Rock.Update for every free or thrown item in the room
     void update_room(sys::game_state& state, world::room_view const& room);
+    // the counters every updated item ticks down (Weapon.vibrate,
+    // PlayerCarryableItem.forbiddenToPlayer), for every item of the world at
+    // once in dcon's vectors; after the rooms' pass, before their deferred
+    // transactions (docs/PIPELINE.md)
+    void update_counters(sys::game_state& state);
     // Player.GrabUpdate (pick up, drop, throw), end of Player.MovementUpdate
     void grab_update(sys::game_state& state, dcon::player_id p, world::room_view const& room);
     // Moves carried items to the hands (Player.GraphicsModuleUpdated, after

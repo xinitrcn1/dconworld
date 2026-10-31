@@ -174,8 +174,6 @@ namespace sys {
         // what Room.Loaded does on the first visit was done (at startup for
         // every room, simulation::populate)
         bool populated = false;
-        // the room's own generator for cosmetic rolls (particles)
-        rw::rng cosmetic{0x51A5C0DEu};
         // this tick's outputs
         std::vector<noise> noises;
         std::vector<sound::sound_request> sounds;
@@ -224,11 +222,10 @@ namespace sys {
         float screen_height = 768.f;
         // simulation ticks since start
         uint32_t tick = 0;
-        // UnityEngine.Random for world level rolls: the world seed every
-        // room's own generator starts from (simulation::populate), and the
-        // creatures' generators as they are made (always serially). Never
-        // used while the rooms update: they roll with room.random
-        rw::rng random{0x2545F491u};
+        // the world's seed: set when the world is made, never changed after
+        // (main reseeds it from the clock before loading). Every rw::random
+        // keys by it (docs/PIPELINE.md)
+        uint32_t seed = 0x2545F491u;
         // RainWorldGame.nextIssuedId: the EntityID numbers handed out so far
         int32_t next_issued_id = 0;
         // the campaign being played (SlugcatStats.Timeline): room spawns that
@@ -336,8 +333,6 @@ namespace sys {
         // a camera looks at the room: sounds, music, particles and graphics
         // modules are only for these
         bool viewed(dcon::room_id room) const noexcept { return has_runtime(room) && rooms[size_t(room.index())].viewed; }
-        // the room's UnityEngine.Random
-        rw::rng& room_random(dcon::room_id room) { return world.room_get_random(room); }
 
         // Room.PlaySound: heard only from the rooms a camera looks at
         void play_sound(sound::sound_id id, dcon::room_id room, rw::vec2 pos, float vol = 1.f, float pitch = 1.f) {

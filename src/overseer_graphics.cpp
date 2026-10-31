@@ -497,7 +497,7 @@ namespace overseer_graphics {
 
     void emerge(sys::game_state& state, dcon::creature_id c) {
         auto& g = gs(state, c);
-        auto& rng = state.world.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         draw_pos const d = update_draw_positions(state, c, 1.f);
         vec2 const at = draw_pos_of_segment(state, c, 0.f, d);
         for (uint32_t i = 0; i < g.mycelia_count; ++i)
@@ -510,7 +510,7 @@ namespace overseer_graphics {
         auto const& p = pl(state, c);
         auto const& b = bs(state, c);
         auto const& ai = w.overseer_data_get_ai(data(state, c));
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         if (p.offscreen)
             return;
         draw_pos const d = update_draw_positions(state, c, 1.f);
@@ -604,7 +604,7 @@ namespace overseer_graphics {
             return;
         auto const& g = gs(state, c);
         // UnityEngine.Random in DrawSprites: the lens's flicker
-        rw::rng rng{(state.tick * 2654435761u) ^ (uint32_t(c.index()) * 40503u) ^ 0x0E5EE7u};
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         draw_pos const d = update_draw_positions(state, c, alpha);
         vec3 const main = main_color(state, c);
         // ApplyPalette: earthColor

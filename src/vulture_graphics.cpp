@@ -224,9 +224,10 @@ namespace vulture_graphics {
     void make_color_wave(sys::game_state& state, dcon::creature_id c, int32_t delay) {
         auto& w = state.world;
         auto& g = w.vulture_data_get_graphics(creature::vulture_data(w, c));
-        auto& r = w.creature_get_graphics_random(c);
         if (g.wave_count >= max_color_waves)
             return;
+        // (keyed by the wave's slot: several can start in one tick)
+        auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(g.wave_count)));
         color_wave& cw = g.waves[g.wave_count++];
         cw = color_wave{};
         cw.delay = delay;
@@ -403,7 +404,7 @@ namespace vulture_graphics {
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
         auto& w = state.world;
         auto& g = w.vulture_data_get_graphics(creature::vulture_data(w, c));
-        auto& rng = w.creature_get_graphics_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         bird const b{state, c};
         bool const miros = b.miros(), king = b.king();
         if (miros) {

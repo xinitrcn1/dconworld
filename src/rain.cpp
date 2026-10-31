@@ -98,16 +98,16 @@ namespace rain {
         // and Mayhem the rest. Every phase rolls its vanilla length now, in
         // path order, and runs `time_scale` times faster (never slower than
         // vanilla); the flood rises that much faster too.
-        void init_death_rain(cycle& c) {
+        void init_death_rain(cycle& c, rw::rng& rng) {
             // (without Downpour the 30% that would be Pulses is AlternateBuildUp)
-            death_mode const first = c.random.value() < 0.7f ? death_mode::alternate_build_up : death_mode::calm_before_storm;
-            c.death_rain_length = int32_t(mathf::lerp(float(deadly_rain_min), float(deadly_rain_max), c.random.value()));
+            death_mode const first = rng.value() < 0.7f ? death_mode::alternate_build_up : death_mode::calm_before_storm;
+            c.death_rain_length = int32_t(mathf::lerp(float(deadly_rain_min), float(deadly_rain_max), rng.value()));
             death_mode path[10];
             int32_t const n = path_of(first, path);
             float calm = 0.f, rest = 0.f;
             float lengths[10] = {};
             for (int32_t i = 0; i + 1 < n; ++i) {
-                lengths[i] = vanilla_time_in_mode(path[i], c.random);
+                lengths[i] = vanilla_time_in_mode(path[i], rng);
                 (path[i] == death_mode::calm_before_storm ? calm : rest) += lengths[i];
             }
             float const length = float(c.death_rain_length);
@@ -117,7 +117,7 @@ namespace rain {
                 t = 1.f;
             for (int32_t i = 0; i + 1 < n; ++i)
                 c.phase_ticks[uint8_t(path[i])] = path[i] == death_mode::calm_before_storm ? window_calm : mathf::max(1.f, lengths[i] / c.time_scale);
-            c.calm_before_storm_sunlight = c.random.value() < 0.5f ? 0.f : c.random.value();
+            c.calm_before_storm_sunlight = rng.value() < 0.5f ? 0.f : rng.value();
             c.mode = first;
             c.progression = 0.f;
             c.time_in_this_mode = c.phase_ticks[uint8_t(first)];
@@ -186,9 +186,11 @@ namespace rain {
         // no precycles); returns true when the rain ended and a new cycle
         // started
         bool update_cycle(sys::game_state& state, dcon::region_id region, cycle& c) {
+            // this tick's rolls of the region's cycle
+            auto rng = rw::random(state.seed, state.tick, uint32_t(region.value));
             // GlobalRain.Update: the rain's direction wanders
-            if (c.random.value() < 0.025f)
-                c.rain_direction_get_to = mathf::lerp(-1.f, 1.f, c.random.value());
+            if (rng.value() < 0.025f)
+                c.rain_direction_get_to = mathf::lerp(-1.f, 1.f, rng.value());
             c.last_rain_direction = c.rain_direction;
             c.rain_direction = mathf::lerp(c.rain_direction, c.rain_direction_get_to, 0.01f);
             c.rain_direction = c.rain_direction < c.rain_direction_get_to ? mathf::min(c.rain_direction + 0.0125f, c.rain_direction_get_to)
@@ -229,7 +231,7 @@ namespace rain {
             }
             if (!c.death_rain_has_hit && c.timer >= c.cycle_length) {
                 // RainHit
-                init_death_rain(c);
+                init_death_rain(c, rng);
                 c.death_rain_has_hit = 1;
             } else if (c.death_rain_has_hit && ++c.death_rain_ticks >= c.death_rain_length) {
                 // the short rain is over: the next cycle, right away
@@ -374,13 +376,14 @@ namespace rain {
         auto& c = state.world.region_get_rain(region);
         // World's constructor: Monk, Rivulet, Gourmand and Saint get longer cycles
         auto const s = state.story_slugcat;
-        float const v = c.random.value();
+        auto rng = rw::random(state.seed, state.tick, uint32_t(region.value));
+        float const v = rng.value();
         float const t = (s == slugcat_name::yellow || s == slugcat_name::rivulet || s == slugcat_name::gourmand || s == slugcat_name::saint)
             ? 0.35f + 0.65f * mathf::pow(v, 1.2f) : v;
         float const minutes = mathf::lerp(cycle_time_min, cycle_time_max, t) / 60.f;
         c.timer = 0;
         c.base_cycle_length = int32_t(minutes * 40.f * 60.f);
-        c.sun_down_start_time = int32_t(mathf::lerp(float(c.base_cycle_length), cycle_time_max * 60.f, mathf::lerp(0.02f, 0.045f, c.random.value())));
+        c.sun_down_start_time = int32_t(mathf::lerp(float(c.base_cycle_length), cycle_time_max * 60.f, mathf::lerp(0.02f, 0.045f, rng.value())));
         c.cycle_length = desired_cycle_length(state, region, c.base_cycle_length);
         c.day_night_counter = 0;
         c.death_rain_has_hit = 0;
@@ -408,16 +411,10 @@ namespace rain {
         });
         w.for_each_room([&](dcon::room_id room) { assign_room(state, room); });
         group(state, gate_links(state));
-        // every region its own generator from the world seed and its name,
-        // and its first cycle
+        // every region its first cycle (rolled from the world seed and the
+        // region)
         w.for_each_region([&](dcon::region_id r) {
-            uint32_t h = 2166136261u;
-            for (char const ch : state.to_string_view(w.region_get_name(r)))
-                h = (h ^ uint8_t(ch)) * 16777619u;
-            h ^= state.random.state * 0x2C1B3C6Du;
-            cycle c;
-            c.random = rw::rng{h != 0 ? h : 0x3A1F00D5u};
-            w.region_set_rain(r, c);
+            w.region_set_rain(r, cycle{});
             new_cycle(state, r);
         });
         // the others run their leader's cycle
@@ -510,11 +507,12 @@ namespace rain {
         bool const push = outside_push_around(c) > 0.f || inside_push_around(c) > 0.f;
         if (push && (danger == danger_type::aerie_blizzard || room_rain >= 0.02f) && room_rain != 0.f) {
             auto const& reach = rain_reach(state, room);
-            auto& rng = state.room_random(room.id);
             auto const exposed = [&](ivec2 t) { return reach[size_t(custom::int_clamp(t.x, 0, room.width - 1))] < t.y; };
             // one chunk: its push, and what the rain does to its creature
             // (`main`: Creature.mainBodyChunk; `count`: its bodyChunks)
             auto const throw_chunk = [&](dcon::body_chunk_id k, uint32_t count, bool main, auto&& stun, auto&& rain_death, auto&& die) {
+                // the rolls of this chunk, this tick
+                auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(k.value)));
                 vec2 const p = w.body_chunk_get_pos(k);
                 float const rad = w.body_chunk_get_rad(k);
                 float const ox = mathf::lerp(-rad, rad, rng.value());

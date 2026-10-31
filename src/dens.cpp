@@ -88,7 +88,7 @@ namespace dens {
             w.physical_object_set_room_from_object_location(o, room);
             vec2 const dir = rw::to_vec2(view.shortcut_entrance_hole_direction(tile));
             vec2 const at = room_view::middle_of_tile(tile);
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             uint32_t const n = creature::chunk_count(state, c);
             for (uint32_t i = 0; i < n; ++i) {
                 auto const k = creature::chunk(state, c, i);
@@ -538,7 +538,7 @@ namespace dens {
                 return;
             // a new cycle's spawn: out in 100 to 1000 ticks
             if (!w.creature_get_dead(c))
-                w.creature_set_remain_in_den(c, w.creature_get_random(c).range(100, 1000));
+                w.creature_set_remain_in_den(c, rw::random(state.seed, state.tick, uint32_t(c.value)).range(100, 1000));
         });
     }
 }

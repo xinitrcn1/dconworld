@@ -98,18 +98,6 @@ namespace simulation {
         });
         if (fresh.empty())
             return;
-        // every room its own generator: the world seed (game_state::random)
-        // and the room's name, so a room rolls the same whatever order the
-        // rooms are populated or updated in
-        for (auto const r : fresh) {
-            uint32_t h = 2166136261u;
-            for (char const c : state.to_string_view(w.room_get_name(r)))
-                h = (h ^ uint8_t(c)) * 16777619u;
-            h ^= state.random.state * 0x9E3779B1u;
-            h ^= h >> 16;
-            w.room_set_random(r, rw::rng{h != 0 ? h : 0x2545F491u});
-            state.runtime(r).cosmetic = rw::rng{(h * 0x85EBCA6Bu) | 1u};
-        }
         // Room.Loaded's first visit, for every room at once: what creates
         // objects goes room by room in order...
         for (auto const r : fresh) {
@@ -194,7 +182,7 @@ namespace simulation {
                     return;
                 w.music_trigger_set_fired(t, true);
                 float const chance = w.music_trigger_get_fire_chance(t);
-                if (chance < 1.f && state.room_random(room).value() >= chance)
+                if (chance < 1.f && rw::random(state.seed, state.tick, rw::ids(uint32_t(room.value), uint32_t(t.value))).value() >= chance)
                     return;
                 sound::music_request r;
                 r.stop = w.music_trigger_get_stop(t);
@@ -209,6 +197,14 @@ namespace simulation {
                 if (state.viewed(room) && music.size() < 16)
                     music.push_back(std::move(r));
             });
+        }
+
+        // One stage of the tick's pipeline: `count` workloads that touch
+        // disjoint data, each its own task (heaviest first, so the long one
+        // starts first), `run(k)` switching on the index
+        template<typename F>
+        void stage(uint32_t count, F&& run) {
+            tbb::parallel_for(uint32_t(0), count, [&](uint32_t k) { run(k); }, tbb::simple_partitioner{});
         }
 
         // the players of this tick and what drives them: a controller's
@@ -272,10 +268,15 @@ namespace simulation {
         populate(state);
         // the loops are kept up tick by tick: this tick's start empty
         state.loops.clear();
-        // every region's rain cycle
-        rain::update_world(state);
-        // the NPC slugcats' packs
-        npc::update_world(state);
+        // a pipeline stage (docs/PIPELINE.md): every region's rain cycle (the
+        // den creatures' spawn counters) and the NPC slugcats' packs (the
+        // slugcats' creatures) touch different objects, so they run at once
+        stage(2, [&](uint32_t k) {
+            switch (k) {
+            case 0: rain::update_world(state); break;
+            case 1: npc::update_world(state); break;
+            }
+        });
 
         // the players out in a room update with it; the ones in a pipe travel
         // it first, serially (coming out moves them to another room). The
@@ -349,6 +350,8 @@ namespace simulation {
         });
         state.parallel = false;
         state.index.valid = false;
+        // what every updated item counts down, the world's items at once
+        items::update_counters(state);
         auto const t2 = clock::now();
 
         // what the rooms left for after: their transactions, room by room in

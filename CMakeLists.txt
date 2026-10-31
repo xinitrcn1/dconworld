@@ -204,6 +204,13 @@ target_link_libraries(rwcpp PRIVATE
     rwcpp_shaders
 )
 target_compile_options(rwcpp PRIVATE -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
+# dcon's ve:: vectors take their width from the target (SSE 4 lanes, AVX2 8,
+# AVX-512 16): build for this machine's. GCC contracts a * b + c into FMAs
+# there (docs/DIVERGENCES.md)
+option(RWCPP_NATIVE "build for the host CPU (-march=native)" ON)
+if(RWCPP_NATIVE)
+    target_compile_options(rwcpp PRIVATE -march=native)
+endif()
 
 # our own assets (HUD font, slugcat atlas) are looked up next to the executable
 add_custom_command(TARGET rwcpp POST_BUILD

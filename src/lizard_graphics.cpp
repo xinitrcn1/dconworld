@@ -134,7 +134,7 @@ namespace lizard_graphics {
         void limb_update(sys::game_state& state, dcon::creature_id l, room_view const& room, int32_t n) {
             auto& w = state.world;
             auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
-            auto& rng = w.creature_get_graphics_random(l);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(n)));
             auto const& p = lizard::params_of(state, l);
             auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
             auto& lb = g.limbs[n];
@@ -317,7 +317,7 @@ namespace lizard_graphics {
                     return;
                 }
             } else if (g.show_dominance > 0.f) {
-                auto& rng = state.world.creature_get_graphics_random(l);
+                auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), uint32_t(i)));
                 bp.vel += custom::rnv(rng) * g.show_dominance * rng.value() * 2.f;
             }
         }
@@ -544,9 +544,8 @@ namespace lizard_graphics {
         auto& w = state.world;
         auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
         g = lizard::graphics_state{};
-        // vanilla seeds these from the creature's ID
-        w.creature_get_graphics_random(l) = rw::rng{w.creature_get_random(l).state ^ 0x6C1Au};
-        auto& rng = w.creature_get_graphics_random(l);
+        // vanilla seeds these from the creature's ID (the same looks each reset)
+        auto rng = rw::random(state.seed, 0, uint32_t(l.value));
         auto const& p = lizard::params_of(state, l);
         auto const b = lizard::breed_of(state, l);
         g.ivars = generate_ivars(b, rng);
@@ -626,7 +625,7 @@ namespace lizard_graphics {
     void update(sys::game_state& state, dcon::creature_id l, room_view const& room) {
         auto& w = state.world;
         auto& g = w.lizard_data_get_graphics(creature::lizard_data(w, l));
-        auto& rng = w.creature_get_graphics_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         auto const& p = lizard::params_of(state, l);
         auto const& z = w.lizard_data_get_core(creature::lizard_data(w, l));
         auto const& a = w.lizard_data_get_ai(creature::lizard_data(w, l));

@@ -181,7 +181,7 @@ namespace scavenger {
             auto& w = state.world;
             auto const it = grasp_item(state, c, i);
             if (it && w.item_get_mode(it) != world::weapon_mode::thrown) {
-                auto& rng = w.creature_get_random(c);
+                auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(it.value)));
                 w.body_chunk_set_vel(items::chunk(state, it), vel(state, c, 0) + custom::deg_to_vec(mathf::lerp(-70.f, 70.f, rng.value())) * 8.2f);
             }
             creature::release_grasp(state, c, i);
@@ -225,7 +225,7 @@ namespace scavenger {
                 release_grasp(state, c, uint32_t(g));
             }
             auto& a = ai(state, c);
-            a.arrange_inventory_counter = std::min(a.arrange_inventory_counter, w.creature_get_random(c).range(20, 60));
+            a.arrange_inventory_counter = std::min(a.arrange_inventory_counter, rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(it.value))).range(20, 60));
             items::creature_grab(state, c, uint32_t(g), it);
         }
 
@@ -529,7 +529,7 @@ namespace scavenger {
             auto& a = ai(state, c);
             // the Templar holds its spear back three times in four without
             // its blood lust
-            if (templar(state, c) && is_spear(state, it) && a.blood_lust < blood_lust_aggression_threshold && w.creature_get_random(c).value() < 0.75f)
+            if (templar(state, c) && is_spear(state, it) && a.blood_lust < blood_lust_aggression_threshold && rw::random(state.seed, state.tick, uint32_t(c.value)).value() < 0.75f)
                 return;
             a.anim = animation::throw_;
             a.anim_age = 0;
@@ -570,7 +570,7 @@ namespace scavenger {
         // longer and quicker throws and the Templar's blood lust in)
         void try_throw(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::creature_id target, uint32_t k, violence_type vt) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& a = ai(state, c);
             bool const el = elite(state, c);
             auto const held = grasp_item(state, c, 0);
@@ -687,7 +687,7 @@ namespace scavenger {
 
         // ScavengerAI.WantToThrowSpearAtCreature
         float want_to_throw_at(sys::game_state& state, dcon::creature_id c, creature::tracked const& r) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(r.who.value)));
             float const d = float_dist(here(state, c), tracker::best_guess(r));
             if ((r.rel.type != rel::afraid || d > mathf::lerp(5.f, 500.f, rng.value())) && r.rel.type != rel::attacks)
                 return 0.f;
@@ -697,7 +697,7 @@ namespace scavenger {
         // ScavengerAI.CheckThrow
         void check_throw(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (weapon_score(state, c, grasp_item(state, c, 0), false) < 1 || rng.value() < 0.5f)
                 return;
             vec2 const main = pos(state, c, 0);
@@ -764,7 +764,7 @@ namespace scavenger {
         void try_to_melee(sys::game_state& state, dcon::creature_id c) {
             auto& w = state.world;
             auto& a = ai(state, c);
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             bool const tp = templar(state, c);
             if (!tp && (rng.value() > skills(state, c).melee || !(a.reflex_build_up >= 1.f || rng.value() < 0.5f)))
                 return;
@@ -798,7 +798,7 @@ namespace scavenger {
         void combat_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
             auto& a = ai(state, c);
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const& sk = skills(state, c);
             bool const el = elite(state, c);
             // the Templar's blood lust: at the creature its spear stunned
@@ -923,7 +923,7 @@ namespace scavenger {
         // no focus, else three times in ten
         void hear_noises(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& a = ai(state, c);
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             float const hearing = pl(state, c).moving ? 0.8f : mathf::lerp(1.4f, 0.9f, a.agitation);
             vec2 const head = pos(state, c, 2);
             auto const me = body(state, c);
@@ -1127,7 +1127,7 @@ namespace scavenger {
         // ScavengerAI.IdleBehavior
         void idle_behavior(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& a = ai(state, c);
             ivec2& dest = w.creature_get_destination(c);
             vec2 const off = custom::rnv(rng);
@@ -1264,8 +1264,7 @@ namespace scavenger {
             return num + rng.value() * mathf::pow(pers(state, c).nervous, 2.5f) * 100.f;
         }
         void update_look_point(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& a = ai(state, c);
             auto& b = bs(state, c);
             float const nerv = act_nervous(state, c);
@@ -1296,7 +1295,7 @@ namespace scavenger {
         // ScavengerAI.AttackBehavior (simplified throwing positions)
         void attack_behavior(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& a = ai(state, c);
             auto const* prey = tracker::prey(tracker::of(state, c));
             if (!prey)
@@ -1409,7 +1408,7 @@ namespace scavenger {
         // ScavengerAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             ivec2 const at = here(state, c);
             hook_ctx hx{state, c, room};
             tracker::hooks const h = make_hooks(hx);
@@ -1662,7 +1661,7 @@ namespace scavenger {
 
         // Scavenger.LookForAndMoveToUnstuckTile
         void look_for_unstuck_tile(sys::game_state& state, dcon::creature_id c, room_view const& room, pathing::field_id f) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             ivec2 best = here(state, c);
             int32_t most = 0;
             for (uint32_t i = 0; i < 2; ++i)
@@ -1691,7 +1690,7 @@ namespace scavenger {
 
         // Scavenger.GetUnstuckRoutine (no pathing with exits)
         void get_unstuck_routine(sys::game_state& state, dcon::creature_id c, room_view const& room, pathing::field_id f) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& b = bs(state, c);
             float const rs = really_stuck(state, c);
             bool moved = false;
@@ -1837,7 +1836,7 @@ namespace scavenger {
 
         // JumpFinder.NewTest
         void new_test(sys::game_state& state, dcon::creature_id c, room_view const& room, jump_finder& f) {
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(&f - bs(state, c).finders)));
             float num = rng.value() * mathf::pow(ai(state, c).run_speed_goal, 0.5f);
             if (pathing::ai_terrain_proximity(state, room.id, f.start) > 1)
                 num *= 0.5f;
@@ -1971,8 +1970,7 @@ namespace scavenger {
         // Scavenger.RunningUpdate (the Templar's pounce at what it stunned,
         // else the Elite's jump finders along the path ahead)
         void running_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
-            auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& a = ai(state, c);
             auto& b = bs(state, c);
             auto const& x = pl(state, c);
@@ -2145,7 +2143,7 @@ namespace scavenger {
         // Scavenger.Act, the movement (the AI and the combat first)
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             // PrepareToJump: only the animation runs (no AI, no moving)
             if (ai(state, c).anim == animation::prepare_to_jump) {
@@ -2599,7 +2597,7 @@ namespace scavenger {
         // Scavenger.Stun / HeavyStun
         void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
             auto& w = state.world;
-            if (w.creature_get_random(c).value() < 0.5f && st > 15)
+            if (rw::random(state.seed, state.tick, uint32_t(c.value)).value() < 0.5f && st > 15)
                 release_grasp(state, c, 0);
             w.creature_set_stun(c, std::max(w.creature_get_stun(c), st));
         }
@@ -2750,7 +2748,7 @@ namespace scavenger {
         auto const d = data(state, c);
         // (first: everything below reads the template)
         pl(state, c).variant = uint32_t(v) < variant_count ? v : variant::scavenger;
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -2877,7 +2875,6 @@ namespace scavenger {
         if (v == variant::disciple)
             a.karma_levels = rng.range(5, 8);
         w.scavenger_data_set_ai(d, a);
-        w.creature_set_random(c, rng);
         auto& x = pl(state, c);
         x.flip = 0.f;
         x.stuck_counter = 0;
@@ -2901,7 +2898,7 @@ namespace scavenger {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: dying of wounds, healing
         if (!w.creature_get_dead(c)) {
@@ -2981,7 +2978,7 @@ namespace scavenger {
         if (!r || !k || !is_spear(state, grasp_item(state, c, 0)))
             return;
         vec2 const cp = state.world.body_chunk_get_pos(*k), main = pos(state, c, 0);
-        if ((cp.x < main.x) == (pos(state, c, 2).x < main.x) && state.world.creature_get_random(c).value() < mathf::pow(a.agitation, 0.2f) * skills(state, c).melee
+        if ((cp.x < main.x) == (pos(state, c, 2).x < main.x) && rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), rw::ids(uint32_t(t.value), i * 64u + j))).value() < mathf::pow(a.agitation, 0.2f) * skills(state, c).melee
             && want_to_lethally_attack(state, c, r)) {
             a.melee_target = t;
             a.melee_chunk = uint8_t(j);
@@ -2990,7 +2987,7 @@ namespace scavenger {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         auto const room = creature::room_of(state, c);
         // who did it: a slugcat's weapon flying at it (the source isn't
         // passed down; the thrown item hitting is still Thrown here)
@@ -3098,7 +3095,7 @@ namespace scavenger {
                 items::placed(state, it);
             }
         // Scavenger.NewRoom + ScavengerAI.NewRoom
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const view = world::get_room_view(state, room);
         auto& b = bs(state, c);
         b.past_count = 0;

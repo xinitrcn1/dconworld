@@ -44,8 +44,8 @@ namespace daddy {
             return p[uint32_t(v)];
         }
 
-        ctx::ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::vector<tentacle_work>& t, std::vector<ivec2>& sc)
-            : state{s}, d{id}, room{r}, rng{s.world.creature_get_random(id)}, z{s.world.daddy_data_get_core(creature::daddy_data(s.world, id))}, a{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id))},
+        ctx::ctx(sys::game_state& s, dcon::creature_id id, room_view const& r, std::vector<tentacle_work>& t, std::vector<ivec2>& sc, std::source_location const l)
+            : state{s}, d{id}, room{r}, rng{rw::random(s.seed, s.tick, uint32_t(id.value), l)}, z{s.world.daddy_data_get_core(creature::daddy_data(s.world, id))}, a{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id))},
               seen{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id)).seen}, sees{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id)).sees},
               ticks_since_seen{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id)).ticks_since_seen},
               last_seen_pos{s.world.daddy_data_get_ai(creature::daddy_data(s.world, id)).last_seen_pos},
@@ -1006,7 +1006,7 @@ namespace daddy {
                             at = room_view::middle_of_tile(t0 + ivec2{dx, dy});
         }
         auto const d = creature::make(state, creature::type::daddy);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(d.value));
         // DaddyLongLegs constructor. SizeClass: the Daddy and the Mother (and
         // a Brother before Artificer's time, which isn't modelled); colorClass
         // everywhere but Garbage Wastes and Silent Construct
@@ -1151,7 +1151,6 @@ namespace daddy {
                 chunks.push_back(c);
             }
         }
-        w.creature_set_random(d, rng);
 
         place_in_room(state, d, room, at);
         daddy_graphics::create(state, d);
@@ -1164,9 +1163,10 @@ namespace daddy {
         // Creature.PlaceInRoom: the chunks a random pixel off the tile's middle
         vec2 const mid = room_view::middle_of_tile(at);
         uint32_t const n = chunk_count(state, d);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(d.value));
         for (uint32_t i = 0; i < n; ++i) {
             auto const c = chunk(state, d, i);
-            physics::hard_set_position(state, c, mid + custom::rnv(w.creature_get_random(d)));
+            physics::hard_set_position(state, c, mid + custom::rnv(rng));
             w.body_chunk_set_vel(c, vec2{0.f, 0.f});
         }
         // NewRoom (the tentacles, pastPositions) and PlaceInRoom

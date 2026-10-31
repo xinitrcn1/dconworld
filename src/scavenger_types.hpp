@@ -374,6 +374,6 @@ namespace scavenger {
         uint8_t spear_sound = 0;
         // reset since it came into view (the hands are where the items go)
         uint8_t ready = 0;
-        // (its UnityEngine.Random is the creature's graphics_random)
+        // (its UnityEngine.Random is a stream keyed by the creature)
     };
 }

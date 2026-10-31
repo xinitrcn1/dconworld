@@ -480,8 +480,11 @@ namespace daddy::detail {
                             if (num2 > 0 && num2 <= t.pull_counter && visual(x, seg[size_t(num)], seg[size_t(i)])) {
                                 int32_t const num3 = ray_trace_tiles_list(seg[size_t(num)].x, seg[size_t(num)].y, seg[size_t(i)].x, seg[size_t(i)].y, path);
                                 bool flag2 = true;
+                                // vanilla's break leaves only the k loop and
+                                // keeps tracing the rest of the path, though
+                                // flag2 can't turn true again: leave both
                                 if (num2 > 1 && num2 <= t.pulls_this_tick) {
-                                    for (int32_t j = 1; j < num3 - 1; ++j) {
+                                    for (int32_t j = 1; j < num3 - 1 && flag2; ++j) {
                                         for (int32_t k = num + 1; k < i; ++k) {
                                             if (custom::manhattan_distance(seg[size_t(k)], path[size_t(j)]) > 2 && !visual(x, seg[size_t(k)], path[size_t(j)])) {
                                                 flag2 = false;

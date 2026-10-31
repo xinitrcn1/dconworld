@@ -43,8 +43,7 @@ namespace item_graphics {
             auto const c = items::chunk(state, it);
             vec2 p = rw::lerp(w.body_chunk_get_last_pos(c), w.body_chunk_get_pos(c), alpha);
             if (w.item_get_vibrate(it) > 0) {
-                rw::rng r{(uint32_t(w.item_get_seed(it)) * 2654435761u) ^ (state.tick * 40503u) ^ 0x9E3779B9u};
-                r.next();
+                auto r = rw::random(state.seed, state.tick, uint32_t(it.value));
                 p += custom::deg_to_vec(r.value() * 360.f) * 2.f * r.value();
             }
             return p;

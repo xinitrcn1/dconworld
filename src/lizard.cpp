@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <source_location>
 #include <vector>
 
 #include "lizard.hpp"
@@ -38,15 +39,16 @@ namespace lizard {
             body_state& z;
             graphics_state& g;
             ai_state& a;
-            rw::rng& rng;
+            rw::rng rng;
             dcon::physical_object_id o;
             dcon::body_chunk_id c[3];
             // a camera looks at the room: it has a graphicsModule (LizardGraphics)
             bool viewed;
 
-            ctx(sys::game_state& s, dcon::creature_id l, room_view const& r)
+            // (each place it's made keys its own rolls: the source location)
+            ctx(sys::game_state& s, dcon::creature_id l, room_view const& r, std::source_location sl = std::source_location::current())
                 : state(s), id(l), room(r), p(params_of(s, l)), z(s.world.lizard_data_get_core(creature::lizard_data(s.world, l))), g(s.world.lizard_data_get_graphics(creature::lizard_data(s.world, l))),
-                  a(s.world.lizard_data_get_ai(creature::lizard_data(s.world, l))), rng(s.world.creature_get_random(l)), o(body(s, l)), viewed(s.viewed(r.id)) {
+                  a(s.world.lizard_data_get_ai(creature::lizard_data(s.world, l))), rng(rw::random(s.seed, s.tick, uint32_t(l.value), sl)), o(body(s, l)), viewed(s.viewed(r.id)) {
                 for (uint32_t i = 0; i < 3; ++i)
                     c[i] = physics::chunk(s, o, i);
             }
@@ -1490,7 +1492,7 @@ namespace lizard {
             auto& s = w.lizard_spit_get_spit(sp);
             dcon::creature_id const owner{dcon::creature_id::value_base_t(w.lizard_spit_get_owner(sp) - 1)};
             bool const has_owner = w.lizard_spit_get_owner(sp) != 0 && ::creature::is(w, owner, ::creature::type::lizard);
-            rw::rng& rng = state.room_random(room.id);
+            auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(sp.value)));
             s.last_pos = s.pos;
             s.pos += s.vel;
             s.vel.y -= 0.9f;
@@ -2046,7 +2048,7 @@ namespace lizard {
         if ((!force && uint8_t(a) < uint8_t(z.anim)) || z.anim == a)
             return;
         auto const& p = params_of(state, l);
-        auto& rng = w.creature_get_random(l);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(l.value));
         auto const room = room_of(state, l);
         vec2 const head = w.body_chunk_get_pos(chunk(state, l, 0));
         z.time_in_animation = 0;
@@ -2254,7 +2256,7 @@ namespace lizard {
     }
 
     void make_sound(sys::game_state& state, dcon::creature_id l, emotion e) {
-        make_sound(state, l, e, mathf::lerp(0.8f, 1.2f, state.world.creature_get_random(l).value()));
+        make_sound(state, l, e, mathf::lerp(0.8f, 1.2f, rw::random(state.seed, state.tick, uint32_t(l.value)).value()));
     }
 
     void make_sound(sys::game_state& state, dcon::creature_id l, emotion e, float intensity) {
@@ -2330,7 +2332,7 @@ namespace lizard {
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 at, breed b) {
         auto& w = state.world;
         auto const l = creature::make(state, creature::type::lizard);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(l.value));
         auto const view = world::get_room_view(state, room);
         auto const& p = params(b);
         // never inside terrain
@@ -2422,7 +2424,6 @@ namespace lizard {
             break;
         }
         w.creature_get_payload(l).lizard.effect_color = color;
-        w.creature_set_random(l, rng);
         ai::reset(state, l);
         lizard_graphics::reset(state, l);
         return l;
@@ -2584,7 +2585,7 @@ namespace lizard {
     void violence(sys::game_state& state, dcon::creature_id l, uint32_t k, vec2 momentum, float damage, float stun_bonus, bool rock, bool explosion) {
         auto& w = state.world;
         auto const& p = params_of(state, l);
-        auto& rng = w.creature_get_random(l);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(l.value), k));
         auto const room = room_of(state, l);
         auto const hit = chunk(state, l, k);
         float num = damage / p.base_damage_resistance;

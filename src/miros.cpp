@@ -373,7 +373,7 @@ namespace miros {
             sys::game_state& state;
             dcon::creature_id c;
             room_view const& room;
-            rw::rng& rng;
+            rw::rng rng;
             creature::miros_payload& p;
             dcon::miros_data_id d;
             leg_pair& legs;
@@ -387,8 +387,9 @@ namespace miros {
             // the path field to the destination, once asked for
             std::optional<pathing::field_id> field;
 
-            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r)
-                : state(s), c(cc), room(r), rng(s.world.creature_get_random(cc)), p(s.world.creature_get_payload(cc).miros), d(creature::miros_data(s.world, cc)),
+            // `salt` tells apart the ctxs made for one bird in one tick
+            ctx(sys::game_state& s, dcon::creature_id cc, room_view const& r, uint32_t salt)
+                : state(s), c(cc), room(r), rng(rw::random(s.seed, s.tick, rw::ids(uint32_t(cc.value), salt))), p(s.world.creature_get_payload(cc).miros), d(creature::miros_data(s.world, cc)),
                   legs(s.world.miros_data_get_legs(d)), n(s.world.miros_data_get_neck(d)), viewed(s.viewed(r.id)) {
                 for (uint32_t i = 0; i < chunk_count; ++i)
                     ch[i] = chunk(s, cc, i);
@@ -1120,7 +1121,7 @@ namespace miros {
         // MirosBird.Stun (+ Creature.Stun)
         void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
             auto& w = state.world;
-            if (w.creature_get_random(c).value() < mathf::inverse_lerp(float(st), 0.f, 30.f))
+            if (rw::random(state.seed, state.tick, uint32_t(c.value)).value() < mathf::inverse_lerp(float(st), 0.f, 30.f))
                 creature::release_all(state, c, creature::room_of(state, c));
             w.creature_set_stun(c, std::max(w.creature_get_stun(c), st));
         }
@@ -1169,7 +1170,8 @@ namespace miros {
         void sparks(ctx& x, leg& l, vec2 last_ps, vec2 ps, bool big) {
             if (!x.viewed)
                 return;
-            auto& g = x.w().creature_get_graphics_random(x.c);
+            // per leg, the slip's apart from the step's
+            auto g = rw::random(x.state.seed, x.state.tick, rw::ids(uint32_t(x.c.value), uint32_t(&l - x.legs.l) * 2u + (big ? 1u : 0u)));
             float const dist = rw::distance(last_ps, ps);
             int32_t const count = big ? 6 + int32_t(dist / 5.f) : 1 + int32_t(dist / 12.f);
             vec2 const knee = l.joints[1].pos;
@@ -1685,11 +1687,11 @@ namespace miros {
         creature::stun_countdown(state, c);
         physics::update_object(state, room, body(state, c), nullptr, nullptr);
         // (the light and heavy terrain impact sounds aren't in the sound table)
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         float const health = w.creature_get_health(c);
         if (!w.creature_get_dead(c) && health < 0.f && rng.value() < -health && rng.value() < 0.025f)
             creature::die(state, c);
-        ctx x{state, c, room};
+        ctx x{state, c, room, 0};
         load_neck(x);
         check_flip(x);
         update_neck(x);
@@ -1706,7 +1708,7 @@ namespace miros {
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, vec2 pos) {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::miros);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         auto const view = world::get_room_view(state, room);
         physics::object_desc desc;
         desc.air_friction = 0.999f;
@@ -1756,9 +1758,8 @@ namespace miros {
             n.c[i].rad = i == neck_chunks - 1 ? 5.f : 3.f;
         }
         tracker::clear(state, c);
-        w.creature_set_random(c, rng);
         {
-            ctx x{state, c, view};
+            ctx x{state, c, view, 1};
             set_up(x, pos);
         }
         miros_graphics::init(state, c);
@@ -1782,7 +1783,7 @@ namespace miros {
     // Creature.Violence (MirosBird has no Violence of its own) with its Stun
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         auto const hit = chunk(state, c, std::min(k, chunk_count - 1));
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
         float const dmg = damage / base_damage_resistance;
@@ -1817,7 +1818,7 @@ namespace miros {
             w.body_chunk_set_last_last_pos(k, at);
             w.body_chunk_set_vel(k, a * 8.f);
         }
-        ctx x{state, c, view};
+        ctx x{state, c, view, 2};
         set_up(x, at);
         w.miros_data_set_focus(x.d, dcon::creature_id{});
     }

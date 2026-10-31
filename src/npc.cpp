@@ -2143,8 +2143,6 @@ namespace npc {
         if (name == player::slugcat_name::watcher && rng.value() < 0.5f)
             player_graphics::set_weaver(state, p, true);
         player_graphics::reset(state, p);
-        auto const c = player::creature_of(state, p);
-        w.creature_set_random(c, rw::rng{rng.next() | 1u});
         auto const n = w.create_slugcat_npc();
         w.slugcat_npc_set_player(n, p);
         w.slugcat_npc_set_leader(n, leader);
@@ -2203,7 +2201,7 @@ namespace npc {
         w.for_each_room([&](dcon::room_id r) {
             if (!w.room_get_is_shelter(r))
                 return;
-            auto& rng = state.room_random(r);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(r.value));
             if (!(rng.value() < chance))
                 return;
             auto const view = world::get_room_view(state, r);
@@ -2682,7 +2680,7 @@ namespace npc {
                 if (!able(p))
                     continue;
                 auto const c = player::creature_of(state, p);
-                auto& rng = w.creature_get_random(c);
+                auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
                 auto& nav = w.slugcat_npc_get_nav(n);
                 bool const pup = is_pup(p);
                 if (piggyback::riding(state, p)) {
@@ -2813,7 +2811,7 @@ namespace npc {
                     return;
                 float const chance = 0.05f + 0.025f * float(count - room_crowd_limit - 1);
                 auto const c = player::creature_of(state, p);
-                if (w.creature_get_random(c).value() >= chance)
+                if (rw::random(state.seed, state.tick, uint32_t(c.value)).value() >= chance)
                     return;
                 // (off the back it rides on; its members to the first of them)
                 if (auto const under = piggyback::carrier(state, p))
@@ -2955,6 +2953,8 @@ namespace npc {
         auto const c = player::creature_of(state, p);
         if (!n || player::dead(state, p) || w.player_get_eaten(p))
             return player::input_package{};
+        // this tick's rolls of its brain
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         // fell out of the room's bottom: dead (Creature.Update; the port
         // doesn't kill a slugcat for it otherwise, and down there it would
         // wait under the room for good)
@@ -3015,10 +3015,10 @@ namespace npc {
             if (nav.what == goal::flee && nav.room_before != 0) {
                 nav.chased = uint8_t(std::min(8, nav.chased + 1));
                 nav.chased_from = nav.room_before;
-                nav.hide = 400 * int32_t(nav.chased) + w.creature_get_random(c).range(0, 200);
+                nav.hide = 400 * int32_t(nav.chased) + rng.range(0, 200);
                 // the second time it waits a little and goes in anyway
                 if (nav.chased >= 2) {
-                    nav.hide = 100 + w.creature_get_random(c).range(0, 100);
+                    nav.hide = 100 + rng.range(0, 100);
                     nav.brave = nav.hide + brave_ticks;
                     ++stats().braved;
                 }
@@ -3039,7 +3039,7 @@ namespace npc {
             if (w.creature_get_stun(c) > 0)
                 return player::input_package{};
             walking_as walk{state, p};
-            brain b{state, p, n, c, room, nav, w.creature_get_random(c), tile_of(state, p, room)};
+            brain b{state, p, n, c, room, nav, rng, tile_of(state, p, room)};
             b.see_threats();
             auto in = input(0, 0);
             if (b.spearmaster() && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
@@ -3070,10 +3070,9 @@ namespace npc {
             }
         }
         walking_as walk{state, p};
-        brain b{state, p, n, c, room, nav, w.creature_get_random(c), tile_of(state, p, room)};
+        brain b{state, p, n, c, room, nav, rng, tile_of(state, p, room)};
         if (creature::held(state, c)) {
             // wriggling
-            auto& rng = b.rng;
             return input(rng.range(-1, 2), rng.range(-1, 2), rng.value() < 0.2f);
         }
         auto in = b.think();

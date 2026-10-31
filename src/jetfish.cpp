@@ -272,7 +272,7 @@ namespace jetfish {
         // JetFishAI.Update
         void ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             auto const d = data(state, c);
             ivec2 const at = here(state, c);
@@ -392,7 +392,7 @@ namespace jetfish {
         //
         // Creature.Stun + JetFish.Stun: half the time it lets go
         void stun(sys::game_state& state, dcon::creature_id c, int32_t st) {
-            if (state.world.creature_get_random(c).value() < 0.5f)
+            if (rw::random(state.seed, state.tick, uint32_t(c.value)).value() < 0.5f)
                 creature::release_all(state, c, creature::room_of(state, c));
             creature::stun(state, c, st);
         }
@@ -400,7 +400,7 @@ namespace jetfish {
         // JetFish.Swim
         void swim_update(sys::game_state& state, dcon::creature_id c, room_view const& room, float speed_fac) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             vec2 const m = pos(state, c, 0), c1 = pos(state, c, 1);
             bool const held = creature::held(state, c);
@@ -451,7 +451,7 @@ namespace jetfish {
         // JetFish.Act
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             ai_update(state, c, room);
             auto& x = pl(state, c);
             vec2 const m = pos(state, c, 0);
@@ -523,7 +523,7 @@ namespace jetfish {
         // JetFish.CarryObject: the prey in front of its head
         void carry_object(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto const t = grasped(state, c);
             if (!t || creature::grasp_chunk(w, c, 0) >= creature::chunk_count_of(state, t)) {
                 creature::release_all(state, c, room.id);
@@ -596,7 +596,7 @@ namespace jetfish {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::jetfish);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -664,8 +664,6 @@ namespace jetfish {
         x.get_away_from = dcon::creature_id{};
         x.all_dry = 0;
         x.albino = albino ? 1 : 0;
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x7E7F15Bu) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -691,7 +689,7 @@ namespace jetfish {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
@@ -784,7 +782,7 @@ namespace jetfish {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         // Creature.Violence (HealthState)
         auto const hit = chunk(state, c, k < 2 ? k : 0);
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);

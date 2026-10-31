@@ -162,7 +162,7 @@ namespace yeek {
             bool from_jump = false) {
             auto& w = state.world;
             auto& x = pl(state, c);
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (!consious(state, c) || !(check_on_ground(state, c, room, pos(state, c, 0)) || forced || allow_in_tunnel || x.climbing) || x.tunnel
             || x.time_since_hop <= x.max_jump_counter)
                 return;
@@ -198,7 +198,7 @@ namespace yeek {
         // Yeek.Jump
         void jump(sys::game_state& state, dcon::creature_id c, room_view const& room, vec2 cur, vec2 goal) {
             auto& x = pl(state, c);
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             if (x.time_since_jump <= 30)
                 return;
             x.time_since_hop = 10000;
@@ -430,7 +430,7 @@ namespace yeek {
         void get_new_idle_pos(hook_ctx& x, int32_t chances) {
             auto& state = x.state;
             auto& w = state.world;
-            auto& rng = w.creature_get_random(x.c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(x.c.value));
             auto& id = idle(state, x.c);
             auto const& s = w.yeek_data_get_squad(data(state, x.c));
             if (id.room_interest < 0 || (id.room_interest < 2 && s.count < 2)) {
@@ -463,7 +463,7 @@ namespace yeek {
         bool feels_alone(sys::game_state& state, dcon::creature_id c) {
             auto& w = state.world;
             auto const& s = w.yeek_data_get_squad(data(state, c));
-            if (s.count > 4 && w.creature_get_random(c).value() < 0.001f) {
+            if (s.count > 4 && rw::random(state.seed, state.tick, uint32_t(c.value)).value() < 0.001f) {
                 bool close = false;
                 for (uint32_t i = 0; i < s.count; ++i)
                     if (creature::live(state, s.who[i]) && custom::dist_less(pos(state, c, 0), creature::main_pos(state, s.who[i]), 100.f))
@@ -479,7 +479,7 @@ namespace yeek {
         // den, a room exit on a trip: it doesn't settle down short of it)
         bool ai_update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             ivec2 const at = here(state, c);
             hook_ctx hx{state, c, room, std::nullopt};
             tracker::hooks const h = make_hooks(hx);
@@ -566,7 +566,7 @@ namespace yeek {
         void advance_climb(sys::game_state& state, dcon::creature_id c) {
             auto& x = pl(state, c);
             vec2 const p = mid(pos(state, c, 0) + rw::normalized(x.climbing_orientation) * 20.f);
-            vel(state, c, 1) += custom::dir_vec(pos(state, c, 1), p) * state.world.creature_get_random(c).value();
+            vel(state, c, 1) += custom::dir_vec(pos(state, c, 1), p) * rw::random(state.seed, state.tick, uint32_t(c.value)).value();
             x.climb_step = climb_step_ticks;
         }
 
@@ -574,7 +574,7 @@ namespace yeek {
         // through with the last one)
         void climb(sys::game_state& state, dcon::creature_id c, ivec2 t) {
             auto& x = pl(state, c);
-            auto& rng = state.world.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             vec2 const p0 = pos(state, c, 0);
             if (!x.climbing) {
                 x.climbing = 1;
@@ -602,7 +602,7 @@ namespace yeek {
         // Yeek.Act (not player controlled)
         void act(sys::game_state& state, dcon::creature_id c, room_view const& room) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             bool const into_pipe = ai_update(state, c, room);
             auto& x = pl(state, c);
             ivec2 const at = here(state, c);
@@ -748,7 +748,7 @@ namespace yeek {
         // then (or when the slugcat jumps), the slugcat along with it
         void held_by_player(sys::game_state& state, dcon::creature_id c, room_view const& room, dcon::player_id p) {
             auto& w = state.world;
-            auto& rng = w.creature_get_random(c);
+            auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
             auto& x = pl(state, c);
             w.creature_set_stun(c, 0);
             x.body_direction = custom::rnv(rng);
@@ -810,7 +810,7 @@ namespace yeek {
         auto& w = state.world;
         auto const c = creature::make(state, creature::type::yeek);
         auto const d = data(state, c);
-        rw::rng rng{state.random.next() | 1u};
+        auto rng = rw::random(state.seed, 0, uint32_t(c.value));
         int32_t seed = int32_t(rng.next() & 0x7FFFFFFFu);
         if (state.spawn_seed >= 0)
             seed = state.spawn_seed;
@@ -917,8 +917,6 @@ namespace yeek {
         x.climb_step = 0;
         x.meat_left = meat_points;
         x.eat_meat = 0;
-        w.creature_set_random(c, rng);
-        w.creature_set_graphics_random(c, rw::rng{(rng.state ^ 0x7EE4u) | 1u});
         w.creature_set_stun(c, 0);
         w.creature_set_dead(c, 0);
         w.creature_set_health(c, 1.f);
@@ -933,7 +931,7 @@ namespace yeek {
         idle_state id;
         id.current_idle_pos = tile_of(at);
         id.idle_boredom = 0;
-        id.room_interest = w.creature_get_random(c).range(2, 7);
+        id.room_interest = rng.range(2, 7);
         id.last_safe_climb = at;
         w.yeek_data_set_idle(d, id);
         w.yeek_data_set_graphics(d, graphics_state{});
@@ -949,7 +947,7 @@ namespace yeek {
 
     void update(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const o = body(state, c);
         // Creature.Update's HealthState: hurt, it may die or faint, else heals
         if (!w.creature_get_dead(c)) {
@@ -1044,7 +1042,8 @@ namespace yeek {
 
     void violence(sys::game_state& state, dcon::creature_id c, uint32_t k, vec2 momentum, float damage, float stun_bonus, creature::damage_type) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        // the hit chunk in the key: two hits of a tick roll apart
+        auto rng = rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), k));
         // Creature.Violence (HealthState)
         auto const hit = chunk(state, c, k < 2 ? k : 0);
         w.body_chunk_get_vel(hit) += rw::clamp_magnitude(momentum / w.body_chunk_get_mass(hit), 10.f);
@@ -1071,7 +1070,7 @@ namespace yeek {
 
     void place_in_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, vec2 at) {
         auto& w = state.world;
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const view = world::get_room_view(state, room);
         ivec2 const t = tile_of(at);
         vec2 const dir = rw::to_vec2(view.shortcut_entrance_hole_direction(t));
@@ -1237,7 +1236,7 @@ namespace yeek {
             w.body_chunk_set_vel(chunk(state, c, i), w.body_chunk_get_vel(player::body_chunk(state, p, 0)));
         }
         // YeekAI.NewRoom
-        auto& rng = w.creature_get_random(c);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto& id = idle(state, c);
         id.room_interest = rng.range(3, 7);
         id.idle_boredom = 0;
@@ -1267,7 +1266,7 @@ namespace yeek {
                 ++x.eat_meat;
             // EatMeatUpdate
             if (x.eat_meat > 20) {
-                auto& rng = w.creature_get_random(c);
+                auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
                 auto const main = player::body_chunk(state, p, 0);
                 auto const other = player::body_chunk(state, p, 1);
                 if (x.eat_meat % 5 == 0) {

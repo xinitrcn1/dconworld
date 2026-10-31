@@ -818,9 +818,17 @@ int main(int argc, char* argv[]) {
         }
         roots.push_back(sa);
     }
+    // vanilla rolls item spawns with UnityEngine.Random: a played world gets
+    // its seed from the clock; the checks, the bench, screenshots and dumps
+    // keep the fixed one to stay reproducible
+    bool const clock_seed = screenshot.empty() && audio_dump.empty() && !audio_check && fuzz_ticks < 0 && bench_ticks < 0 && npc_soak_ticks < 0
+        && npc_trip_from.empty();
     auto const load_world = [&](bool log) {
         auto ptr = sys::make_game_state();
         auto& g = *ptr;
+        // the world's seed, once, before anything rolls
+        if (clock_seed)
+            g.seed ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
         // our own assets (HUD font) come before so the game data can be overriden
         if (char const* base = SDL_GetBasePath(); base != nullptr)
             g.fs.add_root(std::string{base} + "assets");
@@ -883,9 +891,6 @@ int main(int argc, char* argv[]) {
         return sound && audio::self_check(*sound, gs) ? 0 : 1;
     }
 
-    // vanilla rolls item spawns with UnityEngine.Random; screenshots stay reproducible
-    if (screenshot.empty() && audio_dump.empty())
-        gs.random.state ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
     app a{gs};
     a.slugcat = slugcat;
     // every room's first visit, now: items, scavenger loot, rot, warps,
@@ -1309,7 +1314,8 @@ int main(int argc, char* argv[]) {
                     // a group of three, maybe a pack
                     float mx = 0.f, my = 0.f;
                     SDL_GetMouseState(&mx, &my);
-                    npc::spawn_group(gs, a.room, render::screen_to_room(r, a.cam, mx, my), 10, gs.random);
+                    auto rng = rw::random(gs.seed, gs.tick, uint32_t(a.room.value));
+                    npc::spawn_group(gs, a.room, render::screen_to_room(r, a.cam, mx, my), 10, rng);
                     reports::add_log("three NPC slugcats; " + npc::stats_line(gs));
                     break;
                 }
