@@ -3097,8 +3097,9 @@ namespace selftest {
         }
         {
             // falling to a certain death (a pit open at the room's bottom) it
-            // goes for the pole beside its fall and holds on; with no pole it
-            // dies; falling onto the ground it doesn't grab the pole by it
+            // goes for the pole beside its fall and holds on; with no pole, for
+            // the pit's edge; falling onto the ground it doesn't grab the pole
+            // by it
             auto const pit_room = [&](sys::game_state& st, dcon::region_id rgn, bool pole) {
                 auto rows = box(30, 30, [&](int32_t x, int32_t y) {
                     if (pole && (x == 16 || x == 7) && y >= 4 && y <= 14)
@@ -3133,7 +3134,8 @@ namespace selftest {
             char d[200];
             std::snprintf(d, sizeof(d), " pit+pole: tried=%d died=%d; pit: tried=%d died=%d; floor+pole: tried=%d died=%d", int(tried), int(died), int(no_pole_tried),
                 int(no_pole_died), int(floor_tried), int(floor_died));
-            r.check("NPC catches a beam falling to its death", tried && !died && no_pole_tried && no_pole_died && !floor_tried && !floor_died, d);
+            // (with no pole it goes for the pit's edge: it may make it or not)
+            r.check("NPC catches a beam falling to its death", tried && !died && no_pole_tried && !floor_tried && !floor_died, d);
         }
         {
             // a shelter with more than ten slugcats in it is crowded: one on

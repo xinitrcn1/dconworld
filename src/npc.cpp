@@ -433,65 +433,66 @@ namespace npc {
             return feet;
         }
 
-        // The fall it is in, followed tick by tick as the physics moves it
-        // (gravity, air friction): certain death when it goes out of the
-        // room's bottom (no water down there) or hits the ground too fast
-        // to live; anything that might save it on the way (water, a ledge
-        // beside it to grab) and it isn't certain. The beam it can get to
-        // first on the way down (its head passing it, a little air control)
+        // The fall it is in, followed as the physics moves it (gravity, air
+        // friction) in steps shorter than a tile: `doomed` when, left to
+        // itself, it goes out of the room's bottom (no water down there) or
+        // hits the ground too fast to live. What could save it on the way,
+        // in the columns its air control can still take it to (a body's
+        // width, a few pixels more a tick, up to four tiles over): the first
+        // beam its head gets by
+        // (`beam`), the ground and ledges (`ground`, where it would stand)
         struct fall_outcome {
             bool doomed = false;
             std::optional<ivec2> beam;
+            std::vector<ivec2> ground;
         };
         constexpr float deadly_landing = 60.f;
         fall_outcome predict_fall(sys::game_state const& state, room_view const& room, dcon::player_id p) {
             auto const& w = state.world;
             fall_outcome out;
-            auto const head = player::body_chunk(state, p, 0);
-            auto const feet = player::body_chunk(state, p, 1);
-            vec2 hp = w.body_chunk_get_pos(head), fp = w.body_chunk_get_pos(feet);
-            vec2 v = w.body_chunk_get_vel(feet);
+            vec2 fp = w.body_chunk_get_pos(player::body_chunk(state, p, 1));
+            float const head_up = w.body_chunk_get_pos(player::body_chunk(state, p, 0)).y - fp.y;
+            vec2 v = w.body_chunk_get_vel(player::body_chunk(state, p, 1));
             float const g = 0.9f * room.gravity;
             for (int32_t k = 1; k <= 600; ++k) {
                 v.y -= g;
                 v *= 0.999f;
-                hp += v;
-                fp += v;
-                ivec2 const t = room_view::get_tile_position(fp);
-                if (t.x < 0 || t.x >= room.width)
-                    return {};
-                if (t.y < 0) {
-                    out.doomed = room.default_water_level < 0;
-                    return out;
-                }
-                if (t.y >= room.height)
-                    continue;
-                auto const tile = room.get_tile(t);
-                if (tile.water != 0)
-                    return {};
-                if (tile.solid() || pathing::standable(room, t)) {
-                    out.doomed = std::fabs(v.y) > deadly_landing;
-                    return out;
-                }
-                // (a ledge beside it it might catch)
-                for (int32_t const s : {-1, 1})
-                    if (room.inside(t.x + s, t.y) && room.get_tile(t + ivec2{s, 0}).solid() && !room.get_tile(t + ivec2{s, 1}).solid())
+                int32_t const sub = std::max(1, int32_t(std::ceil(rw::magnitude(v) / 8.f)));
+                // (its body's width from the start: a ledge beside it it grabs)
+                float const reach = std::min(80.f, 30.f + 1.5f * float(k));
+                for (int32_t i = 0; i < sub; ++i) {
+                    fp += v / float(sub);
+                    ivec2 const t = room_view::get_tile_position(fp);
+                    if (t.y < 0) {
+                        out.doomed = room.default_water_level < 0;
+                        return out;
+                    }
+                    if (t.x < 0 || t.x >= room.width)
                         return {};
-                // a beam its head can get to by then (air control: a few
-                // pixels a tick, up to four tiles over)
-                if (!out.beam) {
-                    ivec2 const ht = room_view::get_tile_position(hp);
-                    float const reach = std::min(80.f, 1.5f * float(k));
-                    float best = reach + 1.f;
-                    for (int32_t dx = -4; dx <= 4; ++dx) {
-                        ivec2 const b = ht + ivec2{dx, 0};
-                        if (!room.inside(b.x, b.y) || !room.get_tile(b).any_beam())
-                            continue;
-                        float const d = std::fabs(room_view::middle_of_tile(b).x - hp.x);
-                        if (d <= reach && d < best) {
-                            best = d;
-                            out.beam = b;
+                    if (t.y >= room.height)
+                        continue;
+                    auto const here = room.get_tile(t);
+                    if (here.water != 0)
+                        return {};
+                    if (here.solid() || pathing::standable(room, t)) {
+                        out.doomed = std::fabs(v.y) > deadly_landing;
+                        return out;
+                    }
+                    int32_t const lo = std::max(0, room_view::get_tile_position(fp - vec2{reach, 0.f}).x);
+                    int32_t const hi = std::min(room.width - 1, room_view::get_tile_position(fp + vec2{reach, 0.f}).x);
+                    for (int32_t x = lo; x <= hi; ++x) {
+                        ivec2 const c{x, t.y};
+                        auto const tile = room.get_tile(c);
+                        if (out.ground.size() < 32 && (tile.water != 0 || pathing::standable(room, c)
+                            || (tile.solid() && room.inside(x, t.y + 1) && !room.get_tile(x, t.y + 1).solid()))) {
+                            ivec2 const g = tile.solid() ? c + ivec2{0, 1} : c;
+                            if (std::find(out.ground.begin(), out.ground.end(), g) == out.ground.end())
+                                out.ground.push_back(g);
                         }
+                        ivec2 const hc{x, room_view::get_tile_position(vec2{fp.x, fp.y + head_up}).y};
+                        for (ivec2 const b : {c, hc})
+                            if (!out.beam && room.inside(b.x, b.y) && room.get_tile(b).any_beam())
+                                out.beam = b;
                     }
                 }
             }
@@ -1268,9 +1269,9 @@ namespace npc {
                 // path graph lacks): make for it, jumping now and then
                 // (ledges, walls, poles to catch)
                 if (!st) {
-                    // (hanging from a beam, say after catching it in a fall:
-                    // up onto it first, a fresh press of up)
-                    if (w().player_get_animation(p) == player::animation_index::hang_from_beam)
+                    // (hanging from the beam it caught in a fall: up onto it
+                    // first, a fresh press of up)
+                    if (nav.caught && w().player_get_animation(p) == player::animation_index::hang_from_beam)
                         return input(0, hist[0].y > 0 ? 0 : 1);
                     if (d != pathing::unreachable || !nav.guessed)
                         return input(0, 0);
@@ -1989,22 +1990,43 @@ namespace npc {
             // fall it lives through goes on as it was
             std::optional<player::input_package> catch_fall() {
                 auto const mode = w().player_get_body_mode(p);
-                if (mode != player::body_mode_index::default_ || contact(state, p, 0).y != 0 || contact(state, p, 1).y != 0
-                    || w().body_chunk_get_vel(player::body_chunk(state, p, 1)).y > -1.f)
+                auto const anim = w().player_get_animation(p);
+                // (in free fall: not holding on to a ledge or anything)
+                if (mode != player::body_mode_index::default_ || (anim != player::animation_index::none && anim != player::animation_index::flip)
+                    || contact(state, p, 0).y != 0 || contact(state, p, 1).y != 0 || w().body_chunk_get_vel(player::body_chunk(state, p, 1)).y > -1.f)
                     return std::nullopt;
                 auto const f = predict_fall(state, room, p);
-                if (!f.doomed)
+                // (a jump of its own under way with something in reach: it
+                // steers and catches hold itself)
+                if (!f.doomed || (nav.how != move::walk && (f.beam || !f.ground.empty())))
                     return std::nullopt;
-                if (nav.how != move::walk || nav.catching == 0) {
+                if (!nav.catching) {
                     nav.how = move::walk;
                     nav.move_timer = 0;
-                    if (!nav.catching)
-                        ++stats().catches;
+                    ++stats().catches;
                 }
                 nav.catching = 1;
+                nav.caught = 1;
+                // where it was jumping for if that is in reach (on with the
+                // jump: towards it, up to grab its edge), else a beam (holding
+                // up catches it), else the closest ground or ledge in reach
+                std::optional<ivec2> to;
+                bool head = false;
+                for (auto const g : f.ground)
+                    if (std::abs(g.x - nav.aim.x) <= 1 && std::abs(g.y - nav.aim.y) <= 1)
+                        to = g;
+                if (!to && f.beam) {
+                    to = f.beam;
+                    head = true;
+                }
+                vec2 const feet = pos(state, p, 1);
+                bool const aimed = to && !head;
+                for (auto const g : f.ground)
+                    if (!aimed && !head && (!to || std::fabs(room_view::middle_of_tile(g).x - feet.x) < std::fabs(room_view::middle_of_tile(*to).x - feet.x)))
+                        to = g;
                 int32_t x = 0;
-                if (f.beam) {
-                    float const off = room_view::middle_of_tile(*f.beam).x - pos(state, p, 0).x;
+                if (to) {
+                    float const off = room_view::middle_of_tile(*to).x - pos(state, p, head ? 0 : 1).x;
                     x = std::fabs(off) < 6.f ? 0 : off > 0.f ? 1 : -1;
                 }
                 return input(x, 1);
@@ -2014,6 +2036,9 @@ namespace npc {
                 if (auto const in = catch_fall())
                     return *in;
                 nav.catching = 0;
+                // (on its feet again: the catch is over)
+                if (nav.caught && !airborne(state, p) && w().player_get_body_mode(p) != player::body_mode_index::climbing_on_beam)
+                    nav.caught = 0;
                 see_threats();
                 if (nav.what == goal::start && nav.goal_timer < 0)
                     return input(0, 0);

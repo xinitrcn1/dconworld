@@ -115,17 +115,22 @@ the tools for tracing them, and what is known not to work yet.
   `--npc-guess`. Tests: "NPC Watcher takes its pack through its own warp"
   (with a stray from another pack pulled along).
 - **Falling to a certain death** (pushed off, a jump misjudged):
-  `predict_fall` follows its fall tick by tick as the physics moves it
-  (gravity, air friction). Out of the room's bottom with no water there,
-  or onto the ground faster than 60 px a tick, is certain; water on the
-  way or a ledge beside the fall it might catch, and it isn't. Only when
-  it is certain (`catch_fall`, before anything else it thinks) it drops
-  its move and holds up (the player code's beam grab) steering for the
-  beam its head can get to first (within four tiles, a few pixels of air
-  control a tick). Hanging from a beam with no step on, it pulls itself up
-  onto it. Test: "NPC catches a beam falling to its death" (a pole by the
-  pit: lives; none: dies; over the ground with a pole by it: no grab).
-  Stats: "catches".
+  `predict_fall` follows its fall as the physics moves it (gravity, air
+  friction) in steps shorter than a tile (at 20 px a tick a tick's step
+  skips the beam it would land on). Certain death: left to itself it goes
+  out of the room's bottom with no water there, or hits the ground faster
+  than 60 px a tick. On the way it notes what is in the reach of its air
+  control (a body's width, 1.5 px more a tick, up to four tiles over): the
+  ground and ledges, the first beam its head gets by. `catch_fall` (first
+  thing it thinks, only in free fall: no ledge or beam held, no animation
+  but a flip) acts only on certain death, and never takes a jump of its
+  own under way over while anything is in reach (the jump steers and
+  catches hold itself). Then: on for what it was jumping for if that is in
+  reach, else a beam (holding up catches it), else the closest ground or
+  ledge, holding up to grab its edge. Hanging from the beam it caught with
+  no step on, it pulls itself up onto it (only after a catch: elsewhere
+  that changed how it handles beams, and HI_S05 → UW_S04 with it). Test:
+  "NPC catches a beam falling to its death". Stats: "catches".
 - **Crowded rooms.** A room with more than 5 slugcats: every 400 ticks
   (each NPC on its own tick of them) each pack member there (not resting)
   may leave its pack, 5% with 6 slugcats and 2.5% more for each one more
