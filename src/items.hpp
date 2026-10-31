@@ -51,6 +51,17 @@ namespace items {
     // Releases every grasp of the player (death, reset)
     void release_all(sys::game_state& state, dcon::player_id p);
 
+    // Creature.Grab + Weapon.Grabbed by a creature that isn't a slugcat (a
+    // scavenger's grasp `hand`): carried from now on, pulled out of a wall,
+    // picked off its stalk. The creature moves it about while it holds it
+    void creature_grab(sys::game_state& state, dcon::creature_id c, uint32_t hand, dcon::item_id it);
+    // Weapon.Thrown by a creature that isn't a slugcat (Scavenger.Throw):
+    // the creature lets go of it and it flies from `from` along `dir` at
+    // `speed` (thrownPos `thrown_pos`, throwDir the sign of dir.x)
+    void creature_throw(sys::game_state& state, dcon::item_id it, dcon::creature_id by, rw::vec2 from, rw::vec2 thrown_pos, rw::vec2 dir, float speed);
+    // Weapon (rocks, spears, bombs, the puck): what flies and hurts when thrown
+    bool is_weapon(world::item_type t) noexcept;
+
     dcon::physical_object_id body(sys::game_state const& state, dcon::item_id item) noexcept;
     dcon::body_chunk_id chunk(sys::game_state const& state, dcon::item_id item) noexcept;
     dcon::player_id grabber(sys::game_state const& state, dcon::item_id item) noexcept;

@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "spawns.hpp"
+#include "needle_worm.hpp"
 #include "dens.hpp"
 #include "centipede.hpp"
 #include "daddy.hpp"
@@ -243,8 +244,24 @@ namespace spawns {
             return make(type::leech, uint8_t(leech::variant::jungle));
         if (t == "dropbug" || t == "dropwig")
             return make(type::dropbug, 0);
-        if (t == "tubeworm" || t == "grappleworm")
+        if (t == "tubeworm" || t == "tube" || t == "grappleworm")
             return make(type::tube_worm, 0);
+        if (t == "bigneedleworm" || t == "bigneedle" || t == "needleworm" || t == "needle" || t == "noodlefly")
+            return make(type::needle_worm, uint8_t(needle_worm::variant::big));
+        if (t == "smallneedleworm" || t == "smallneedle" || t == "babynoodlefly")
+            return make(type::needle_worm, uint8_t(needle_worm::variant::small));
+        if (t == "polemimic" || t == "mimic" || t == "poleplant")
+            return make(type::pole_mimic, 0);
+        if (t == "tentacleplant" || t == "tentacle" || t == "monsterkelp")
+            return make(type::tentacle_plant, 0);
+        if (t == "jetfish")
+            return make(type::jetfish, 0);
+        if (t == "scavenger" || t == "scav")
+            return make(type::scavenger, 0);
+        if (t == "deer" || t == "raindeer")
+            return make(type::deer, 0);
+        if (t == "mirosbird" || t == "miros")
+            return make(type::miros, 0);
         // a cicada's size: 1 the white CicadaA
         if (t == "cicadaa")
             return make(type::cicada, 0, 1.f);
@@ -366,6 +383,10 @@ namespace spawns {
             dens::set_home(state, c, room, uint8_t(s.den));
             // AbstractCreature's constructor: out of the den in 100 to 1000 ticks
             dens::put_in_den(state, c, w.creature_get_random(c).range(100, 1000));
+            // (the plants' remainInDenCounter is 0: out at once, a pole
+            // plant to stand as a pole, a monster kelp to root)
+            if (d.kind == creature::type::pole_mimic || d.kind == creature::type::tentacle_plant)
+                w.creature_set_remain_in_den(c, 0);
             ++made;
             std::string key = creature::to_string(d.kind);
             switch (d.kind) {
@@ -374,6 +395,7 @@ namespace spawns {
             case creature::type::leech: key = leech::to_string(leech::variant(d.variety)); break;
             case creature::type::daddy: key = std::string{daddy::to_string(daddy::variant(d.variety))} + " long legs"; break;
             case creature::type::cicada: key = d.size != 0.f ? "white squidcada (CicadaA)" : "dark squidcada (CicadaB)"; break;
+            case creature::type::needle_worm: key = d.variety == uint8_t(needle_worm::variant::small) ? "baby noodlefly" : "noodlefly"; break;
             default: break;
             }
             ++r.made[key];

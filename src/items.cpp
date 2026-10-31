@@ -4,13 +4,16 @@
 #include "outposts.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
+#include "jetfish.hpp"
 #include "creature.hpp"
 #include "tube_worm.hpp"
+#include "needle_worm.hpp"
 #include "explosions.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
+#include "puff_ball.hpp"
 #include "rooms.hpp"
 
 namespace items {
@@ -26,10 +29,10 @@ namespace items {
         constexpr float exit_thrown_mode_speed = 30.f;
 
         // Weapons fly and hurt; the rest (food, pearls) is only tossed
-        bool is_weapon(world::item_type t) {
+        bool is_weapon_type(world::item_type t) {
             using world::item_type;
             return t == item_type::rock || t == item_type::spear || t == item_type::explosive_spear || t == item_type::electric_spear
-                || t == item_type::bomb || t == item_type::flare_bomb || t == item_type::lilly_puck;
+                || t == item_type::bomb || t == item_type::flare_bomb || t == item_type::lilly_puck || t == item_type::puff_ball;
         }
 
         // what goes off after the update loop (items can't be destroyed while
@@ -206,7 +209,8 @@ namespace items {
         }
         // the hand holds something: an item, a baby centipede or a grapple worm
         bool hand_busy(sys::game_state const& state, dcon::player_id p, uint32_t hand) {
-            return grasp_in_hand(state, p, hand) || centipede::held_in_hand(state, p, hand) || tube_worm::held_in_hand(state, p, hand);
+            return grasp_in_hand(state, p, hand) || centipede::held_in_hand(state, p, hand) || tube_worm::held_in_hand(state, p, hand)
+                || needle_worm::held_in_hand(state, p, hand);
         }
 
         // Creature.ReleaseGrasp
@@ -238,7 +242,7 @@ namespace items {
             w.body_chunk_set_last_pos(c, w.body_chunk_get_pos(c));
             w.body_chunk_set_pos(c, thrown_pos);
             vec2& vel = w.body_chunk_get_vel(c);
-            if (!is_weapon(w.item_get_type(it))) {
+            if (!is_weapon_type(w.item_get_type(it))) {
                 // PlayerCarryableItem: tossed, not thrown
                 vel = main_vel * 0.5f + vec2{float(throw_dir.x) * 6.f, 4.f + float(throw_dir.y) * 6.f};
                 change_mode(state, it, weapon_mode::free);
@@ -264,6 +268,8 @@ namespace items {
             w.item_set_rotation(it, rw::to_vec2(throw_dir));
             w.item_set_rotation_speed(it, 0.f);
             w.item_set_always_stick(it, 0);
+            if (w.item_get_type(it) == world::item_type::puff_ball)
+                puff_ball::thrown(state, it, throw_dir);
             state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_throw_spear : sound::sound_id::slugcat_throw_rock,
                 room_of(state, body(state, it)), thrown_pos);
         }
@@ -388,7 +394,11 @@ namespace items {
         }
         void toss_cicada(sys::game_state& state, dcon::player_id p, dcon::creature_id cc) {
             toss_creature(state, p, cc);
-            cicada::release(state, cc);
+            // (or a jetfish: the other HeavyCarry creature)
+            if (creature::is(state.world, cc, creature::type::jetfish))
+                jetfish::release(state, cc);
+            else
+                cicada::release(state, cc);
         }
 
         // SlugcatStats.SlugcatFoodMeter: the food pips
@@ -433,6 +443,26 @@ namespace items {
         void bite(sys::game_state& state, dcon::player_id p, dcon::creature_id c) {
             auto& w = state.world;
             using ::player::slugcat_name;
+            // a baby noodlefly (SmallNeedleWorm.BitByPlayer)
+            if (creature::type_of(w, c) == creature::type::needle_worm) {
+                if (!needle_worm::bit_by_player(state, c, p))
+                    return;
+                needle_worm::release(state, c);
+                if (w.player_get_stats(p).name == slugcat_name::saint) {
+                    ::player::stun(state, p, 60);
+                } else {
+                    int32_t i = 4 * needle_worm::food_points;
+                    for (; i >= 4; i -= 4)
+                        add_food(state, p, 1);
+                    for (; i > 0; --i)
+                        add_quarter_food(state, p);
+                }
+                state.defer(creature::room_of(state, c), [c](sys::game_state& s) {
+                    if (creature::is(s.world, c, creature::type::needle_worm))
+                        creature::destroy(s, c);
+                });
+                return;
+            }
             if (!centipede::bit_by_player(state, c, p))
                 return;
             centipede::release(state, c);
@@ -844,8 +874,13 @@ namespace items {
             auto& w = state.world;
             auto const o = body(state, it);
             auto const c = chunk(state, it);
-            float const exit_speed = w.item_get_override_exit_thrown_speed(it) > 0.f ? w.item_get_override_exit_thrown_speed(it) : exit_thrown_mode_speed;
+            bool const puff = w.item_get_type(it) == world::item_type::puff_ball;
+            float const exit_speed = w.item_get_override_exit_thrown_speed(it) > 0.f ? w.item_get_override_exit_thrown_speed(it)
+                : puff ? puff_ball::exit_thrown_mode_speed : exit_thrown_mode_speed;
             ivec2 const contact = w.body_chunk_get_contact_point(c);
+            // PuffBall.Update before Weapon.Update: thrown into the terrain, it bursts
+            if (puff && puff_ball::update(state, it, room))
+                detonate(state, it, w.body_chunk_get_pos(c));
             if (w.item_get_vibrate(it) > 0)
                 --w.item_get_vibrate(it);
 
@@ -907,8 +942,9 @@ namespace items {
                     w.item_set_throw_mode_frames(it, -1);
                     w.item_set_rotation(it, rw::to_vec2(throw_dir));
                     w.item_set_rotation_speed(it, 0.f);
-                } else if ((w.item_get_type(it) == world::item_type::bomb || w.item_get_type(it) == world::item_type::flare_bomb) && contact != ivec2{0, 0}) {
-                    // ScavengerBomb/FlareBomb: anything hard sets them off
+                } else if ((w.item_get_type(it) == world::item_type::bomb || w.item_get_type(it) == world::item_type::flare_bomb || w.item_get_type(it) == world::item_type::puff_ball)
+                && contact != ivec2{0, 0}) {
+                    // ScavengerBomb/FlareBomb: anything hard sets them off (PuffBall.HitWall bursts)
                     detonate(state, it, pos);
                 } else if (contact == throw_dir) {
                     hit_wall(state, it);
@@ -924,7 +960,8 @@ namespace items {
                     auto const hit_creature = [&](auto&& violence) {
                         auto& rng = state.room_random(room.id);
                         auto const type = w.item_get_type(it);
-                        if (type == world::item_type::bomb || type == world::item_type::flare_bomb) {
+                        if (type == world::item_type::bomb || type == world::item_type::flare_bomb || type == world::item_type::puff_ball) {
+                            // (PuffBall.HitSomething: it bursts)
                             detonate(state, it, pos);
                         } else if (type == world::item_type::lilly_puck) {
                             // LillyPuck: cuts, then glances off
@@ -1043,6 +1080,54 @@ namespace items {
         return state.world.item_get_body_from_item_body(item);
     }
 
+    bool is_weapon(world::item_type t) noexcept {
+        return is_weapon_type(t);
+    }
+
+    void creature_grab(sys::game_state& state, dcon::creature_id c, uint32_t hand, dcon::item_id it) {
+        auto& w = state.world;
+        if (w.item_get_grabbed_by(it))
+            return;
+        creature::grab_item(state, c, hand, it);
+        // Spear.PickedUp: pulled out of a wall
+        if (is_spear(state, it) && w.item_get_has_beam_state(it)) {
+            reset_beam_state(state, it);
+            w.item_set_vibrate(it, 20);
+        }
+        change_mode(state, it, weapon_mode::carried);
+        w.item_set_thrown_by(it, dcon::creature_id{});
+        w.item_set_stalk(it, std::nullopt);
+        w.item_set_rotation_speed(it, 0.f);
+        // (Scavenger.Grab's Slugcat_Pick_Up_Spear)
+        state.play_sound(sound::sound_id::slugcat_pick_up_spear, room_of(state, body(state, it)), w.body_chunk_get_pos(chunk(state, it)));
+    }
+
+    void creature_throw(sys::game_state& state, dcon::item_id it, dcon::creature_id by, vec2 from, vec2 thrown_pos, vec2 dir, float speed) {
+        auto& w = state.world;
+        if (w.item_get_grabbed_by(it) == by)
+            creature::release_grasp(state, by, w.item_get_grabbed_hand(it));
+        auto const c = chunk(state, it);
+        ivec2 const throw_dir{dir.x < 0.f ? -1 : 1, 0};
+        w.item_set_thrown_by(it, by);
+        w.item_set_thrown_pos(it, thrown_pos);
+        w.item_set_throw_dir(it, throw_dir);
+        w.item_set_change_dir_counter(it, 0);
+        w.body_chunk_set_last_pos(c, w.body_chunk_get_pos(c));
+        w.body_chunk_set_pos(c, from);
+        w.body_chunk_set_vel(c, dir * speed);
+        if (!is_weapon_type(w.item_get_type(it))) {
+            change_mode(state, it, weapon_mode::free);
+            w.item_set_forbidden_to_player(it, 10);
+            return;
+        }
+        w.item_set_override_exit_thrown_speed(it, 0.f);
+        change_mode(state, it, weapon_mode::thrown);
+        w.item_set_rotation(it, rw::to_vec2(throw_dir));
+        w.item_set_rotation_speed(it, 0.f);
+        w.item_set_always_stick(it, 0);
+        state.play_sound(is_spear(state, it) ? sound::sound_id::slugcat_throw_spear : sound::sound_id::slugcat_throw_rock, room_of(state, body(state, it)), thrown_pos);
+    }
+
     dcon::body_chunk_id chunk(sys::game_state const& state, dcon::item_id item) noexcept {
         return physics::chunk(state, body(state, item), 0);
     }
@@ -1115,6 +1200,8 @@ namespace items {
             if (pearl)
                 set_pearl_type(state, it, "misc");
             w.try_create_item_body(it, o);
+            if (type == world::item_type::puff_ball)
+                puff_ball::init(state, it);
             if (type == world::item_type::explosive_spear) {
                 // the ExplosiveSpear constructor, seeded by the ID: explodeAt,
                 // then the rag's length
@@ -1146,6 +1233,8 @@ namespace items {
             physics::hard_set_position(state, physics::chunk(state, o, 0), room_view::middle_of_tile(pos));
             if (!pearl)
                 set_random_spin(state, it);
+            if (type == world::item_type::puff_ball)
+                puff_ball::place(state, it);
             placed(state, it);
             return it;
         }
@@ -1178,6 +1267,9 @@ namespace items {
         auto const it = create_weapon(state, room, pos, type);
         // placed exactly, not snapped to the middle of the tile
         physics::hard_set_position(state, chunk(state, it), pos);
+        // (PuffBall.PlaceInRoom drops it to the floor below)
+        if (type == world::item_type::puff_ball)
+            puff_ball::place(state, it);
         placed(state, it);
         return it;
     }
@@ -1274,6 +1366,7 @@ namespace items {
 
     void destroy(sys::game_state& state, dcon::item_id item) {
         auto& w = state.world;
+        puff_ball::destroyed(state, item);
         if (auto const ex = w.item_get_extra_from_item_extra(item))
             w.delete_weapon_extra(ex);
         if (w.item_get_has_beam_state(item))
@@ -1348,6 +1441,10 @@ namespace items {
                 w.item_get_pearl(it).hidden = w.placed_thing_get_extra(t) > 0.f;
                 break;
             }
+            case thing_kind::puff_ball:
+                // an AbstractConsumable on the object's tile (PuffBall.PlaceInRoom drops it to the floor)
+                create_weapon(state, room, room_view::middle_of_tile(pos), item_type::puff_ball);
+                break;
             case thing_kind::reliable_spear:
                 // Room.Loaded: an AbstractSpear on the object's tile, always there
                 create_weapon(state, room, room_view::middle_of_tile(pos), item_type::spear);
@@ -1396,6 +1493,8 @@ namespace items {
                 continue;
             if (w.item_get_type(b.item) == world::item_type::flare_bomb)
                 explosions::flash(state, room, b.at, 400.f);
+            else if (w.item_get_type(b.item) == world::item_type::puff_ball)
+                puff_ball::explode(state, room, b.item, b.at);
             else
                 explosions::explode(state, room, b.at, explosions::desc{110.f, 7.f, 1.6f, 80.f, 45.f}, body(state, b.item));
             // gone at the end of the tick (Destroy: slatedForDeletion)
@@ -1432,9 +1531,11 @@ namespace items {
         }
         // a carried cicada (HeavyCarry), a baby centipede or a grapple worm in a hand
         cicada::carry_update(state, p);
+        jetfish::carry_update(state, p);
         for (uint32_t hand = 0; hand < 2; ++hand) {
             centipede::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
             tube_worm::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
+            needle_worm::carry_update(state, p, hand, player_graphics::hand_position(state, p, hand));
         }
     }
 
@@ -1443,8 +1544,10 @@ namespace items {
             if (auto const g = grasp_in_hand(state, p, hand))
                 release_grasp(state, p, g);
         cicada::release_player(state, p);
+        jetfish::release_player(state, p);
         centipede::release_player(state, p);
         tube_worm::release_player(state, p);
+        needle_worm::release_player(state, p);
     }
 
 
@@ -1629,7 +1732,7 @@ namespace items {
         dcon::creature_id edible;
         if (w.player_get_stats(p).name != ::player::slugcat_name::spear)
             for (uint32_t hand = 0; hand < 2 && !edible; ++hand)
-                edible = centipede::held_in_hand(state, p, hand);
+                edible = centipede::held_in_hand(state, p, hand) ? centipede::held_in_hand(state, p, hand) : needle_worm::held_in_hand(state, p, hand);
         // Player.checkInput: PickupPressed; holding something edible, only a
         // short tap of pick up counts (holding it down eats)
         if (edible) {
@@ -1656,6 +1759,15 @@ namespace items {
         // centipedes, grapple worms (both one handed)
         bool const free_hand = !hand_busy(state, p, 0) || !hand_busy(state, p, 1);
         auto cicada_candidate = dont_grab < 1 ? cicada::pickup_candidate(state, p, room, cicada_score) : dcon::creature_id{};
+        // a jetfish (TwoHands too) competes with the cicadas
+        {
+            float fish_score = 0.f;
+            auto const fish = dont_grab < 1 ? jetfish::pickup_candidate(state, p, room, fish_score) : dcon::creature_id{};
+            if (fish && (!cicada_candidate || fish_score < cicada_score)) {
+                cicada_candidate = fish;
+                cicada_score = fish_score;
+            }
+        }
         auto baby_candidate = dont_grab < 1 && free_hand ? centipede::pickup_candidate(state, p, room, centipede_score) : dcon::creature_id{};
         auto worm_candidate = dont_grab < 1 && free_hand ? tube_worm::pickup_candidate(state, p, room, worm_score) : dcon::creature_id{};
         if (candidate && cicada_candidate) {
@@ -1678,8 +1790,22 @@ namespace items {
             cicada_candidate = dcon::creature_id{};
             baby_candidate = dcon::creature_id{};
         }
+        // baby noodleflies (one handed too)
+        float noodle_score = 0.f;
+        auto noodle_candidate = dont_grab < 1 && free_hand ? needle_worm::pickup_candidate(state, p, room, noodle_score) : dcon::creature_id{};
+        if (noodle_candidate && ((candidate && item_score <= noodle_score) || (cicada_candidate && cicada_score <= noodle_score)
+            || (baby_candidate && centipede_score <= noodle_score) || (worm_candidate && worm_score <= noodle_score)))
+            noodle_candidate = dcon::creature_id{};
+        if (noodle_candidate) {
+            candidate = dcon::item_id{};
+            cicada_candidate = dcon::creature_id{};
+            baby_candidate = dcon::creature_id{};
+            worm_candidate = dcon::creature_id{};
+        }
         // a carried cicada takes both hands (grasps[0], HeavyCarry)
-        auto const carried = cicada::held_by(state, p);
+        auto carried = cicada::held_by(state, p);
+        if (!carried)
+            carried = jetfish::held_by(state, p);
         int32_t& want_pick = w.player_get_want_to_pick_up(p);
         int32_t& want_throw = w.player_get_want_to_throw(p);
         if (want_pick > 0)
@@ -1702,6 +1828,12 @@ namespace items {
                 if (auto const c = centipede::held_in_hand(state, p, hand)) {
                     toss_creature(state, p, c);
                     centipede::release(state, c);
+                    want_throw = 0;
+                    break;
+                }
+                if (auto const c = needle_worm::held_in_hand(state, p, hand)) {
+                    toss_creature(state, p, c);
+                    needle_worm::release(state, c);
                     want_throw = 0;
                     break;
                 }
@@ -1754,7 +1886,10 @@ namespace items {
             want_pick = 0;
             // Player.ReleaseObject
             state.play_sound(sound::sound_id::slugcat_lay_down_creature, room.id, w.body_chunk_get_pos(cicada::chunk(state, carried, 0)));
-            cicada::release(state, carried);
+            if (creature::is(w, carried, creature::type::jetfish))
+                jetfish::release(state, carried);
+            else
+                cicada::release(state, carried);
             return;
         }
         if (drop) {
@@ -1784,12 +1919,21 @@ namespace items {
                     tube_worm::release(state, c);
                     return;
                 }
+                if (auto const c = needle_worm::held_in_hand(state, p, hand)) {
+                    want_pick = 0;
+                    state.play_sound(sound::sound_id::slugcat_lay_down_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, c, 0)));
+                    needle_worm::release(state, c);
+                    return;
+                }
             }
         } else if (cicada_candidate) {
             // TwoHands: whatever the hands hold is let go of first
             release_all(state, p);
             state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(cicada::chunk(state, cicada_candidate, 0)));
-            cicada::grab(state, p, cicada_candidate);
+            if (creature::is(w, cicada_candidate, creature::type::jetfish))
+                jetfish::grab(state, p, cicada_candidate);
+            else
+                cicada::grab(state, p, cicada_candidate);
             want_pick = 0;
         } else if (baby_candidate) {
             // OneHand: into a free hand
@@ -1806,6 +1950,14 @@ namespace items {
                 if (!hand_busy(state, p, hand)) {
                     state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, worm_candidate, 0)));
                     tube_worm::grab(state, p, worm_candidate, hand);
+                    break;
+                }
+            want_pick = 0;
+        } else if (noodle_candidate) {
+            for (uint32_t hand = 0; hand < 2; ++hand)
+                if (!hand_busy(state, p, hand)) {
+                    state.play_sound(sound::sound_id::slugcat_pick_up_creature, room.id, w.body_chunk_get_pos(creature::chunk(state, noodle_candidate, 0)));
+                    needle_worm::grab(state, p, noodle_candidate, hand);
                     break;
                 }
             want_pick = 0;

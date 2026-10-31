@@ -48,10 +48,11 @@ namespace daddy {
         grabbing,
     };
 
-    // bounds of the constructor's rolls: Random.Range(4, 16) chunks for the
-    // mother, Random.Range(5, 13) tentacles, DaddyState.tentacleHealth[13],
-    // Random.Range(5, 15) tubes less the dead legs
-    inline constexpr uint32_t max_chunks = 30;
+    // bounds of the constructor's rolls: Random.Range(4, 40) chunks for the
+    // grandmother (16 for the mother), Random.Range(5, 13) tentacles,
+    // DaddyState.tentacleHealth[13], Random.Range(5, 15) tubes less the dead
+    // legs
+    inline constexpr uint32_t max_chunks = 40;
     inline constexpr uint32_t max_tentacles = 12;
     inline constexpr uint32_t max_tubes = 16;
     inline constexpr uint32_t max_sources = 8;

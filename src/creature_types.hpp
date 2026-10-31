@@ -33,6 +33,13 @@
 #include "lizard_types.hpp"
 #include "math.hpp"
 #include "tube_worm_types.hpp"
+#include "needle_worm_types.hpp"
+#include "pole_mimic_types.hpp"
+#include "tentacle_plant_types.hpp"
+#include "jetfish_types.hpp"
+#include "scavenger_types.hpp"
+#include "deer_types.hpp"
+#include "miros_types.hpp"
 
 namespace creature {
     // CreatureTemplate.Type of the ported creatures. The order is the update
@@ -47,10 +54,22 @@ namespace creature {
         daddy,
         leech,
         tube_worm,
+        // noodlefly (BigNeedleWorm and its SmallNeedleWorm young)
+        needle_worm,
+        // pole plant
+        pole_mimic,
+        // monster kelp
+        tentacle_plant,
+        jetfish,
+        scavenger,
+        // rain deer
+        deer,
+        miros,
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
-    inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech, type::tube_worm};
+    inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech, type::tube_worm,
+        type::needle_worm, type::pole_mimic, type::tentacle_plant, type::jetfish, type::scavenger, type::deer, type::miros};
 
     // Creature.DamageType, as far as the ports tell them apart
     enum class damage_type : uint8_t {
@@ -65,7 +84,8 @@ namespace creature {
     // CreatureTemplate.Type of everything ported, the slugcat included: the
     // relationship table's rows and columns (relationships.cpp). The lizard
     // breeds and the centipede, leech and long legs variants in their kinds'
-    // enum order (the grapple worm, last ported, last)
+    // enum order (the grapple worm and the kinds ported after it last, in
+    // the order they were ported)
     enum class tmpl : uint8_t {
         slugcat,
         pink_lizard, green_lizard, blue_lizard, yellow_lizard, white_lizard, red_lizard, black_lizard, salamander,
@@ -76,6 +96,12 @@ namespace creature {
         daddy_long_legs, brother_long_legs, terror_long_legs, hunter_daddy,
         drop_bug,
         tube_worm,
+        big_needle_worm, small_needle_worm,
+        tentacle_plant, pole_mimic,
+        jet_fish,
+        scavenger,
+        deer,
+        miros_bird,
         count
     };
     inline constexpr uint32_t tmpl_count = uint32_t(tmpl::count);
@@ -337,6 +363,154 @@ namespace creature {
         uint16_t data;
     };
 
+    struct needle_worm_payload {
+        // NeedleWorm: flying, screaming, the getting unstuck terms
+        float flying;
+        float screaming;
+        float extra_movement_force;
+        float stuck_at_same_pos;
+        float really_stuck_at_same_pos;
+        float broken_line_of_sight;
+        float segments_stuck_on_terrain;
+        float crawl_sin;
+        rw::vec2 look_dir;
+        int32_t no_shortcuts;
+        // NeedleWormAI.flySpeed
+        float fly_speed;
+        // the template (BigNeedleWorm, SmallNeedleWorm)
+        needle_worm::variant variant;
+        uint8_t flying_this_frame;
+        uint8_t at_dest_this_frame;
+        uint8_t last_pos_counter;
+        // needle_worm_data
+        uint16_t data;
+    };
+
+    struct pole_mimic_payload {
+        // PoleMimic
+        float extended;
+        float mimic;
+        float get_to_goal_force;
+        float force_into_shortcut;
+        int32_t wake_up_counter;
+        int32_t mimic_delay_counter;
+        int32_t hunt_counter;
+        int32_t angered_and_aggressive;
+        // AbstractCreature.personality.aggression
+        float aggression;
+        // huntChunk: a creature's chunk
+        dcon::creature_id hunt;
+        uint8_t hunt_chunk;
+        uint8_t tip_attached;
+        uint8_t free_standing;
+        uint8_t want_to_wake_up;
+        uint8_t just_out_of_shortcut;
+        // its root is a den's pipe (else it is gone once it withdraws)
+        uint8_t has_den;
+        // made, not out in a room yet: the den lets it out as a pole
+        // (vanilla's PlaceInRoom, not SpitOutOfShortCut)
+        uint8_t fresh;
+        // pole_mimic_data
+        uint16_t data;
+    };
+
+    struct tentacle_plant_payload {
+        // TentaclePlant: rootPos, stickOutDir, idlePos, attackDir
+        rw::vec2 root_pos;
+        rw::vec2 stick_out_dir;
+        rw::vec2 idle_pos;
+        rw::vec2 attack_dir;
+        float attack;
+        float can_grab;
+        float extended;
+        float force_into_shortcut;
+        // AbstractCreature.personality.aggression
+        float aggression;
+        // rooted out of a den: ticks it stays drawn in after a threat (its
+        // remainInDenCounter in the den it doesn't have)
+        int32_t hide;
+        // tentacle_plant_data
+        uint16_t data;
+    };
+
+    struct jetfish_payload {
+        // JetFish.swimDir, swimSpeed, jetActive, jetWater,
+        // slowDownForPrecision, turnSpeed, diveSpeed, surfSpeed
+        rw::vec2 swim_dir;
+        float swim_speed;
+        float jet_active;
+        float jet_water;
+        float slow_down_for_precision;
+        float turn_speed;
+        float dive_speed;
+        float surf_speed;
+        // JetFish.grabable: a slugcat can pick it up while above 0
+        int32_t grabable;
+        // JetFishAI.attackCounter, getAwayCounter and getAwayFromCreature
+        int32_t attack_counter;
+        int32_t get_away_counter;
+        dcon::creature_id get_away_from;
+        // JetFish.allDry, albino
+        uint8_t all_dry;
+        uint8_t albino;
+        // jetfish_data
+        uint16_t data;
+    };
+
+    struct scavenger_payload {
+        // Scavenger.flip, stuckCounter, commitToMoveCounter, movMode
+        float flip;
+        int32_t stuck_counter;
+        int32_t commit_to_move_counter;
+        scavenger::move_mode mov_mode;
+        // moving, drop, climbingUpComing
+        uint8_t moving;
+        uint8_t drop;
+        uint8_t climbing_up_coming;
+        // scavenger_data
+        uint16_t data;
+    };
+
+    struct deer_payload {
+        // Deer.bodDir, moveDirection
+        rw::vec2 bod_dir;
+        rw::vec2 move_direction;
+        float flip_dir;
+        float resting;
+        float preferred_height;
+        float next_floor_height;
+        float enter_room_force_push;
+        int32_t hesist_counter;
+        int32_t eat_counter;
+        int32_t violence_reaction;
+        uint8_t stay_still;
+        uint8_t legs_grabbing;
+        uint8_t held_back_by_leg;
+        uint8_t worm_grass_below;
+        // deer_data
+        uint16_t data;
+    };
+
+    struct miros_payload {
+        // MirosBird
+        rw::vec2 move_dir;
+        float forward_power;
+        float weight_down_to_stand_on_both_legs;
+        float body_flip;
+        float last_body_flip;
+        float jaw_open;
+        float last_jaw_open;
+        float jaw_vel;
+        float keep_jaw_open_pos;
+        float run_cycle;
+        float last_run_cycle;
+        int16_t jaw_slam_pause;
+        int16_t jaw_keep_open_pause;
+        int16_t stuck_counter;
+        // miros_data
+        uint16_t data;
+    };
+
     // creature.payload: the struct of the creature's type
     union payload {
         slugcat_payload slugcat;
@@ -347,6 +521,13 @@ namespace creature {
         daddy_payload daddy;
         leech_payload leech;
         tube_worm_payload tube_worm;
+        needle_worm_payload needle_worm;
+        pole_mimic_payload pole_mimic;
+        tentacle_plant_payload tentacle_plant;
+        jetfish_payload jetfish;
+        scavenger_payload scavenger;
+        deer_payload deer;
+        miros_payload miros;
 
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
@@ -359,6 +540,13 @@ namespace creature {
     static_assert(sizeof(daddy_payload) <= 64);
     static_assert(sizeof(leech_payload) <= 64);
     static_assert(sizeof(tube_worm_payload) <= 64);
+    static_assert(sizeof(needle_worm_payload) <= 64);
+    static_assert(sizeof(pole_mimic_payload) <= 64);
+    static_assert(sizeof(tentacle_plant_payload) <= 64);
+    static_assert(sizeof(jetfish_payload) <= 64);
+    static_assert(sizeof(scavenger_payload) <= 64);
+    static_assert(sizeof(deer_payload) <= 64);
+    static_assert(sizeof(miros_payload) <= 64);
     static_assert(sizeof(payload) <= 64);
     static_assert(std::is_trivially_copyable_v<payload>);
 
@@ -368,6 +556,8 @@ namespace creature {
         daddy_tentacle,
         // DaddyTubeGraphic: a leg graphic, a dead leg or a dangler
         daddy_tube,
+        // DeerTentacle (Tentacle): a rain deer's leg, its deer_leg data object
+        deer_leg,
     };
 
     struct daddy_tentacle_payload {
@@ -390,14 +580,21 @@ namespace creature {
         uint16_t data;
     };
 
+    struct deer_leg_payload {
+        // deer_leg
+        uint16_t data;
+    };
+
     union part_payload {
         daddy_tentacle_payload daddy_tentacle;
         daddy_tube_payload daddy_tube;
+        deer_leg_payload deer_leg;
 
         part_payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
     };
     static_assert(sizeof(daddy_tentacle_payload) <= 64);
     static_assert(sizeof(daddy_tube_payload) <= 64);
+    static_assert(sizeof(deer_leg_payload) <= 64);
     static_assert(sizeof(part_payload) <= 64);
     static_assert(std::is_trivially_copyable_v<part_payload>);
 }

@@ -4,7 +4,8 @@
 // own elements: Rock (a Pebble and its throw trail), Spear (SmallSpear,
 // Spearmaster's BioSpear needles), ExplosiveSpear (SpearRag and the rag's
 // mesh), ElectricSpear (the zapper pebbles), DataPearl (JetFishEyeA, the
-// tinyStar highlight and the glimmer's light); ScavengerOutpost (the pole,
+// tinyStar highlight and the glimmer's light), PuffBall (puff_ball.cpp);
+// ScavengerOutpost (the pole,
 // the antlers with their skulls) and its PearlStrings.
 
 #include <vector>
@@ -21,6 +22,8 @@ namespace item_graphics {
         rw::vec3 black{0.f, 0.f, 0.f};
         float darkness = 0.f;
         bool saint = false;
+        // RoomPalette.texture.GetPixel(11, 4) (PuffBall.ApplyPalette)
+        rw::vec3 texel_11_4{0.f, 0.f, 0.f};
     };
 
     // the item's sprites in vanilla order (the Items container); false for

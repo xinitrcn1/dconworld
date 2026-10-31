@@ -63,6 +63,7 @@ namespace world {
         dangle_fruit,
         rotten_fruit,    // Watcher's RottenDangleFruit
         data_pearl,
+        puff_ball,       // PuffBall: bursts into spores, rain deer eat it
         count
     };
 
@@ -283,6 +284,7 @@ namespace world {
         scav_treasury,    // handle: the radius handle
         reliable_spear,   // ReliableSpear: always a spear
         multiplayer_item, // MultiplayerItem: name the item type, extra the chance
+        puff_ball,
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]

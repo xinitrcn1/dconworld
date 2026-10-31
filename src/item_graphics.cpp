@@ -4,6 +4,7 @@
 #include "item_graphics.hpp"
 #include "items.hpp"
 #include "outposts.hpp"
+#include "puff_ball.hpp"
 #include "physics.hpp"
 
 namespace item_graphics {
@@ -244,6 +245,9 @@ namespace item_graphics {
             return true;
         case item_type::data_pearl:
             pearl(state, room, it, alpha, pal, out);
+            return true;
+        case item_type::puff_ball:
+            puff_ball::build(state, it, alpha, pal.black, pal.texel_11_4, out);
             return true;
         default:
             return false;

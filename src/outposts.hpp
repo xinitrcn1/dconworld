@@ -8,6 +8,7 @@
 // passing, kill orders) and theft tracking aren't ported.
 
 #include <cstdint>
+#include <vector>
 
 #include "gamestate.hpp"
 #include "item_types.hpp"
@@ -26,6 +27,9 @@ namespace outposts {
     // PearlString.Update of the room's outposts (before the items move)
     void update_room(sys::game_state& state, world::room_view const& room);
 
+    // DeerGraphics.Antlers(rad, ...) rolled from `r`, flattened part after
+    // part into `out` (the rain deer's too); the number of parts
+    int32_t generate_antlers(rw::unity_random& r, float rad, std::vector<items::antler_point>& out);
     // DeerGraphics.Antlers.Part.GetTransoformedPos
     rw::vec3 transformed_pos(items::antler_point const& p, float flip) noexcept;
     // DeerGraphics.Antlers.TransformToHeadRotat

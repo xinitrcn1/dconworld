@@ -7,14 +7,17 @@
 #include "rooms.hpp"
 #include "physics.hpp"
 #include "cicada.hpp"
+#include "jetfish.hpp"
 #include "creature.hpp"
 #include "items.hpp"
 #include "rot.hpp"
+#include "worm_grass.hpp"
 #include "warps.hpp"
 #include "particles.hpp"
 #include "water.hpp"
 #include "shortcuts.hpp"
 #include "tube_worm.hpp"
+#include "deer.hpp"
 
 // Port notes
 // - Code is kept structurally close to Player.cs so it can be diffed against
@@ -484,6 +487,9 @@ namespace player {
                 x.vel(0).x = mathf::lerp(x.vel(0).x, 9.f * float(x.in(0).x), 0.7f);
                 x.vel(1).x = mathf::lerp(x.vel(1).x, 9.f * float(x.in(0).x), 0.7f);
                 p.standing() = false;
+            } else if (first_contact && p.animation() == animation_index::antler_climb) {
+                // in a rain deer's antlers: no fall damage
+                x.sound(sound::sound_id::slugcat_terrain_impact_light, mathf::inverse_lerp(0.f, 2.f, speed), 3.f);
             } else if (first_contact) {
                 bool const gourmand = p.stats().name == slugcat_name::gourmand;
                 float const death_speed = gourmand ? 80.f : 60.f;
@@ -530,6 +536,7 @@ namespace player {
             // id properties come back as fat ids (not references)
             w.creature_set_vessel_shortcut(p.cr, dcon::shortcut_id{});
             p.state.world.player_set_vine(p.id, dcon::rot_tube_id{});
+            p.state.world.player_set_vine_mimic(p.id, dcon::creature_id{});
             p.air_in_lungs() = 1.f;
             p.levitation_gravity() = 0.9f;
             p.levitation_air_resistance() = 0.999f;
@@ -611,6 +618,7 @@ namespace player {
             piggyback::drop(state, c);
         piggyback::drop(state, id);
         rot::release(state, state.world.player_get_creature(id));
+        worm_grass::release(state, state.world.player_get_creature(id));
         auto const cr = state.world.player_get_creature(id);
         creature::release_target(state, cr);
         // an NPC's brain goes with it
@@ -625,6 +633,7 @@ namespace player {
         creature::release_target(state, state.world.player_get_creature(id));
         // (they all look in the room the slugcat is leaving)
         rot::release(state, state.world.player_get_creature(id));
+        worm_grass::release(state, state.world.player_get_creature(id));
         pref p{state, id};
         reset_fields(p);
         auto const o = body(state, id);
@@ -1313,6 +1322,12 @@ namespace player {
                 }
             }
 
+            // in a rain deer's antlers (Player.playerInAntlers, deer.cpp)
+            if (deer::ridden(x.state, p.id))
+                p.animation() = animation_index::antler_climb;
+            else if (p.animation() == animation_index::antler_climb)
+                p.animation() = animation_index::none;
+
             // hanging from a grapple worm's tongue (Player.tubeWorm)
             {
                 auto const tw = tube_worm::held_by(x.state, p.id);
@@ -1332,16 +1347,20 @@ namespace player {
                 for (int32_t l = 0; l < n; ++l) {
                     vec2 const at = rw::lerp(x.last_pos(0), x.pos(0), n > 1 ? float(l) / float(n - 1) : 0.f);
                     if (auto const vp = rot::vines::overlap(x.state, x.room.id, at, x.rad(0)); vp.has_value()) {
-                        x.sound(sound::sound_id::grab_corruption_tube);
+                        // (a pole plant's stalk makes no sound of its own)
+                        if (!vp->mimic)
+                            x.sound(sound::sound_id::grab_corruption_tube);
                         p.animation() = animation_index::vine_grab;
                         x.state.world.player_set_vine(p.id, vp->vine);
+                        x.state.world.player_set_vine_mimic(p.id, vp->mimic);
                         p.vine_float_pos() = vp->float_pos;
                         p.want_to_grab() = 0;
                         break;
                     }
                 }
             }
-            if (p.animation() == animation_index::vine_grab && !rot::vines::valid(x.state, x.room.id, x.state.world.player_get_vine(p.id)))
+            if (p.animation() == animation_index::vine_grab
+            && !rot::vines::valid(x.state, x.room.id, rot::vines::position{x.state.world.player_get_vine(p.id), 0.f, x.state.world.player_get_vine_mimic(p.id)}))
                 p.animation() = animation_index::none;
 
             p.dynamic_run_speed()[0] = 3.6f;
@@ -2336,6 +2355,11 @@ namespace player {
             case animation_index::deep_swim: {
                 p.dynamic_run_speed()[0] = 0.f;
                 p.dynamic_run_speed()[1] = 0.f;
+                // riding a conscious jetfish: it does the swimming
+                if (jetfish::riding(x.state, p.id)) {
+                    x.water_friction() = 1.f;
+                    break;
+                }
                 p.can_jump() = 0;
                 p.standing() = false;
                 x.go_through_floors(true);
@@ -2397,6 +2421,12 @@ namespace player {
                 break;
             }
             case animation_index::surface_swim:
+                if (jetfish::riding(x.state, p.id)) {
+                    p.dynamic_run_speed()[0] = 0.f;
+                    p.dynamic_run_speed()[1] = 0.f;
+                    x.water_friction() = 1.f;
+                    break;
+                }
                 p.can_jump() = 0;
                 p.swim_cycle() += 0.025f;
                 x.water_friction() = x.rivulet() && p.water_jump_delay() >= 5 ? 0.999f : 0.96f;
@@ -2619,13 +2649,14 @@ namespace player {
                 p.dynamic_run_speed()[0] = 0.f;
                 p.dynamic_run_speed()[1] = 0.f;
                 p.body_mode() = body_mode_index::default_;
-                vines::position vp{x.state.world.player_get_vine(p.id), p.vine_float_pos()};
+                vines::position vp{x.state.world.player_get_vine(p.id), p.vine_float_pos(), x.state.world.player_get_vine_mimic(p.id)};
                 vec2 const dir = swim_dir(x, true);
+                vines::being_climbed_on(x.state, vp, p.cr);
                 if (rw::magnitude(dir) > 0.f) {
                     vec2& cursor = p.vine_climb_cursor();
                     cursor = rw::clamp_magnitude(cursor + dir * custom::lerp_map(rw::dot(dir, rw::normalized(cursor)), -1.f, 1.f, 10.f, 3.f), 30.f);
                     vec2 const before = vines::on_vine_pos(x.state, vp);
-                    vp.float_pos += vines::climb_on_vine_speed(x.state, vp, x.pos(0) + cursor) * mathf::lerp(2.1f, 1.5f, g) / vines::total_length(x.state, vp.vine);
+                    vp.float_pos += vines::climb_on_vine_speed(x.state, vp, x.pos(0) + cursor) * mathf::lerp(2.1f, 1.5f, g) / vines::total_length(x.state, vp);
                     vp.float_pos = mathf::clamp(vp.float_pos, 0.f, 1.f);
                     vines::push_at_vine(x.state, vp, (before - vines::on_vine_pos(x.state, vp)) * 0.05f);
                     if (p.vine_grab_delay() == 0) {
@@ -2640,6 +2671,7 @@ namespace player {
                     p.vine_climb_cursor() *= 0.8f;
                 }
                 x.state.world.player_set_vine(p.id, vp.vine);
+                x.state.world.player_set_vine_mimic(p.id, vp.mimic);
                 p.vine_float_pos() = vp.float_pos;
                 x.vel(0) += p.vine_climb_cursor() / 190.f;
                 x.vel(1) -= p.vine_climb_cursor() / 190.f;
@@ -2661,6 +2693,10 @@ namespace player {
                         vines::push_at_vine(x.state, vp, -rw::normalized(dir) * 15.f);
                         p.vine_grab_delay() = 10;
                     }
+                } else if (!vines::currently_climbable(x.state, vp)) {
+                    // a pole plant woke up under it
+                    let_go = true;
+                    p.vine_grab_delay() = 10;
                 }
                 if (let_go || !custom::dist_less(x.pos(0), on, 40.f + vines::vine_rad(x.state, vp))) {
                     p.animation() = animation_index::none;
@@ -2680,8 +2716,13 @@ namespace player {
                 if (auto const tw = tube_worm::held_by(x.state, p.id))
                     x.vel(0) -= custom::perpendicular_vector(custom::dir_vec(x.pos(0), tube_worm::attached_pos(x.state, tw))) * float(in.x) * 0.25f;
                 break;
+            case animation_index::antler_climb:
+                // the deer's PlayerInAntlers moves the slugcat
+                p.body_mode() = body_mode_index::default_;
+                p.can_jump() = 5;
+                break;
             default:
-                // antlers and zero gravity are not ported
+                // zero gravity is not ported
                 break;
             }
         }
@@ -2842,7 +2883,13 @@ namespace player {
                 x.sound(sound::sound_id::slugcat_flip_jump);
                 return;
             }
-            if (p.animation() == animation_index::zero_g_swim || p.animation() == animation_index::zero_g_pole_grab || p.animation() == animation_index::antler_climb)
+            if (p.animation() == animation_index::antler_climb) {
+                // off a rain deer's antlers (deer.cpp)
+                deer::jump_off(x.state, p.id, k);
+                p.animation() = animation_index::none;
+                return;
+            }
+            if (p.animation() == animation_index::zero_g_swim || p.animation() == animation_index::zero_g_pole_grab)
                 return; // not ported
 
             int32_t dir = in.x;

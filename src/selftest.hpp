@@ -51,6 +51,8 @@ namespace selftest {
         dcon::creature_id leeches[school];
         leech::variant leech_variant{};
         dcon::creature_id tube_worm;
+        // the kinds ported after it, by type
+        dcon::creature_id later[creature::type_count];
         // (a leech: the school's first)
         dcon::creature_id& of(creature::type t) noexcept;
     };

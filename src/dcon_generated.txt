@@ -36,6 +36,9 @@
 //     chunks and graphic segments pooled
 //   leeches: 1 chunk
 //   grapple worms: 2 chunks, 1 connection each
+//   noodleflies, pole plants, monster kelp, jetfish, scavengers, rain
+//     deer, miros birds: a data object each, 4096 of a kind
+//   worm grass: patches and worms of the rooms that have them
 //   chunk connections: centipedes and daddies, ~250k for the bench -> 2^19
 //   rot placed objects: 193 vanilla (229 with Downpour) -> 4096, leaving
 //     room for Watcher's rot regions
@@ -63,6 +66,15 @@ include{"dropbug_types.hpp"}
 include{"cicada_types.hpp"}
 include{"leech_types.hpp"}
 include{"tube_worm_types.hpp"}
+include{"needle_worm_types.hpp"}
+include{"pole_mimic_types.hpp"}
+include{"tentacle_plant_types.hpp"}
+include{"jetfish_types.hpp"}
+include{"scavenger_types.hpp"}
+include{"deer_types.hpp"}
+include{"puff_ball_types.hpp"}
+include{"miros_types.hpp"}
+include{"worm_grass_types.hpp"}
 include{"lizard_types.hpp"}
 include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
@@ -717,6 +729,8 @@ object{
 	property{ name{trigger_room} type{room_id} }
 	// vines (Player.vinePos: a climbable rot tube and the position along it)
 	property{ name{vine} type{rot_tube_id} }
+	// ...or a pole plant's stalk (a PoleMimic vine)
+	property{ name{vine_mimic} type{creature_id} }
 	property{ name{vine_float_pos} type{float} }
 	property{ name{vine_grab_delay} type{int32_t} }
 	property{ name{vine_climb_cursor} type{rw::vec2} }
@@ -1236,6 +1250,261 @@ object{
 	property{ name{dest_counter} type{int32_t} }
 	// TubeWormGraphics: the body parts, the rope segments, the colour
 	property{ name{graphics} type{::tube_worm::graphics_state} }
+}
+
+// Noodleflies (BigNeedleWorm, SmallNeedleWorm: NeedleWorm.cs + their AIs)
+object{
+	name{needle_worm_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// NeedleWorm: getToLookDir, prevPositions, the tail and its ropes
+	property{ name{get_to_look_dir} type{rw::vec2} }
+	property{ name{prev_positions} type{::needle_worm::prev_positions} }
+	property{ name{tail} type{::needle_worm::tail_state} }
+	property{ name{ropes} type{::needle_worm::connection_ropes} }
+	// BigNeedleWorm's charge and stab, SmallNeedleWorm's hanging on its mother
+	property{ name{attack} type{::needle_worm::attack_state} }
+	property{ name{young} type{::needle_worm::small_state} }
+	// NeedleWormAI, BigNeedleWormAI, the adult's SocialMemory
+	property{ name{ai} type{::needle_worm::ai_state} }
+	property{ name{big_ai} type{::needle_worm::big_ai_state} }
+	property{ name{social} type{::needle_worm::social_memory} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::needle_worm::graphics_state} }
+}
+
+// Pole plants (PoleMimic.cs)
+object{
+	name{pole_mimic_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// Initiate's placement and the Tentacle's scalars
+	property{ name{body} type{::pole_mimic::body_state} }
+	// tilePositions: the tiles the stalk stands on as a pole
+	property{ name{tiles} type{vector_pool{65536}{rw::ivec2}} }
+	// Tentacle.segments, grabPath, tChunks; stickChunks (one per tChunk)
+	property{ name{segments} type{vector_pool{131072}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{131072}{rw::ivec2}} }
+	property{ name{chunks} type{vector_pool{65536}{::pole_mimic::tentacle_chunk}} }
+	property{ name{sticks} type{vector_pool{65536}{::pole_mimic::stick}} }
+	// PoleMimicGraphics: its scalars, the rope graphic's segments, the leaves
+	property{ name{graphics} type{::pole_mimic::graphics_state} }
+	property{ name{rope} type{vector_pool{65536}{::pole_mimic::rope_segment}} }
+	property{ name{leaves} type{vector_pool{65536}{::pole_mimic::leaf}} }
+}
+
+// Monster kelp (TentaclePlant.cs + TentaclePlantAI)
+object{
+	name{tentacle_plant_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// shortCutPos: the den entrance it roots at (a tile of the terrain it
+	// grows from, rooted anywhere else)
+	property{ name{shortcut_pos} type{rw::ivec2} }
+	// TentaclePlant.tentacle: its scalars, chunks, segments and grabPath
+	property{ name{tentacle} type{::tentacle_plant::tentacle} }
+	property{ name{chunks} type{::tentacle_plant::chunk_array} }
+	property{ name{segments} type{vector_pool{16384}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{16384}{rw::ivec2}} }
+	// the graphics module (purely cosmetic): TentaclePlantRopeGraphics'
+	// segments, the danglers and their segments
+	property{ name{graphics} type{::tentacle_plant::graphics_state} }
+	property{ name{rope} type{vector_pool{16384}{::tentacle_plant::rope_segment}} }
+	property{ name{danglers} type{vector_pool{16384}{::tentacle_plant::dangler}} }
+	property{ name{dangler_segments} type{vector_pool{65536}{::tentacle_plant::dangler_segment}} }
+}
+
+// Jetfish (JetFish.cs + JetFishAI)
+object{
+	name{jetfish_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// JetFish.iVars (GenerateIVars), JetFish.trail
+	property{ name{ivars} type{::jetfish::individual_variations} }
+	property{ name{trail} type{::jetfish::trail_state} }
+	// JetFishAI.floatGoalPos, exploreCoordinate
+	property{ name{float_goal} type{std::optional<rw::vec2>} }
+	property{ name{explore} type{std::optional<rw::ivec2>} }
+	// AbstractCreature.state.socialMemory (the slugcats it met)
+	property{ name{social} type{::jetfish::social_memory} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::jetfish::graphics_state} }
+}
+
+// Scavengers (Scavenger.cs + a simpler ScavengerAI + ScavengerGraphics):
+// three chunks, chest (mainBodyChunk), hips and head
+object{
+	name{scavenger_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality, Scavenger.SetUpCombatSkills
+	property{ name{personality} type{::scavenger::personality} }
+	property{ name{skills} type{::scavenger::combat_skills} }
+	// Scavenger.cs's movement the payload has no room for
+	property{ name{body} type{::scavenger::body_state} }
+	// ScavengerAI (simplified) and the throwing animations
+	property{ name{ai} type{::scavenger::ai_state} }
+	// what ScavengerGraphics rolls from the seed (colours, cosmetics)
+	property{ name{looks} type{::scavenger::looks} }
+	// ScavengerGraphics: limbs, spine, face, the back scales
+	property{ name{graphics} type{::scavenger::graphics_state} }
+}
+
+// Rain deer (Deer.cs + DeerAI): six chunks, the head (mainBodyChunk), four
+// body chunks and the antlers; its four legs (DeerTentacle) are
+// creature_parts with a deer_leg each
+object{
+	name{deer_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality.dominance
+	property{ name{dominance} type{float} }
+	// DeerAI, its StuckTracker, DeerAbstractAI's sporePos, Deer.eatObject
+	property{ name{ai} type{::deer::ai_state} }
+	// Deer.playersInAntlers
+	property{ name{riders} type{::deer::riders} }
+	// DeerGraphics.Antlers (rolled from the ID like vanilla's), flattened
+	// part after part, and where each part starts
+	property{ name{antler_index} type{::deer::antler_index} }
+	property{ name{antlers} type{vector_pool{2097152}{::items::antler_point}} }
+	// DeerGraphics' danglers, every segment of every dangler in order
+	property{ name{danglers} type{vector_pool{2097152}{::deer::dangler_segment}} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::deer::graphics_state} }
+}
+
+// DeerTentacle (Tentacle): a rain deer's leg, the creature_part's data
+object{
+	name{deer_leg}
+	storage_type{erasable}
+	size{16384}
+	tag{save}
+	property{ name{t} type{::deer::leg} }
+	property{ name{segments} type{vector_pool{524288}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{524288}{rw::ivec2}} }
+}
+
+// PuffBall: the stalk's segments, the dots and being eaten, for every puff ball
+object{
+	name{puff_ball_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{s} type{::puff_ball::state} }
+}
+relationship{
+	name{puff_ball_of}
+	tag{save}
+	link{ object{puff_ball_data} name{data} type{unique} }
+	link{ object{item} name{item} type{unique} }
+	primary_key{data}
+}
+
+// Miros birds (MirosBird.cs + a simpler MirosBirdAI)
+object{
+	name{miros_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// MirosBird.legs and neck
+	property{ name{legs} type{::miros::leg_pair} }
+	property{ name{neck} type{::miros::neck_state} }
+	// MirosBird.pastPositions (its stuckCounter's)
+	property{ name{past} type{::miros::past_positions} }
+	// MirosBirdAI: focusCreature, and where it roams to (not vanilla: its
+	// flock's abstract AI moved it about)
+	property{ name{focus} type{creature_id} }
+	property{ name{idle_pos} type{rw::ivec2} }
+	property{ name{idle_counter} type{int32_t} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::miros::graphics_state} }
+}
+
+// Worm grass (WormGrass): a room's patches (WormGrass.WormGrassPatch), made
+// on the room's first visit from its worm grass tiles and kept, like the rot
+object{
+	name{worm_grass_patch}
+	storage_type{contiguous}
+	size{2048}
+	tag{save}
+	// WormGrassPatch.tiles, sorted by x (LeftTile first)
+	property{ name{tiles} type{vector_pool{65536}{rw::ivec2}} }
+	// WormGrassPatch.sizes per tile: (size, individual factor)
+	property{ name{sizes} type{vector_pool{65536}{rw::vec2}} }
+	property{ name{highest_tile} type{int32_t} }
+	// WormGrassPatch.trackedCreatures (CreatureAndPull)
+	property{ name{tracked} type{::worm_grass::tracked_set} }
+	// the patch's UnityEngine.Random, for it and its worms
+	property{ name{random} type{rw::rng} }
+}
+relationship{
+	name{worm_grass_location}
+	tag{save}
+	link{ object{worm_grass_patch} name{patch} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{patch}
+}
+
+// WormGrass.Worm: a stalk of a patch (the cosmetic ones too: all of them
+// are made once and kept; the cosmetic ones only move while a camera looks)
+object{
+	name{worm_grass_worm}
+	storage_type{contiguous}
+	size{65536}
+	tag{save}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{last_pos} type{rw::vec2} }
+	property{ name{vel} type{rw::vec2} }
+	property{ name{base_pos} type{rw::vec2} }
+	property{ name{below_ground_pos} type{rw::vec2} }
+	property{ name{length} type{float} }
+	property{ name{excitement} type{float} }
+	property{ name{drag_force} type{float} }
+	// Worm.iFac, savedReachHeight, savLenghtFac (Reset's arguments)
+	property{ name{i_fac} type{float} }
+	property{ name{reach_height} type{float} }
+	property{ name{length_fac} type{float} }
+	// Worm.color: the palette column of its tip colour
+	property{ name{color} type{uint8_t} }
+	property{ name{cosmetic} type{bitfield} }
+	// Worm.lastCulled: no camera looked at the room last tick
+	property{ name{culled} type{bitfield} }
+	property{ name{under_ground_stuck_pos} type{std::optional<rw::vec2>} }
+	property{ name{focus_creature} type{creature_id} }
+	// Worm.attachedChunk: the creature and its chunk
+	property{ name{attached_creature} type{creature_id} }
+	property{ name{attached_chunk} type{uint8_t} }
+	property{ name{attached_dir} type{rw::vec2} }
+	property{ name{last_vis_pos} type{rw::vec2} }
+	// Worm.segments (only moved while a camera looks)
+	property{ name{segments} type{::worm_grass::segments} }
+}
+relationship{
+	name{worm_grass_worm_membership}
+	tag{save}
+	link{ object{worm_grass_worm} name{worm} type{unique} }
+	link{ object{worm_grass_patch} name{patch} type{many} index_storage{array} }
+	primary_key{worm}
 }
 
 //

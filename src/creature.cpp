@@ -17,6 +17,20 @@
 #include "lizard_graphics.hpp"
 #include "tube_worm.hpp"
 #include "tube_worm_graphics.hpp"
+#include "needle_worm.hpp"
+#include "needle_worm_graphics.hpp"
+#include "pole_mimic.hpp"
+#include "pole_mimic_graphics.hpp"
+#include "tentacle_plant.hpp"
+#include "tentacle_plant_graphics.hpp"
+#include "jetfish.hpp"
+#include "jetfish_graphics.hpp"
+#include "scavenger.hpp"
+#include "scavenger_graphics.hpp"
+#include "deer.hpp"
+#include "deer_graphics.hpp"
+#include "miros.hpp"
+#include "miros_graphics.hpp"
 #include "migrate.hpp"
 #include "physics.hpp"
 #include "piggyback.hpp"
@@ -40,6 +54,13 @@ namespace creature {
         case type::daddy: return "daddy long legs";
         case type::leech: return "leech";
         case type::tube_worm: return "grapple worm";
+        case type::needle_worm: return "noodlefly";
+        case type::pole_mimic: return "pole plant";
+        case type::tentacle_plant: return "monster kelp";
+        case type::jetfish: return "jetfish";
+        case type::scavenger: return "scavenger";
+        case type::deer: return "rain deer";
+        case type::miros: return "miros bird";
         case type::count: break;
         }
         return "creature";
@@ -104,6 +125,34 @@ namespace creature {
             pl.tube_worm = tube_worm_payload{};
             pl.tube_worm.data = uint16_t(w.create_tube_worm_data().index());
             break;
+        case type::needle_worm:
+            pl.needle_worm = needle_worm_payload{};
+            pl.needle_worm.data = uint16_t(w.create_needle_worm_data().index());
+            break;
+        case type::pole_mimic:
+            pl.pole_mimic = pole_mimic_payload{};
+            pl.pole_mimic.data = uint16_t(w.create_pole_mimic_data().index());
+            break;
+        case type::tentacle_plant:
+            pl.tentacle_plant = tentacle_plant_payload{};
+            pl.tentacle_plant.data = uint16_t(w.create_tentacle_plant_data().index());
+            break;
+        case type::jetfish:
+            pl.jetfish = jetfish_payload{};
+            pl.jetfish.data = uint16_t(w.create_jetfish_data().index());
+            break;
+        case type::scavenger:
+            pl.scavenger = scavenger_payload{};
+            pl.scavenger.data = uint16_t(w.create_scavenger_data().index());
+            break;
+        case type::deer:
+            pl.deer = deer_payload{};
+            pl.deer.data = uint16_t(w.create_deer_data().index());
+            break;
+        case type::miros:
+            pl.miros = miros_payload{};
+            pl.miros.data = uint16_t(w.create_miros_data().index());
+            break;
         case type::count:
             break;
         }
@@ -121,6 +170,13 @@ namespace creature {
         case type::daddy: w.delete_daddy_data(daddy_data(w, c)); break;
         case type::leech: w.delete_leech_data(leech_data(w, c)); break;
         case type::tube_worm: w.delete_tube_worm_data(tube_worm_data(w, c)); break;
+        case type::needle_worm: w.delete_needle_worm_data(needle_worm_data(w, c)); break;
+        case type::pole_mimic: w.delete_pole_mimic_data(pole_mimic_data(w, c)); break;
+        case type::tentacle_plant: w.delete_tentacle_plant_data(tentacle_plant_data(w, c)); break;
+        case type::jetfish: w.delete_jetfish_data(jetfish_data(w, c)); break;
+        case type::scavenger: w.delete_scavenger_data(scavenger_data(w, c)); break;
+        case type::deer: w.delete_deer_data(deer_data(w, c)); break;
+        case type::miros: w.delete_miros_data(miros_data(w, c)); break;
         case type::count: break;
         }
         // its parts and their data objects
@@ -135,6 +191,9 @@ namespace creature {
                 break;
             case part_kind::daddy_tube:
                 w.delete_daddy_tube(dcon::daddy_tube_id{dcon::daddy_tube_id::value_base_t(pp.daddy_tube.data)});
+                break;
+            case part_kind::deer_leg:
+                w.delete_deer_leg(dcon::deer_leg_id{dcon::deer_leg_id::value_base_t(pp.deer_leg.data)});
                 break;
             }
             w.delete_creature_part(p);
@@ -331,6 +390,13 @@ namespace creature {
         case type::daddy: return daddy::create(state, room, pos, daddy::variant(d.variety % daddy::variant_count));
         case type::leech: return leech::create(state, room, pos, leech::variant(d.variety % leech::variant_count));
         case type::tube_worm: return tube_worm::create(state, room, pos);
+        case type::needle_worm: return needle_worm::create(state, room, pos, needle_worm::variant(d.variety % needle_worm::variant_count));
+        case type::pole_mimic: return pole_mimic::create(state, room, pos);
+        case type::tentacle_plant: return tentacle_plant::create(state, room, pos);
+        case type::jetfish: return jetfish::create(state, room, pos);
+        case type::scavenger: return scavenger::create(state, room, pos);
+        case type::deer: return deer::create(state, room, pos);
+        case type::miros: return miros::create(state, room, pos);
         case type::count: break;
         }
         return dcon::creature_id{};
@@ -346,6 +412,13 @@ namespace creature {
         case type::daddy: daddy::destroy(state, c); return;
         case type::leech: leech::destroy(state, c); return;
         case type::tube_worm: tube_worm::destroy(state, c); return;
+        case type::needle_worm: needle_worm::destroy(state, c); return;
+        case type::pole_mimic: pole_mimic::destroy(state, c); return;
+        case type::tentacle_plant: tentacle_plant::destroy(state, c); return;
+        case type::jetfish: jetfish::destroy(state, c); return;
+        case type::scavenger: scavenger::destroy(state, c); return;
+        case type::deer: deer::destroy(state, c); return;
+        case type::miros: miros::destroy(state, c); return;
         case type::count: return;
         }
     }
@@ -401,6 +474,20 @@ namespace creature {
         case type::tube_worm:
             return "grapple worm at " + at(w.body_chunk_get_pos(chunk(state, c, 0))) + " tongues " + tube_worm::describe_tongues(state, c)
                 + (pl.tube_worm.sleeping ? " sleeping" : "") + (held(state, c) ? " held" : "") + dead;
+        case type::needle_worm:
+            return needle_worm::describe(state, c) + dead;
+        case type::pole_mimic:
+            return pole_mimic::describe(state, c) + dead;
+        case type::tentacle_plant:
+            return tentacle_plant::describe(state, c) + dead;
+        case type::jetfish:
+            return jetfish::describe(state, c) + dead;
+        case type::scavenger:
+            return scavenger::describe(state, c) + dead;
+        case type::deer:
+            return deer::describe(state, c) + dead;
+        case type::miros:
+            return miros::describe(state, c) + dead;
         case type::count:
             break;
         }
@@ -481,6 +568,41 @@ namespace creature {
                 if (viewed)
                     tube_worm_graphics::update(state, c, room);
                 return;
+            case type::needle_worm:
+                needle_worm::update(state, c, room);
+                if (viewed)
+                    needle_worm_graphics::update(state, c, room);
+                return;
+            case type::pole_mimic:
+                pole_mimic::update(state, c, room);
+                if (viewed)
+                    pole_mimic_graphics::update(state, c, room);
+                return;
+            case type::tentacle_plant:
+                tentacle_plant::update(state, c, room);
+                if (viewed)
+                    tentacle_plant_graphics::update(state, c, room);
+                return;
+            case type::jetfish:
+                jetfish::update(state, c, room);
+                if (viewed)
+                    jetfish_graphics::update(state, c, room);
+                return;
+            case type::scavenger:
+                scavenger::update(state, c, room);
+                if (viewed)
+                    scavenger_graphics::update(state, c, room);
+                return;
+            case type::deer:
+                deer::update(state, c, room);
+                if (viewed)
+                    deer_graphics::update(state, c, room);
+                return;
+            case type::miros:
+                miros::update(state, c, room);
+                if (viewed)
+                    miros_graphics::update(state, c, room);
+                return;
             case type::count:
                 return;
             }
@@ -503,6 +625,13 @@ namespace creature {
             // a leech is in another collision layer than the rest
             case type::leech: return false;
             case type::tube_worm: return tube_worm::collides(state, c, t);
+            case type::needle_worm: return needle_worm::collides(state, c, t);
+            case type::pole_mimic: return pole_mimic::collides(state, c, t);
+            case type::tentacle_plant: return tentacle_plant::collides(state, c, t);
+            case type::jetfish: return jetfish::collides(state, c, t);
+            case type::scavenger: return scavenger::collides(state, c, t);
+            case type::deer: return deer::collides(state, c, t);
+            case type::miros: return miros::collides(state, c, t);
             case type::count: break;
             }
             return false;
@@ -519,6 +648,13 @@ namespace creature {
             case type::daddy: daddy::collide(state, c, i, t, j); return;
             case type::leech: return;
             case type::tube_worm: tube_worm::collide(state, c); return;
+            case type::needle_worm: needle_worm::collide(state, c, room, i, t, j); return;
+            case type::pole_mimic: pole_mimic::collide(state, c, room, i, t, j); return;
+            case type::tentacle_plant: tentacle_plant::collide(state, c, room, i, t, j); return;
+            case type::jetfish: jetfish::collide(state, c, room, i, t, j); return;
+            case type::scavenger: scavenger::collide(state, c, room, i, t, j); return;
+            case type::deer: deer::collide(state, c, room, i, t, j); return;
+            case type::miros: miros::collide(state, c, room, i, t, j); return;
             case type::count: return;
             }
         }
@@ -670,6 +806,13 @@ namespace creature {
         case type::daddy: daddy_graphics::reset(state, c); return;
         case type::leech: leech_graphics::reset_positions(state, c); return;
         case type::tube_worm: tube_worm_graphics::reset_positions(state, c); return;
+        case type::needle_worm: needle_worm_graphics::reset_positions(state, c); return;
+        case type::pole_mimic: pole_mimic_graphics::reset_positions(state, c); return;
+        case type::tentacle_plant: tentacle_plant_graphics::reset_positions(state, c); return;
+        case type::jetfish: jetfish_graphics::reset_positions(state, c); return;
+        case type::scavenger: scavenger_graphics::reset_positions(state, c); return;
+        case type::deer: deer_graphics::reset_positions(state, c); return;
+        case type::miros: miros_graphics::reset_positions(state, c); return;
         case type::count: return;
         }
     }
@@ -686,6 +829,16 @@ namespace creature {
         // TubeWorm.SpitOutOfShortCut: the tongues back in
         if (w.creature_get_type(c) == type::tube_worm)
             tube_worm::place_in_room(state, c, at);
+        switch (w.creature_get_type(c)) {
+        case type::needle_worm: needle_worm::place_in_room(state, c, room, at); break;
+        case type::pole_mimic: pole_mimic::place_in_room(state, c, room, at); break;
+        case type::tentacle_plant: tentacle_plant::place_in_room(state, c, room, at); break;
+        case type::jetfish: jetfish::place_in_room(state, c, room, at); break;
+        case type::scavenger: scavenger::place_in_room(state, c, room, at); break;
+        case type::deer: deer::place_in_room(state, c, room, at); break;
+        case type::miros: miros::place_in_room(state, c, room, at); break;
+        default: break;
+        }
         // a leech out of the den is done fleeing the rain
         if (w.creature_get_type(c) == type::leech) {
             w.creature_get_payload(c).leech.flee_from_rain = 0;
@@ -720,6 +873,16 @@ namespace creature {
         // TubeWorm.Die: the slugcat holding it lets go
         if (w.creature_get_type(c) == type::tube_worm)
             tube_worm::died(state, c);
+        switch (w.creature_get_type(c)) {
+        case type::needle_worm: needle_worm::died(state, c); break;
+        case type::pole_mimic: pole_mimic::died(state, c); break;
+        case type::tentacle_plant: tentacle_plant::died(state, c); break;
+        case type::jetfish: jetfish::died(state, c); break;
+        case type::scavenger: scavenger::died(state, c); break;
+        case type::deer: deer::died(state, c); break;
+        case type::miros: miros::died(state, c); break;
+        default: break;
+        }
     }
 
     void lose_all_grasps(sys::game_state& state, dcon::creature_id c) {
@@ -786,6 +949,27 @@ namespace creature {
                 }
             }
         });
+        // a monster kelp's tentacle (an appendage: its tip chunk takes the hit)
+        {
+            dcon::creature_id kh;
+            float kf = 2.f;
+            if (tentacle_plant::trace_tentacle(state, room, from, to, kh, kf) && kf < best && kh != thrown_by) {
+                best = kf;
+                hit = kh;
+                part = hit_part{0};
+            }
+        }
+        // a pole plant's stalk (PoleMimic's appendage) when closer
+        {
+            dcon::creature_id ph;
+            hit_part pp;
+            float pf = 2.f;
+            if (pole_mimic::trace_stalk(state, room, from, to, ph, pp, pf) && pf < best && ph != thrown_by) {
+                best = pf;
+                hit = ph;
+                part = pp;
+            }
+        }
         dcon::creature_id th;
         hit_part tp;
         if (daddy::trace_tentacles(state, room, from, to, th, tp)) {
@@ -820,6 +1004,13 @@ namespace creature {
         case type::daddy: daddy::violence(state, c, part, momentum, damage, stun_bonus, explosion); return;
         case type::leech: leech::violence(state, c, momentum, damage, stun_bonus); return;
         case type::tube_worm: tube_worm::violence(state, c, k, momentum, damage, stun_bonus); return;
+        case type::needle_worm: needle_worm::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::pole_mimic: pole_mimic::violence(state, c, part, momentum, damage, stun_bonus, type); return;
+        case type::tentacle_plant: tentacle_plant::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::jetfish: jetfish::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::scavenger: scavenger::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::deer: deer::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::miros: miros::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::count: return;
         }
     }
@@ -874,6 +1065,13 @@ namespace creature {
         case type::daddy: daddy::release(state, c, t); break;
         case type::leech: leech::release(state, c, t); break;
         case type::tube_worm: tube_worm::release(state, c, t); break;
+        case type::needle_worm: needle_worm::release(state, c, t); break;
+        case type::pole_mimic: pole_mimic::release(state, c, t); break;
+        case type::tentacle_plant: tentacle_plant::release(state, c, t); break;
+        case type::jetfish: jetfish::release(state, c, t); break;
+        case type::scavenger: scavenger::release(state, c, t); break;
+        case type::deer: deer::release(state, c, t); break;
+        case type::miros: miros::release(state, c, t); break;
         case type::count: break;
         }
         // the generic grasps on it
@@ -899,5 +1097,6 @@ namespace creature {
 
     void flying_weapon(sys::game_state& state, dcon::room_id room, vec2 pos, vec2 vel, vec2 thrown_pos) {
         rooms::for_each_creature(state, room, type::dropbug, [&](dcon::creature_id c) { dropbug::flying_weapon(state, c, pos, vel, thrown_pos); });
+        rooms::for_each_creature(state, room, type::needle_worm, [&](dcon::creature_id c) { needle_worm::flying_weapon(state, c, pos, vel); });
     }
 }

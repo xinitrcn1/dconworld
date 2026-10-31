@@ -5,7 +5,8 @@
 // A creature is one `creature` object (creature_types.hpp, the definitions'
 // comments in dcon_generated.txt) whose `type` says which kind's code runs
 // it: player.* (the slugcat), centipede.*, dropbug.*, cicada.*, lizard.*,
-// daddy.*, leech.*, tube_worm.*. Whatever doesn't depend on the kind is here and runs the
+// daddy.*, leech.*, tube_worm.*, needle_worm.*, pole_mimic.*,
+// tentacle_plant.*, jetfish.*, scavenger.*, deer.*, miros.*. Whatever doesn't depend on the kind is here and runs the
 // same for all of them: the body and its chunks, Creature.Update's stun
 // countdown, being conscious, grasps, the other creatures it refers to (by
 // id: a tracked prey, a grasp, a bite), the projectile trace and Violence's
@@ -64,6 +65,27 @@ namespace creature {
     }
     inline dcon::tube_worm_data_id tube_worm_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::tube_worm_data_id{dcon::tube_worm_data_id::value_base_t(w.creature_get_payload(c).tube_worm.data)};
+    }
+    inline dcon::needle_worm_data_id needle_worm_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::needle_worm_data_id{dcon::needle_worm_data_id::value_base_t(w.creature_get_payload(c).needle_worm.data)};
+    }
+    inline dcon::pole_mimic_data_id pole_mimic_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::pole_mimic_data_id{dcon::pole_mimic_data_id::value_base_t(w.creature_get_payload(c).pole_mimic.data)};
+    }
+    inline dcon::tentacle_plant_data_id tentacle_plant_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::tentacle_plant_data_id{dcon::tentacle_plant_data_id::value_base_t(w.creature_get_payload(c).tentacle_plant.data)};
+    }
+    inline dcon::jetfish_data_id jetfish_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::jetfish_data_id{dcon::jetfish_data_id::value_base_t(w.creature_get_payload(c).jetfish.data)};
+    }
+    inline dcon::scavenger_data_id scavenger_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::scavenger_data_id{dcon::scavenger_data_id::value_base_t(w.creature_get_payload(c).scavenger.data)};
+    }
+    inline dcon::deer_data_id deer_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::deer_data_id{dcon::deer_data_id::value_base_t(w.creature_get_payload(c).deer.data)};
+    }
+    inline dcon::miros_data_id miros_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::miros_data_id{dcon::miros_data_id::value_base_t(w.creature_get_payload(c).miros.data)};
     }
 
     // every creature of kind `t`, in id order (setup, tests, the serial phases)
@@ -237,7 +259,7 @@ namespace creature {
         float size = -1.f;
         // dropbug: moved to the best ceiling spot of the room
         bool relocate = false;
-        // lizard breed, daddy, centipede or leech variant
+        // lizard breed, daddy, centipede, leech or noodlefly variant
         uint8_t variety = 0;
     };
     dcon::creature_id create(sys::game_state& state, dcon::room_id room, rw::vec2 pos, spawn_desc const& d);

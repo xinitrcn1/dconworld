@@ -7,6 +7,7 @@
 #include "player.hpp"
 #include "rooms.hpp"
 #include "water.hpp"
+#include "worm_grass.hpp"
 
 namespace explosions {
     using rw::vec2;
@@ -32,6 +33,8 @@ namespace explosions {
         });
         // and what lives is hurt
         creature::blast(state, room.id, at, d.rad, d.force, d.damage, d.stun, d.kill_rad, source);
+        // (WormGrass.Explosion)
+        worm_grass::explosion(state, room.id, at, d.rad, d.force);
         state.play_sound(sound::sound_id::fire_spear_explode, room.id, at);
         state.add_noise(room.id, at, 8000.f);
         if (room.water && room.point_submerged(at))

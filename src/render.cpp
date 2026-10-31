@@ -20,6 +20,14 @@
 #include "leech.hpp"
 #include "leech_graphics.hpp"
 #include "tube_worm_graphics.hpp"
+#include "needle_worm_graphics.hpp"
+#include "pole_mimic_graphics.hpp"
+#include "tentacle_plant_graphics.hpp"
+#include "jetfish_graphics.hpp"
+#include "scavenger_graphics.hpp"
+#include "deer_graphics.hpp"
+#include "miros_graphics.hpp"
+#include "worm_grass.hpp"
 #include "cicada.hpp"
 #include "cicada_graphics.hpp"
 #include "dropbug.hpp"
@@ -897,6 +905,7 @@ void main() {
             pal.darkness = palette_darkness(r, s, room);
             // the story's timeline
             pal.saint = s.story_slugcat == player::slugcat_name::saint;
+            pal.texel_11_4 = palette_texel(r, s, room, 11, 4);
             return pal;
         }
 
@@ -1603,6 +1612,71 @@ void main() {
             });
         }
 
+        // what the ported ApplyPalettes read of the room's palette
+        sprites::room_palette room_palette(state const& r, sys::game_state const& s, dcon::room_id room) {
+            sprites::room_palette pal;
+            auto const palette = s.world.room_get_palette(room).id;
+            if (!palette || r.palette_pixels.empty())
+                return pal;
+            pal.pixels = r.palette_pixels.data() + size_t(palette.index()) * palette_width * palette_height * 3;
+            pal.effect_a = pal.texel(31, 5);
+            pal.effect_b = pal.texel(31, 3);
+            return pal;
+        }
+
+        // A ported DrawSprites' commands through the game's atlases, or
+        // without them its triangles and strips flat and its sprites as
+        // circles of their colour
+        void emit_or_flat(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const& strip, bool atlas) {
+            if (atlas) {
+                emit_game_cmds(r, cmds, &strip);
+                return;
+            }
+            painter p{r.batch};
+            auto const vcol = [](rw::vec4 c) { return to_rgba(rw::vec3{c.x, c.y, c.z}, c.w); };
+            for (auto const& cmd : cmds) {
+                if (cmd.is_strip) {
+                    for (uint32_t k = 0; k + 2 < cmd.strip_count; ++k) {
+                        auto const& a = strip[cmd.strip_first + k];
+                        p.tri(a.pos, strip[cmd.strip_first + k + 1].pos, strip[cmd.strip_first + k + 2].pos, vcol(a.col));
+                    }
+                } else if (cmd.is_triangle) {
+                    p.tri(cmd.tri[0], cmd.tri[1], cmd.tri[2], cmd.vertex_colors ? vcol(cmd.vcol[0]) : to_rgba(cmd.color));
+                } else if (!cmd.is_quad) {
+                    float const rad = 4.f * mathf::max(std::fabs(cmd.spr.scale.x), std::fabs(cmd.spr.scale.y));
+                    if (rad > 0.5f)
+                        p.circle(cmd.spr.pos, mathf::min(rad, 40.f), cmd.vertex_colors ? vcol(cmd.vcol[0]) : to_rgba(cmd.spr.color));
+                }
+            }
+        }
+
+        // The kinds ported after the grapple worm: each creature of kind `t`
+        // through its graphics module's build
+        template<typename Build>
+        void build_kind_sprites(state& r, sys::game_state const& s, world::room_view const& room, creature::type t, float alpha, bool atlas, Build&& build) {
+            static std::vector<sprites::draw_cmd> cmds;
+            static std::vector<sprites::strip_vertex> strip;
+            auto const pal = room_palette(r, s, room.id);
+            rooms::for_each_creature(s, room.id, t, [&](dcon::creature_id c) {
+                if (s.world.creature_get_away(c) != 0)
+                    return;
+                cmds.clear();
+                strip.clear();
+                build(s, c, alpha, pal, cmds, strip);
+                emit_or_flat(r, cmds, strip, atlas);
+            });
+        }
+
+        // the room's worm grass
+        void build_worm_grass(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool atlas) {
+            static std::vector<sprites::draw_cmd> cmds;
+            static std::vector<sprites::strip_vertex> strip;
+            cmds.clear();
+            strip.clear();
+            worm_grass::build(s, room.id, alpha, room_palette(r, s, room.id), cmds, strip);
+            emit_or_flat(r, cmds, strip, atlas);
+        }
+
         // Grapple worms through TubeWormGraphics (flat coloured meshes; the
         // tongues' tips need the game's atlas)
         void build_tube_worm_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha, bool atlas) {
@@ -2278,6 +2352,27 @@ void main() {
                     break;
                 case creature::type::tube_worm:
                     build_tube_worm_sprites(r, s, room, alpha, atlas);
+                    break;
+                case creature::type::needle_worm:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, needle_worm_graphics::build);
+                    break;
+                case creature::type::pole_mimic:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, pole_mimic_graphics::build);
+                    break;
+                case creature::type::tentacle_plant:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, tentacle_plant_graphics::build);
+                    break;
+                case creature::type::jetfish:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, jetfish_graphics::build);
+                    break;
+                case creature::type::scavenger:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, scavenger_graphics::build);
+                    break;
+                case creature::type::deer:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, deer_graphics::build);
+                    break;
+                case creature::type::miros:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, miros_graphics::build);
                     break;
                 case creature::type::count:
                     break;
@@ -3160,6 +3255,7 @@ void main() {
             build_slugcat_circles(r, s, room, alpha);
         size_t const bodies_end = r.batch.size();
         // the rest of the Midground, then the Items container (seed cobs, items)
+        build_worm_grass(r, s, room, alpha, atlas);
         build_creatures(r, s, room, alpha, cam, atlas);
         if (atlas)
             build_seed_cobs(r, s, room, alpha);

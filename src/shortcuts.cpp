@@ -4,12 +4,14 @@
 #include "shortcuts.hpp"
 #include "centipede.hpp"
 #include "cicada.hpp"
+#include "jetfish.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "piggyback.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "tube_worm.hpp"
+#include "needle_worm.hpp"
 
 namespace shortcuts {
     using rw::ivec2;
@@ -43,8 +45,10 @@ namespace shortcuts {
                 if (auto const item = items::held(state, p, hand))
                     w.physical_object_set_room_from_object_location(w.item_get_body_from_item_body(item), room);
             cicada::follow_player(state, p, room, false);
+            jetfish::follow_player(state, p, room, false);
             centipede::follow_player(state, p, room, false);
             tube_worm::follow_player(state, p, room, false);
+            needle_worm::follow_player(state, p, room, false);
             // the slugcat on its back (and on that one's) comes along
             if (auto const r = piggyback::rider(state, p))
                 move_to_room(state, r, room);
@@ -66,8 +70,10 @@ namespace shortcuts {
             w.creature_set_entering_shortcut(player::creature_of(state, p), ivec2{-1, -1});
             player_graphics::reset(state, p);
             cicada::follow_player(state, p, room.id, true);
+            jetfish::follow_player(state, p, room.id, true);
             centipede::follow_player(state, p, room.id, true);
             tube_worm::follow_player(state, p, room.id, true);
+            needle_worm::follow_player(state, p, room.id, true);
             if (auto const r = piggyback::rider(state, p))
                 spit_out(state, r, tile);
         }

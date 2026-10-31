@@ -35,6 +35,8 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
                                  # one of each kind per room, the world files' den population
 ./build/rwcpp --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
 ./build/rwcpp --rain-in 600      # every region's rain comes in 15 seconds (--no-dens: no den creatures)
+./build/rwcpp --creature Scavenger,600,300   # any creature by its world file name: BigNeedleWorm SmallNeedleWorm
+                                 # PoleMimic TentaclePlant JetFish Scavenger Deer MirosBird and the older kinds
 ./build/rwcpp --npc-trip hi_s05 uw_s04 --slugcat survivor   # one NPC slugcat from shelter to shelter, pass or fail
 ./build/rwcpp --npc-human-complete hi_s05 uw_s04   # watch it; where it fails you take over, your way is logged
 ./build/rwcpp --npc-soak 3000    # the world with its NPC slugcats (--npcs <share> of the shelters)
@@ -379,7 +381,19 @@ options and what doesn't work yet: [docs/SlugAI.md](docs/SlugAI.md).
 5. Its AI weighs `dens::rain_utility` and heads for `dens::home_tile` when it
    escapes the rain (dens.hpp does the rest), rolls `migrate::idle_roll` or
    `abstract_behavior` and heads for `migrate::travel_tile` on a trip, and
-   its world file name goes in `spawns::kind_of`.
+   its world file name goes in `spawns::kind_of` (with WorldLoader's
+   aliases: "Mimic", "Tube"...).
+6. The relationships table is replayed from StaticWorld.cs: every
+   EstablishRelationship call in order, spread to the descendants, from
+   each template's default. A new template's row and column come from the
+   same replay.
+7. Where it differs from vanilla goes in [docs/DIVERGENCES.md](docs/DIVERGENCES.md).
+
+The kinds ported after the grapple worm (noodleflies, pole plants, monster
+kelp, jetfish, scavengers, rain deer, miros birds) have simplified AIs and
+draw through render.cpp's generic `build_kind_sprites` (their graphics'
+`build` with the room's `sprites::room_palette`); worm grass is a room
+system like the rot. What they leave out: [docs/DIVERGENCES.md](docs/DIVERGENCES.md).
 
 Weapon hits, explosions, flare bombs, gates, warps, pipes, the rot's prey,
 fights with the other kinds, the fuzz and the bench then take it as they

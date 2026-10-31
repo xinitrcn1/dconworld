@@ -409,6 +409,22 @@ namespace outposts {
         });
     }
 
+    int32_t generate_antlers(rw::unity_random& r, float rad, std::vector<items::antler_point>& out) {
+        auto const parts = generate_antlers(r, rad);
+        out.clear();
+        for (size_t i = 0; i < parts.size(); ++i)
+            for (size_t k = 0; k < parts[i].positions.size(); ++k) {
+                items::antler_point ap;
+                ap.pos = parts[i].positions[k];
+                ap.rad = parts[i].rads[k];
+                ap.ind[0] = parts[i].ind[0][k];
+                ap.ind[1] = parts[i].ind[1][k];
+                ap.part = uint8_t(i);
+                out.push_back(ap);
+            }
+        return int32_t(parts.size());
+    }
+
     vec3 transformed_pos(items::antler_point const& p, float flip) noexcept {
         return p.pos + p.ind[flip < 0.f ? 0 : 1];
     }

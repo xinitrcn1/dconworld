@@ -5,12 +5,14 @@
 #include "player_graphics.hpp"
 #include "body_parts.hpp"
 #include "cicada.hpp"
+#include "jetfish.hpp"
 #include "items.hpp"
 #include "physics.hpp"
 #include "creature.hpp"
 #include "player.hpp"
 #include "rot.hpp"
 #include "tube_worm.hpp"
+#include "deer.hpp"
 
 namespace player_graphics {
     using rw::ivec2;
@@ -258,7 +260,23 @@ namespace player_graphics {
                 h.hunt_speed = 5.f;
                 h.quickness = 0.5f;
             } else if (mode == body_mode_index::default_) {
-                if (g.airborne_counter > 180.f && !custom::dist_less(vec2{0.f, 0.f}, v0, 4.f)) {
+                vec2 grab_at{0.f, 0.f}, antler_vel{0.f, 0.f};
+                bool dangle = false;
+                if (anim == animation_index::antler_climb && deer::rider_hand(state, p, uint32_t(limb), grab_at, antler_vel, dangle)) {
+                    // holding on to a rain deer's antlers (deer.cpp's PlayerInAntlers)
+                    h.vel = rw::lerp(h.vel, antler_vel, 0.7f);
+                    flag = false;
+                    h.mode = limb_mode::hunt_absolute_position;
+                    h.absolute_hunt_pos = grab_at;
+                    if (dangle) {
+                        h.absolute_hunt_pos += custom::perpendicular_vector(custom::dir_vec(c0, grab_at)) * (limb == 0 ? 4.f : -4.f);
+                        h.hunt_speed = 50.f;
+                        h.quickness = 1.f;
+                    } else {
+                        h.hunt_speed = 6.f;
+                        h.quickness = 0.6f;
+                    }
+                } else if (g.airborne_counter > 180.f && !custom::dist_less(vec2{0.f, 0.f}, v0, 4.f)) {
                     // flailing for something to hold on to
                     flag = false;
                     h.retract_counter = 0;
@@ -293,13 +311,14 @@ namespace player_graphics {
                     h.absolute_hunt_pos += vec2{float(flip) * 10.f, -10.f};
                 else
                     h.absolute_hunt_pos += vec2{float(flip) * 15.f, 10.f};
-            } else if (anim == animation_index::vine_grab && rot::vines::valid(state, room.id, w.player_get_vine(p))) {
-                // hand over hand along the vine
+            } else if (anim == animation_index::vine_grab
+                && rot::vines::valid(state, room.id, rot::vines::position{w.player_get_vine(p), 0.f, w.player_get_vine_mimic(p)})) {
+                // hand over hand along the vine (a rot tube or a pole plant)
                 flag = false;
-                rot::vines::position const vp{w.player_get_vine(p), w.player_get_vine_float_pos(p)};
-                float const along = 20.f * side * std::sin(frame / 30.f * 2.f * mathf::pi) / rot::vines::total_length(state, vp.vine);
+                rot::vines::position const vp{w.player_get_vine(p), w.player_get_vine_float_pos(p), w.player_get_vine_mimic(p)};
+                float const along = 20.f * side * std::sin(frame / 30.f * 2.f * mathf::pi) / rot::vines::total_length(state, vp);
                 h.mode = limb_mode::hunt_absolute_position;
-                h.absolute_hunt_pos = rot::vines::on_vine_pos(state, rot::vines::position{vp.vine, vp.float_pos + along})
+                h.absolute_hunt_pos = rot::vines::on_vine_pos(state, rot::vines::position{vp.vine, vp.float_pos + along, vp.mimic})
                     + custom::perpendicular_vector(rot::vines::vine_dir(state, vp)) * rot::vines::vine_rad(state, vp) * side;
             }
             return flag;
@@ -325,7 +344,10 @@ namespace player_graphics {
             }
             // HeavyCarry (a cicada): the first hand always holds on to it, the
             // other one unless it is busy climbing (no Remix)
-            auto const carried = cicada::held_by(state, p);
+            auto carried = cicada::held_by(state, p);
+            // (a jetfish is held the same way)
+            if (!carried)
+                carried = jetfish::held_by(state, p);
             if (limb == 0 && carried)
                 flag = true;
             if (flag && carried) {

@@ -11,6 +11,7 @@
 #include "items.hpp"
 #include "physics.hpp"
 #include "player.hpp"
+#include "pole_mimic.hpp"
 
 namespace rot {
     using rw::ivec2;
@@ -1313,20 +1314,45 @@ namespace rot {
 
     namespace vines {
         namespace {
-            // IClimbableVine of a ClimbableCorruptionTube
-            uint32_t total_positions(sys::game_state const& state, dcon::rot_tube_id v) { return state.world.rot_tube_get_segments(v).size(); }
-            vec2 vpos(sys::game_state const& state, dcon::rot_tube_id v, uint32_t i) { return state.world.rot_tube_get_segments(v)[i].pos; }
+            // the IClimbableVine a position is on: a ClimbableCorruptionTube,
+            // or a pole plant's stalk (PoleMimic)
+            struct vref {
+                dcon::rot_tube_id tube;
+                dcon::creature_id mimic;
+                bool operator==(vref const&) const = default;
+            };
+            vref ref(position const& p) { return vref{p.vine, p.mimic}; }
+            position at(vref v, float f) { return position{v.tube, f, v.mimic}; }
+
+            // IClimbableVine: TotalPositions, Pos, Rad, Mass, Push
+            uint32_t total_positions(sys::game_state const& state, vref v) {
+                return v.mimic ? pole_mimic::vine_positions(state, v.mimic) : state.world.rot_tube_get_segments(v.tube).size();
+            }
+            vec2 vpos(sys::game_state const& state, vref v, uint32_t i) {
+                return v.mimic ? pole_mimic::vine_pos(state, v.mimic, i) : state.world.rot_tube_get_segments(v.tube)[i].pos;
+            }
             constexpr float vrad = 2.f;
-            constexpr float vmass = 0.25f;
-            void vpush(sys::game_state& state, dcon::rot_tube_id v, uint32_t i, vec2 movement) {
-                auto segs = state.world.rot_tube_get_segments(v);
+            float vmass(vref v) { return v.mimic ? pole_mimic::vine_mass : 0.25f; }
+            void vpush(sys::game_state& state, vref v, uint32_t i, vec2 movement) {
+                if (v.mimic) {
+                    pole_mimic::vine_push(state, v.mimic, i, movement);
+                    return;
+                }
+                auto segs = state.world.rot_tube_get_segments(v.tube);
                 auto s = segs[i];
                 s.pos += movement;
                 s.vel += movement;
                 segs[i] = s;
             }
+            float length_of(sys::game_state const& state, vref v) {
+                float num = 0.f;
+                uint32_t const n = total_positions(state, v);
+                for (uint32_t i = 0; i + 1 < n; ++i)
+                    num += rw::distance(vpos(state, v, i), vpos(state, v, i + 1));
+                return num;
+            }
 
-            float float_at_segment(sys::game_state const& state, dcon::rot_tube_id v, uint32_t segment) {
+            float float_at_segment(sys::game_state const& state, vref v, uint32_t segment) {
                 float total = 0.f, upto = 0.f;
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t i = 0; i + 1 < n; ++i) {
@@ -1337,8 +1363,8 @@ namespace rot {
                 }
                 return total > 0.f ? upto / total : 0.f;
             }
-            uint32_t prev_seg_at_float(sys::game_state const& state, dcon::rot_tube_id v, float f) {
-                f *= total_length(state, v);
+            uint32_t prev_seg_at_float(sys::game_state const& state, vref v, float f) {
+                f *= length_of(state, v);
                 float num = 0.f;
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t i = 0; i + 1 < n; ++i) {
@@ -1355,11 +1381,12 @@ namespace rot {
                 float t;
             };
             span span_at(sys::game_state const& state, position p) {
-                uint32_t const a = prev_seg_at_float(state, p.vine, p.float_pos);
-                uint32_t const b = uint32_t(custom::int_clamp(int32_t(a) + 1, 0, int32_t(total_positions(state, p.vine)) - 1));
-                return span{a, b, mathf::inverse_lerp(float_at_segment(state, p.vine, a), float_at_segment(state, p.vine, b), p.float_pos)};
+                vref const v = ref(p);
+                uint32_t const a = prev_seg_at_float(state, v, p.float_pos);
+                uint32_t const b = uint32_t(custom::int_clamp(int32_t(a) + 1, 0, int32_t(total_positions(state, v)) - 1));
+                return span{a, b, mathf::inverse_lerp(float_at_segment(state, v, a), float_at_segment(state, v, b), p.float_pos)};
             }
-            vec2 dir_of_segment(sys::game_state const& state, dcon::rot_tube_id v, uint32_t seg) {
+            vec2 dir_of_segment(sys::game_state const& state, vref v, uint32_t seg) {
                 uint32_t const n = total_positions(state, v);
                 if (seg == n - 1)
                     return custom::dir_vec(vpos(state, v, n - 2), vpos(state, v, n - 1));
@@ -1382,15 +1409,19 @@ namespace rot {
                     return b;
                 return closest_point_on_line(a, b, test);
             }
+            // the room's climbable vines (CurrentlyClimbable): the rot's
+            // tubes, then the pole plants
             template<typename F>
             void for_each_vine(sys::game_state const& state, dcon::room_id room, F&& f) {
-                auto const s = system_of(state, room);
-                if (!s)
-                    return;
-                state.world.rot_system_for_each_rot_tube_membership(s, [&](dcon::rot_tube_membership_id m) {
-                    auto const t = state.world.rot_tube_membership_get_tube(m);
-                    if (state.world.rot_tube_get_kind(t) == rot_tube_kind::climb && total_positions(state, t) >= 2)
-                        f(t);
+                if (auto const s = system_of(state, room))
+                    state.world.rot_system_for_each_rot_tube_membership(s, [&](dcon::rot_tube_membership_id m) {
+                        auto const t = state.world.rot_tube_membership_get_tube(m);
+                        if (state.world.rot_tube_get_kind(t) == rot_tube_kind::climb && state.world.rot_tube_get_segments(t).size() >= 2)
+                            f(vref{t, dcon::creature_id{}});
+                    });
+                rooms::for_each_creature(state, room, creature::type::pole_mimic, [&](dcon::creature_id c) {
+                    if (pole_mimic::currently_climbable(state, c))
+                        f(vref{dcon::rot_tube_id{}, c});
                 });
             }
         }
@@ -1401,18 +1432,32 @@ namespace rot {
                 && room_of(state, w.rot_tube_get_system_from_rot_tube_membership(vine)) == room;
         }
 
-        float total_length(sys::game_state const& state, dcon::rot_tube_id v) {
-            float num = 0.f;
-            uint32_t const n = total_positions(state, v);
-            for (uint32_t i = 0; i + 1 < n; ++i)
-                num += rw::distance(vpos(state, v, i), vpos(state, v, i + 1));
-            return num;
+        bool valid(sys::game_state const& state, dcon::room_id room, position const& p) noexcept {
+            if (p.mimic) {
+                auto const& w = state.world;
+                return w.creature_is_valid(p.mimic) && w.creature_get_type(p.mimic) == creature::type::pole_mimic && w.creature_get_away(p.mimic) == 0
+                    && rooms::room_of(state, p.mimic) == room && pole_mimic::vine_positions(state, p.mimic) >= 2;
+            }
+            return valid(state, room, p.vine);
+        }
+
+        float total_length(sys::game_state const& state, dcon::rot_tube_id v) { return length_of(state, vref{v, dcon::creature_id{}}); }
+        float total_length(sys::game_state const& state, position const& p) { return length_of(state, ref(p)); }
+
+        void being_climbed_on(sys::game_state& state, position const& p, dcon::creature_id by) {
+            // (ClimbableCorruptionTube.BeingClimbedOn does nothing)
+            if (p.mimic)
+                pole_mimic::being_climbed_on(state, p.mimic, by);
+        }
+
+        bool currently_climbable(sys::game_state const& state, position const& p) {
+            return !p.mimic || pole_mimic::currently_climbable(state, p.mimic);
         }
 
         std::optional<position> overlap(sys::game_state const& state, dcon::room_id room, vec2 pos, float rad) {
             float best = std::numeric_limits<float>::max();
             std::optional<position> result;
-            for_each_vine(state, room, [&](dcon::rot_tube_id v) {
+            for_each_vine(state, room, [&](vref v) {
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t j = 0; j + 1 < n; ++j) {
                     vec2 const a = vpos(state, v, j), b = vpos(state, v, j + 1);
@@ -1423,7 +1468,7 @@ namespace rot {
                     if (d < best) {
                         best = d;
                         float const t = mathf::inverse_lerp(0.f, rw::distance(a, b), rw::distance(a, c));
-                        result = position{v, mathf::lerp(float_at_segment(state, v, j), float_at_segment(state, v, j + 1), t)};
+                        result = at(v, mathf::lerp(float_at_segment(state, v, j), float_at_segment(state, v, j + 1), t));
                     }
                 }
             });
@@ -1432,17 +1477,17 @@ namespace rot {
 
         vec2 on_vine_pos(sys::game_state const& state, position p) {
             span const s = span_at(state, p);
-            return rw::lerp(vpos(state, p.vine, s.a), vpos(state, p.vine, s.b), s.t);
+            return rw::lerp(vpos(state, ref(p), s.a), vpos(state, ref(p), s.b), s.t);
         }
 
         float vine_rad(sys::game_state const&, position) { return vrad; }
 
         vec2 vine_dir(sys::game_state const& state, position p) {
             span const s = span_at(state, p);
-            uint32_t const n = total_positions(state, p.vine);
+            uint32_t const n = total_positions(state, ref(p));
             if (s.a == s.b)
-                return custom::dir_vec(vpos(state, p.vine, n - 2), vpos(state, p.vine, n - 1));
-            return rw::normalized(rw::lerp(dir_of_segment(state, p.vine, s.a), dir_of_segment(state, p.vine, s.b), s.t));
+                return custom::dir_vec(vpos(state, ref(p), n - 2), vpos(state, ref(p), n - 1));
+            return rw::normalized(rw::lerp(dir_of_segment(state, ref(p), s.a), dir_of_segment(state, ref(p), s.b), s.t));
         }
 
         float climb_on_vine_speed(sys::game_state const& state, position p, vec2 goal) {
@@ -1451,7 +1496,7 @@ namespace rot {
             if (p.float_pos == 1.f)
                 return -1.f;
             span const s = span_at(state, p);
-            vec2 const pa = vpos(state, p.vine, s.a), pb = vpos(state, p.vine, s.b);
+            vec2 const pa = vpos(state, ref(p), s.a), pb = vpos(state, ref(p), s.b);
             vec2 const at = rw::lerp(pa, pb, s.t);
             float const f = rw::dot(rw::normalized(pa - pb), rw::normalized(at - goal));
             return mathf::inverse_lerp(0.3f, 0.5f, std::fabs(f)) * mathf::sign(f);
@@ -1459,31 +1504,31 @@ namespace rot {
 
         std::optional<position> vine_switch(sys::game_state const& state, dcon::room_id room, position p, vec2 goal, float rad) {
             span const s = span_at(state, p);
-            vec2 const pa = vpos(state, p.vine, s.a), pb = vpos(state, p.vine, s.b);
-            vec2 const at = rw::lerp(pa, pb, s.t);
+            vec2 const pa = vpos(state, ref(p), s.a), pb = vpos(state, ref(p), s.b);
+            vec2 const here = rw::lerp(pa, pb, s.t);
             // only when reaching away from the vine
-            if (std::fabs(rw::dot(rw::normalized(pa - pb), rw::normalized(at - goal))) > 0.5f)
+            if (std::fabs(rw::dot(rw::normalized(pa - pb), rw::normalized(here - goal))) > 0.5f)
                 return std::nullopt;
             float best = std::numeric_limits<float>::max();
             std::optional<position> result;
-            float const own_len = total_length(state, p.vine);
-            for_each_vine(state, room, [&](dcon::rot_tube_id v) {
+            float const own_len = length_of(state, ref(p));
+            for_each_vine(state, room, [&](vref v) {
                 uint32_t const n = total_positions(state, v);
                 for (uint32_t j = 0; j + 1 < n; ++j) {
                     vec2 const a = vpos(state, v, j), b = vpos(state, v, j + 1);
-                    if (!overlapping_segment(a, vrad, b, vrad, at, rad))
+                    if (!overlapping_segment(a, vrad, b, vrad, here, rad))
                         continue;
-                    vec2 const c = closest_point_on_segment(a, b, at);
+                    vec2 const c = closest_point_on_segment(a, b, here);
                     float d = rw::distance(c, goal);
-                    d *= 1.f - 0.25f * std::fabs(rw::dot(rw::normalized(a - b), rw::normalized(at - goal)));
+                    d *= 1.f - 0.25f * std::fabs(rw::dot(rw::normalized(a - b), rw::normalized(here - goal)));
                     float const t = mathf::inverse_lerp(0.f, rw::distance(a, b), rw::distance(a, c));
                     float const fp = mathf::lerp(float_at_segment(state, v, j), float_at_segment(state, v, j + 1), t);
                     // not just further along the same vine
-                    if (v == p.vine && std::fabs(p.float_pos * own_len - fp * total_length(state, v)) < 100.f)
+                    if (v == ref(p) && std::fabs(p.float_pos * own_len - fp * length_of(state, v)) < 100.f)
                         d = std::numeric_limits<float>::max();
                     if (d < best) {
                         best = d;
-                        result = position{v, fp};
+                        result = at(v, fp);
                     }
                 }
             });
@@ -1493,25 +1538,25 @@ namespace rot {
         void connect_chunk_to_vine(sys::game_state& state, dcon::body_chunk_id chunk, position p, float con_rad) {
             auto& w = state.world;
             span const s = span_at(state, p);
-            vec2 const at = rw::lerp(vpos(state, p.vine, s.a), vpos(state, p.vine, s.b), s.t);
+            vec2 const on = rw::lerp(vpos(state, ref(p), s.a), vpos(state, ref(p), s.b), s.t);
             float const mass = w.body_chunk_get_mass(chunk);
-            float const num3 = mass / (mass + vmass);
+            float const num3 = mass / (mass + vmass(ref(p)));
             vec2& cpos = w.body_chunk_get_pos(chunk);
-            float const d = rw::distance(cpos, at);
-            vec2 const a = custom::dir_vec(cpos, at);
+            float const d = rw::distance(cpos, on);
+            vec2 const a = custom::dir_vec(cpos, on);
             if (d > con_rad) {
                 cpos += a * (d - con_rad) * (1.f - num3);
                 w.body_chunk_get_vel(chunk) += a * (d - con_rad) * (1.f - num3);
-                vpush(state, p.vine, s.a, -a * (d - con_rad) * num3);
-                vpush(state, p.vine, s.b, -a * (d - con_rad) * num3);
+                vpush(state, ref(p), s.a, -a * (d - con_rad) * num3);
+                vpush(state, ref(p), s.b, -a * (d - con_rad) * num3);
             }
         }
 
         void push_at_vine(sys::game_state& state, position p, vec2 push) {
             span const s = span_at(state, p);
-            float const d = mathf::max(1.f, vmass);
-            vpush(state, p.vine, s.a, push / d * (1.f - s.t));
-            vpush(state, p.vine, s.b, push / d * s.t);
+            float const d = mathf::max(1.f, vmass(ref(p)));
+            vpush(state, ref(p), s.a, push / d * (1.f - s.t));
+            vpush(state, ref(p), s.b, push / d * s.t);
         }
     }
 }

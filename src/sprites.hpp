@@ -4,6 +4,8 @@
 // (by element name, looked up in an atlas) and TriangleMesh triangles, in
 // room space and in vanilla sprite order.
 
+#include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <vector>
 
@@ -124,4 +126,29 @@ namespace sprites {
             out.push_back(c);
         }
     }
+    // What an ApplyPalette reads of the room's palette (RoomPalette): the
+    // palette image's texels (RoomPalette's texture, 32 x 16, rows counted
+    // from the bottom like Texture2D.GetPixel), none without one
+    struct room_palette {
+        // the palette's RGB pixels, top row first (nullptr: no palette)
+        uint8_t const* pixels = nullptr;
+        // the room's effect colours (EffectColorA/B: the effect colour
+        // palette's texels), white without them
+        rw::vec3 effect_a{1.f, 1.f, 1.f};
+        rw::vec3 effect_b{1.f, 1.f, 1.f};
+        static constexpr int width = 32;
+        static constexpr int height = 16;
+        // texture.GetPixel(x, y)
+        rw::vec3 texel(int x, int y) const noexcept {
+            if (pixels == nullptr || x < 0 || y < 0 || x >= width || y >= height)
+                return rw::vec3{0.f, 0.f, 0.f};
+            uint8_t const* q = pixels + (size_t(height - 1 - y) * width + size_t(x)) * 3;
+            return rw::vec3{float(q[0]) / 255.f, float(q[1]) / 255.f, float(q[2]) / 255.f};
+        }
+        // RoomPalette.blackColor, fogColor, skyColor, darkness
+        rw::vec3 black() const noexcept { return texel(2, 7); }
+        rw::vec3 fog() const noexcept { return texel(1, 7); }
+        rw::vec3 sky() const noexcept { return texel(0, 7); }
+        float darkness() const noexcept { return 1.f - texel(30, 7).x; }
+    };
 }

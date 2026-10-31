@@ -16,6 +16,7 @@
 #include "centipede.hpp"
 #include "leech.hpp"
 #include "tube_worm.hpp"
+#include "spawns.hpp"
 #include "cicada.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
@@ -119,8 +120,11 @@ namespace {
             "                      brother mother (TerrorLongLegs) hunter (repeatable)\n"
             "  --leech <x,y[,variant]>  spawn a leech (default the red one): sea jungle (repeatable)\n"
             "  --tubeworm <x,y>    spawn a grapple worm (repeatable)\n"
+            "  --creature <kind,x,y>  spawn any creature by its world file name (repeatable):\n"
+            "                      BigNeedleWorm SmallNeedleWorm PoleMimic TentaclePlant JetFish\n"
+            "                      Scavenger Deer MirosBird, and the kinds above\n"
             "  --item <x,y,kind[,pearl]>  place an item (repeatable): rock spear explosive\n"
-            "                      electric pearl (with a DataPearl type, e.g. cc)\n"
+            "                      electric pearl (with a DataPearl type, e.g. cc) puffball\n"
             "  --weaver            the Watcher starts decorated\n"
             "  --script <s>        inputs before --screenshot, e.g. U2,N30,RJ12: letters\n"
             "                      U D L R J (jump) X (throw) P (pick up), N = nothing,\n"
@@ -730,6 +734,15 @@ int main(int argc, char* argv[]) {
                     std::fprintf(stderr, "unknown leech %s, a leech instead\n", name);
                 spawn_creatures.push_back({vec2{x, y}, creature::spawn_desc{creature::type::leech, -1.f, false, uint8_t(v)}});
             }
+        } else if (a == "--creature") {
+            std::string const arg = next();
+            float x = 0.f, y = 0.f;
+            auto const comma = arg.find(',');
+            auto const k = comma == std::string::npos ? std::nullopt : spawns::kind_of(std::string_view{arg}.substr(0, comma));
+            if (k && std::sscanf(arg.c_str() + comma + 1, "%f,%f", &x, &y) == 2)
+                spawn_creatures.push_back({vec2{x, y}, *k});
+            else
+                std::fprintf(stderr, "--creature %s: unknown kind or position\n", arg.c_str());
         } else if (a == "--tubeworm") {
             float x = 0.f, y = 0.f;
             if (std::sscanf(next().c_str(), "%f,%f", &x, &y) == 2)
@@ -775,6 +788,7 @@ int main(int argc, char* argv[]) {
                 else if (k == "explosive") t = world::item_type::explosive_spear;
                 else if (k == "electric") t = world::item_type::electric_spear;
                 else if (k == "pearl") t = world::item_type::data_pearl;
+                else if (k == "puffball") t = world::item_type::puff_ball;
                 else if (k != "rock") std::fprintf(stderr, "unknown item %s, a rock instead\n", kind);
                 spawn_items.push_back({vec2{x, y}, t, pearl});
             }

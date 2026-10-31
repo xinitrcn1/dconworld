@@ -22,6 +22,7 @@
 #include "player_graphics.hpp"
 #include "rooms.hpp"
 #include "rot.hpp"
+#include "worm_grass.hpp"
 #include "warps.hpp"
 #include "particles.hpp"
 #include "water.hpp"
@@ -113,6 +114,7 @@ namespace simulation {
         for (auto const r : fresh) {
             items::spawn_room_items(state, r);
             rot::spawn_room(state, r);
+            worm_grass::spawn_room(state, r);
             warps::spawn_room(state, r);
             state.runtime(r).populated = true;
         }
@@ -243,6 +245,7 @@ namespace simulation {
             outposts::update_room(state, view);
             items::update_room(state, view);
             rot::update_room(state, view);
+            worm_grass::update_room(state, view);
             water::update_room(state, view);
             terrain::update_room(state, view);
             rain::update_room(state, view);

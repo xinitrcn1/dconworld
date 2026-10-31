@@ -1189,6 +1189,7 @@ namespace world {
                         {"TerrainHandle", thing_kind::terrain_handle},
                         {"ScavengerOutpost", thing_kind::scav_outpost}, {"ScavengerTreasury", thing_kind::scav_treasury},
                         {"ReliableSpear", thing_kind::reliable_spear}, {"MultiplayerItem", thing_kind::multiplayer_item},
+                        {"PuffBall", thing_kind::puff_ball},
                     };
                     auto const it = std::find_if(std::begin(kinds), std::end(kinds), [&](auto const& k) { return k.first == parts[0]; });
                     if (it != std::end(kinds)) {

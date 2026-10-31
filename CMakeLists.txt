@@ -98,6 +98,22 @@ add_executable(rwcpp
     src/leech_graphics.cpp
     src/tube_worm.cpp
     src/tube_worm_graphics.cpp
+    src/needle_worm.cpp
+    src/needle_worm_graphics.cpp
+    src/pole_mimic.cpp
+    src/pole_mimic_graphics.cpp
+    src/tentacle_plant.cpp
+    src/tentacle_plant_graphics.cpp
+    src/jetfish.cpp
+    src/jetfish_graphics.cpp
+    src/scavenger.cpp
+    src/scavenger_graphics.cpp
+    src/deer.cpp
+    src/deer_graphics.cpp
+    src/puff_ball.cpp
+    src/miros.cpp
+    src/miros_graphics.cpp
+    src/worm_grass.cpp
     src/rot.cpp
     src/warps.cpp
     src/water.cpp

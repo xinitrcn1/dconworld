@@ -36,11 +36,20 @@ namespace rot {
         struct position {
             dcon::rot_tube_id vine;
             float float_pos = 0.f;
+            // a pole plant's stalk instead (PoleMimic is an IClimbableVine;
+            // `vine` empty then)
+            dcon::creature_id mimic;
         };
         // the closest vine within `rad` of `pos` (VineOverlap)
         std::optional<position> overlap(sys::game_state const& state, dcon::room_id room, rw::vec2 pos, float rad);
         // still a climbable vine of `room`
         bool valid(sys::game_state const& state, dcon::room_id room, dcon::rot_tube_id vine) noexcept;
+        // ...the tube or pole plant of a position
+        bool valid(sys::game_state const& state, dcon::room_id room, position const& p) noexcept;
+        float total_length(sys::game_state const& state, position const& p);
+        // VineBeingClimbedOn, VineCurrentlyClimbable (a pole plant wakes up)
+        void being_climbed_on(sys::game_state& state, position const& p, dcon::creature_id by);
+        bool currently_climbable(sys::game_state const& state, position const& p);
         rw::vec2 on_vine_pos(sys::game_state const& state, position p);
         float vine_rad(sys::game_state const& state, position p);
         rw::vec2 vine_dir(sys::game_state const& state, position p);

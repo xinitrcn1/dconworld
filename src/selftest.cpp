@@ -23,6 +23,13 @@
 #include "dropbug.hpp"
 #include "leech.hpp"
 #include "tube_worm.hpp"
+#include "needle_worm.hpp"
+#include "pole_mimic.hpp"
+#include "tentacle_plant.hpp"
+#include "jetfish.hpp"
+#include "scavenger.hpp"
+#include "deer.hpp"
+#include "miros.hpp"
 #include "lizard.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
@@ -2709,7 +2716,7 @@ namespace selftest {
             // campaign filters, spawn data
             std::string const text = "ROOMS\nTEST_A : DISCONNECTED\nEND ROOMS\n\nCREATURES\n"
                 "//all\n"
-                "TEST_A : 3-Green, 3-CicadaA-2, 3-Scavenger\n"
+                "TEST_A : 3-Green, 3-CicadaA-2, 3-Vulture\n"
                 "(White,Yellow)TEST_A : 3-Pink-{Seed:1234}\n"
                 "(Red)TEST_A : 3-Red\n"
                 "(X-White)TEST_A : 3-Black\n"
@@ -2731,7 +2738,7 @@ namespace selftest {
             bool const data = (night.flags & dens::flag_night) && night.seed == 55 && size.size == 0.7f && spawns::parse_data("{PreCycle,Lavasafe}").flags == (dens::flag_pre_cycle | dens::flag_lava_safe);
             bool const kinds = spawns::kind_of("Small Centipede") && spawns::kind_of("Small Centipede")->variety == uint8_t(centipede::variant::small)
                 && spawns::kind_of("Caramel")->variety == uint8_t(lizard::breed::caramel) && spawns::kind_of("CicadaA")->size == 1.f
-                && spawns::kind_of("TerrorLongLegs")->variety == uint8_t(daddy::variant::mother) && !spawns::kind_of("Scavenger") && !spawns::kind_of("NONE");
+                && spawns::kind_of("TerrorLongLegs")->variety == uint8_t(daddy::variant::mother) && !spawns::kind_of("Vulture") && !spawns::kind_of("NONE");
             // made in a room's den: the count, the skipped kind, NONE, the seed
             auto const st_ptr = sys::make_game_state();
             auto& st = *st_ptr;
@@ -2755,7 +2762,7 @@ namespace selftest {
                 in_den += dens::where_is(st, c) == dens::where::den ? 1 : 0;
                 nights += st.world.creature_get_spawn_flags(c) & dens::flag_night ? 1 : 0;
             });
-            bool const spawned = made == 8 && in_den == 8 && nights == 3 && rep.skipped["Scavenger"] == 1;
+            bool const spawned = made == 8 && in_den == 8 && nights == 3 && rep.skipped["Vulture"] == 1;
             char d[200];
             std::snprintf(d, sizeof(d), " parsed=%d (%zu lines) filters=%d data=%d kinds=%d made=%u in_den=%u night=%u", int(parsed), white.size(), int(filters),
                 int(data), int(kinds), made, in_den, nights);
@@ -3625,6 +3632,7 @@ namespace selftest {
         case creature::type::leech: return leeches[0];
         case creature::type::tube_worm: return tube_worm;
         case creature::type::count: break;
+        default: return later[size_t(t)];
         }
         return centipede;
     }
@@ -3654,6 +3662,7 @@ namespace selftest {
             case creature::type::leech: salt = 0x1EEC4u; break;
             case creature::type::tube_worm: salt = 0x7B3E4u; break;
             case creature::type::count: break;
+            default: salt = 0xA5170000u + uint32_t(t); break;
             }
             rw::rng rng{(k0 ^ salt) | 1u};
             auto& id = out.of(t);
@@ -3703,6 +3712,28 @@ namespace selftest {
                 case creature::type::tube_worm:
                     // on the ground
                     ok = pathing::accessible(room, tile, pathing::tube_worm) && !room.get_tile(tile).solid();
+                    break;
+                case creature::type::needle_worm:
+                    ok = needle_worm::spawn_spot(room, tile);
+                    d.variety = uint8_t(rng.value() < 0.5f ? needle_worm::variant::big : needle_worm::variant::small);
+                    break;
+                case creature::type::pole_mimic:
+                    ok = pole_mimic::spawn_spot(room, tile);
+                    break;
+                case creature::type::tentacle_plant:
+                    ok = tentacle_plant::spawn_spot(room, tile);
+                    break;
+                case creature::type::jetfish:
+                    ok = jetfish::spawn_spot(room, tile);
+                    break;
+                case creature::type::scavenger:
+                    ok = scavenger::spawn_spot(room, tile);
+                    break;
+                case creature::type::deer:
+                    ok = deer::spawn_spot(room, tile);
+                    break;
+                case creature::type::miros:
+                    ok = miros::spawn_spot(room, tile);
                     break;
                 case creature::type::count:
                     break;
