@@ -114,6 +114,24 @@ the tools for tracing them, and what is known not to work yet.
   30 s; 30 s more after a failed try, e.g. on a pole). Not under
   `--npc-guess`. Tests: "NPC Watcher takes its pack through its own warp"
   (with a stray from another pack pulled along).
+- **Falling to a certain death** (pushed off, a jump misjudged):
+  `predict_fall` follows its fall tick by tick as the physics moves it
+  (gravity, air friction). Out of the room's bottom with no water there,
+  or onto the ground faster than 60 px a tick, is certain; water on the
+  way or a ledge beside the fall it might catch, and it isn't. Only when
+  it is certain (`catch_fall`, before anything else it thinks) it drops
+  its move and holds up (the player code's beam grab) steering for the
+  beam its head can get to first (within four tiles, a few pixels of air
+  control a tick). Hanging from a beam with no step on, it pulls itself up
+  onto it. Test: "NPC catches a beam falling to its death" (a pole by the
+  pit: lives; none: dies; over the ground with a pole by it: no grab).
+  Stats: "catches".
+- **Crowded rooms.** A room with more than 5 slugcats: every 400 ticks
+  (each NPC on its own tick of them) each pack member there (not resting)
+  may leave its pack, 5% with 6 slugcats and 2.5% more for each one more
+  (`room_crowd_limit`), and make for another shelter alone (the target it
+  had given up; off a back it rides on; a leader's pack goes to the first
+  of its members). Stats: "split up". Test: "a crowded room splits packs".
 - **The Artificer's pyro jumps.** Its path graph has one more move, up
   its column in a jump and a pyro jump at the top, onto a ledge beside the
   column (`step_kind::pyro`, `pathing::pyro_rise`: 7 tiles up one over, 6
@@ -634,6 +652,13 @@ does a placed warp), and after 30 s (`life`) it closes, fades out and is
 unlinked from the room; `game_state::free_warps` keeps it for the next
 one. Tests: "dynamic warp: anything close, closes after 30 s", "Watcher
 makes a dynamic warp", "warp cooling down: a creature waits, forced open".
+
+## Corpses in pipes
+
+Not vanilla: a dead creature or slugcat in a pipe (not carried) comes back
+out where it went in at once (`dens.cpp`'s vessels, `shortcuts.cpp`'s
+`update_vessel`), and a corpse lying in a pipe's entrance is pushed out of
+the hole. Test: "pipes spit out corpses".
 
 ## Slugpups and piggyback
 

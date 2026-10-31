@@ -148,6 +148,11 @@ namespace shortcuts {
     void update_vessel(sys::game_state& state, dcon::player_id p) {
         auto& w = state.world;
         auto const sc = w.creature_get_vessel_shortcut(player::creature_of(state, p));
+        // not vanilla: a dead slugcat comes back out where it went in, at once
+        if (player::dead(state, p) && sc) {
+            spit_out(state, p, w.shortcut_get_start(sc));
+            return;
+        }
         auto const path = w.shortcut_get_path(sc);
         float const len = float(path.size());
         if (len < 2.f) {

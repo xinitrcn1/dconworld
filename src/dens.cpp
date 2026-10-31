@@ -373,6 +373,28 @@ namespace dens {
 
     void update_room(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
+        // not vanilla: a corpse lying in a pipe's entrance (not carried) is
+        // pushed back out of it
+        rooms::for_each_creature(state, room.id, [&](dcon::creature_id c) {
+            if (w.creature_get_away(c) != 0 || !w.creature_get_dead(c) || creature::held(state, c))
+                return;
+            uint32_t const n = creature::chunk_count(state, c);
+            for (uint32_t i = 0; i < n; ++i) {
+                ivec2 const t = room_view::get_tile_position(w.body_chunk_get_pos(creature::chunk(state, c, i)));
+                if (!room.inside(t.x, t.y) || room.get_tile(t).t != world::terrain::shortcut_entrance)
+                    continue;
+                ivec2 const d = room.shortcut_entrance_hole_direction(t);
+                if (d.x == 0 && d.y == 0)
+                    return;
+                vec2 const out = room_view::middle_of_tile(t + d);
+                for (uint32_t j = 0; j < n; ++j) {
+                    auto const ch = creature::chunk(state, c, j);
+                    w.body_chunk_set_pos(ch, out);
+                    w.body_chunk_set_vel(ch, rw::to_vec2(d) * 2.f);
+                }
+                return;
+            }
+        });
         for_each_away(state, room.id, [&](dcon::creature_id c) {
             if (w.creature_get_away(c) == uint8_t(where::den)) {
                 // AbstractCreature.InDenUpdate
@@ -392,6 +414,17 @@ namespace dens {
             }
             // a vessel along its pipe (ShortcutHandler: a tile every third tick)
             auto const s = w.creature_get_vessel_shortcut(c);
+            // not vanilla: a corpse in a pipe (not carried) comes back out
+            // where it went in, at once
+            if (s && w.creature_get_dead(c) && !creature::held(state, c)) {
+                ivec2 const start = w.shortcut_get_start(s);
+                w.creature_set_vessel_reverse(c, 0);
+                state.defer(room.id, [c, r = room.id, start](sys::game_state& st) {
+                    if (st.world.creature_is_valid(c) && st.world.creature_get_away(c) == uint8_t(where::shortcut))
+                        spit_out(st, c, r, start);
+                });
+                return;
+            }
             if (!s) {
                 // (lost its pipe: back out where it is)
                 state.defer(room.id, [c, r = room.id](sys::game_state& st) {

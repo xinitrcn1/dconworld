@@ -433,6 +433,71 @@ namespace npc {
             return feet;
         }
 
+        // The fall it is in, followed tick by tick as the physics moves it
+        // (gravity, air friction): certain death when it goes out of the
+        // room's bottom (no water down there) or hits the ground too fast
+        // to live; anything that might save it on the way (water, a ledge
+        // beside it to grab) and it isn't certain. The beam it can get to
+        // first on the way down (its head passing it, a little air control)
+        struct fall_outcome {
+            bool doomed = false;
+            std::optional<ivec2> beam;
+        };
+        constexpr float deadly_landing = 60.f;
+        fall_outcome predict_fall(sys::game_state const& state, room_view const& room, dcon::player_id p) {
+            auto const& w = state.world;
+            fall_outcome out;
+            auto const head = player::body_chunk(state, p, 0);
+            auto const feet = player::body_chunk(state, p, 1);
+            vec2 hp = w.body_chunk_get_pos(head), fp = w.body_chunk_get_pos(feet);
+            vec2 v = w.body_chunk_get_vel(feet);
+            float const g = 0.9f * room.gravity;
+            for (int32_t k = 1; k <= 600; ++k) {
+                v.y -= g;
+                v *= 0.999f;
+                hp += v;
+                fp += v;
+                ivec2 const t = room_view::get_tile_position(fp);
+                if (t.x < 0 || t.x >= room.width)
+                    return {};
+                if (t.y < 0) {
+                    out.doomed = room.default_water_level < 0;
+                    return out;
+                }
+                if (t.y >= room.height)
+                    continue;
+                auto const tile = room.get_tile(t);
+                if (tile.water != 0)
+                    return {};
+                if (tile.solid() || pathing::standable(room, t)) {
+                    out.doomed = std::fabs(v.y) > deadly_landing;
+                    return out;
+                }
+                // (a ledge beside it it might catch)
+                for (int32_t const s : {-1, 1})
+                    if (room.inside(t.x + s, t.y) && room.get_tile(t + ivec2{s, 0}).solid() && !room.get_tile(t + ivec2{s, 1}).solid())
+                        return {};
+                // a beam its head can get to by then (air control: a few
+                // pixels a tick, up to four tiles over)
+                if (!out.beam) {
+                    ivec2 const ht = room_view::get_tile_position(hp);
+                    float const reach = std::min(80.f, 1.5f * float(k));
+                    float best = reach + 1.f;
+                    for (int32_t dx = -4; dx <= 4; ++dx) {
+                        ivec2 const b = ht + ivec2{dx, 0};
+                        if (!room.inside(b.x, b.y) || !room.get_tile(b).any_beam())
+                            continue;
+                        float const d = std::fabs(room_view::middle_of_tile(b).x - hp.x);
+                        if (d <= reach && d < best) {
+                            best = d;
+                            out.beam = b;
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+
         bool airborne(sys::game_state const& state, dcon::player_id p) {
             auto const& w = state.world;
             auto const mode = w.player_get_body_mode(p);
@@ -1203,6 +1268,10 @@ namespace npc {
                 // path graph lacks): make for it, jumping now and then
                 // (ledges, walls, poles to catch)
                 if (!st) {
+                    // (hanging from a beam, say after catching it in a fall:
+                    // up onto it first, a fresh press of up)
+                    if (w().player_get_animation(p) == player::animation_index::hang_from_beam)
+                        return input(0, hist[0].y > 0 ? 0 : 1);
                     if (d != pathing::unreachable || !nav.guessed)
                         return input(0, 0);
                     ivec2 const to = goal - at;
@@ -1915,7 +1984,36 @@ namespace npc {
                 return travel();
             }
 
+            // Falling to a certain death (pushed off, a jump misjudged): for
+            // the beam it can get to, holding up to catch it. Only then: a
+            // fall it lives through goes on as it was
+            std::optional<player::input_package> catch_fall() {
+                auto const mode = w().player_get_body_mode(p);
+                if (mode != player::body_mode_index::default_ || contact(state, p, 0).y != 0 || contact(state, p, 1).y != 0
+                    || w().body_chunk_get_vel(player::body_chunk(state, p, 1)).y > -1.f)
+                    return std::nullopt;
+                auto const f = predict_fall(state, room, p);
+                if (!f.doomed)
+                    return std::nullopt;
+                if (nav.how != move::walk || nav.catching == 0) {
+                    nav.how = move::walk;
+                    nav.move_timer = 0;
+                    if (!nav.catching)
+                        ++stats().catches;
+                }
+                nav.catching = 1;
+                int32_t x = 0;
+                if (f.beam) {
+                    float const off = room_view::middle_of_tile(*f.beam).x - pos(state, p, 0).x;
+                    x = std::fabs(off) < 6.f ? 0 : off > 0.f ? 1 : -1;
+                }
+                return input(x, 1);
+            }
+
             player::input_package think() {
+                if (auto const in = catch_fall())
+                    return *in;
+                nav.catching = 0;
                 see_threats();
                 if (nav.what == goal::start && nav.goal_timer < 0)
                     return input(0, 0);
@@ -2667,6 +2765,44 @@ namespace npc {
         });
         // who rides on whom, and the riders' packs
         piggybacks(state);
+        // A room with more than 5 slugcats in it is crowded: every 400 ticks
+        // each NPC of a pack there (not resting) may leave it (5%, 2.5% more
+        // for each slugcat past 6) and make for another shelter, alone
+        {
+            std::vector<uint16_t> in_room(w.room_size(), 0);
+            w.for_each_player([&](dcon::player_id p) {
+                if (player::dead(state, p) || player::in_shortcut(state, p))
+                    return;
+                if (auto const r = rooms::room_of(state, p))
+                    ++in_room[size_t(r.index())];
+            });
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+                auto const p = w.slugcat_npc_get_player(n);
+                auto& nav = w.slugcat_npc_get_nav(n);
+                // (in a pack: one alone is on its own way already)
+                if (!w.slugcat_npc_get_leader(n) || player::dead(state, p) || player::in_shortcut(state, p) || nav.what == goal::rest
+                    || (state.tick + uint32_t(n.index()) * 97u) % room_crowd_every != 0)
+                    return;
+                uint32_t const count = in_room[size_t(rooms::room_of(state, p).index())];
+                if (count <= room_crowd_limit)
+                    return;
+                float const chance = 0.05f + 0.025f * float(count - room_crowd_limit - 1);
+                auto const c = player::creature_of(state, p);
+                if (w.creature_get_random(c).value() >= chance)
+                    return;
+                // (off the back it rides on; its members to the first of them)
+                if (auto const under = piggyback::carrier(state, p))
+                    piggyback::drop(state, under);
+                if (w.slugcat_npc_get_leader(n) == n)
+                    hand_over(state, n, [](dcon::slugcat_npc_id) { return false; });
+                w.slugcat_npc_set_leader(n, dcon::slugcat_npc_id{});
+                if (auto const target = w.slugcat_npc_get_target(n))
+                    nav.given_up = uint16_t(target.id.index() + 1);
+                w.slugcat_npc_set_target(n, dcon::room_id{});
+                migrate::cancel(state, c);
+                ++stats().split;
+            });
+        }
         // the packs whose slugcats are all Artificers (and those alone) take
         // the pyro jumps' ways
         {
@@ -2960,10 +3096,10 @@ namespace npc {
         char buf[760];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pyro jumps, %u piggybacks (%u off, %u joined), %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pyro jumps, %u piggybacks (%u off, %u joined), %u split up, %u catches, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
             s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.crowded.load(),
-            s.warps_made.load(), s.strays.load(), s.pyro_jumps.load(), s.piggybacks.load(), s.dismounts.load(), s.joined.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.warps_made.load(), s.strays.load(), s.pyro_jumps.load(), s.piggybacks.load(), s.dismounts.load(), s.joined.load(), s.split.load(), s.catches.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

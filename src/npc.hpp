@@ -90,6 +90,11 @@ namespace npc {
     // a shelter with more slugcats in it than this is crowded: packs on
     // their way there go somewhere else
     inline constexpr uint32_t crowd_limit = 10;
+    // a room with more slugcats than this: every `room_crowd_every` ticks
+    // each NPC there may leave its pack for a shelter of its own (5%, 2.5%
+    // more per slugcat past 6)
+    inline constexpr uint32_t room_crowd_limit = 5;
+    inline constexpr uint32_t room_crowd_every = 400;
     // This tick's input of an NPC slugcat out in `room` (its room's update)
     player::input_package think(sys::game_state& state, dcon::player_id p, world::room_view const& room);
 
@@ -178,6 +183,10 @@ namespace npc {
         std::atomic<uint32_t> piggybacks{0};
         std::atomic<uint32_t> dismounts{0};
         std::atomic<uint32_t> joined{0};
+        // left their packs in a crowded room
+        std::atomic<uint32_t> split{0};
+        // falls to a certain death it tried to catch a beam in
+        std::atomic<uint32_t> catches{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

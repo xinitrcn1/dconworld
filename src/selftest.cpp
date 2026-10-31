@@ -3035,6 +3035,107 @@ namespace selftest {
                 d + (" " + npc::describe(st, lead) + " / " + npc::describe(st, mate) + " / " + npc::describe(st, pup)));
         }
         {
+            // a slugcat that dies in a pipe comes back out where it went in;
+            // a corpse lying in a pipe's entrance is pushed out of it
+            auto [st_ptr, from, course, to] = course_world("npc_corpse");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0xC02Fu};
+            auto const p = npc::create(st, from, feet_at(5, 2), rng, {}, player::slugcat_name::white);
+            w.slugcat_npc_set_target(npc::of(st, p), to);
+            bool killed = false;
+            for (uint32_t t = 0; t < 2000 && !killed; ++t) {
+                tick_world(st, 1);
+                if (player::in_shortcut(st, p)) {
+                    player::die(st, p);
+                    killed = true;
+                }
+            }
+            tick_world(st, 2);
+            bool const out = killed && !player::in_shortcut(st, p);
+            auto const view = world::get_room_view(st, rooms::room_of(st, p));
+            bool by_pipe = false;
+            rw::ivec2 const at = world::room_view::get_tile_position(w.body_chunk_get_pos(player::body_chunk(st, p, 0)));
+            for (int32_t dx = -2; dx <= 2; ++dx)
+                for (int32_t dy = -2; dy <= 2; ++dy)
+                    by_pipe = by_pipe || (view.inside(at.x + dx, at.y + dy) && view.get_tile(at.x + dx, at.y + dy).t == world::terrain::shortcut_entrance);
+            // a dead lizard dropped into the course's left pipe entrance (3,6)
+            auto const liz = lizard::create(st, course, world::room_view::middle_of_tile(3, 6), lizard::breed::green);
+            creature::kill(st, liz, creature::tmpl::slugcat);
+            for (uint32_t i = 0; i < creature::chunk_count(st, liz); ++i)
+                w.body_chunk_set_pos(creature::chunk(st, liz, i), world::room_view::middle_of_tile(3, 6));
+            tick_world(st, 2);
+            rw::ivec2 const lt = world::room_view::get_tile_position(creature::main_pos(st, liz));
+            bool const pushed = world::get_room_view(st, course).get_tile(lt).t != world::terrain::shortcut_entrance && lt.x >= 4;
+            char d[120];
+            std::snprintf(d, sizeof(d), " killed_in_pipe=%d out=%d by_pipe=%d corpse_pushed_out=%d (%d,%d)", int(killed), int(out), int(by_pipe), int(pushed), lt.x, lt.y);
+            r.check("pipes spit out corpses", killed && out && by_pipe && pushed, d);
+        }
+        {
+            // a room with more than five slugcats: now and then one of them
+            // leaves its pack for a shelter of its own
+            auto [st_ptr, from, course, to] = course_world("npc_split");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0x5B17u};
+            auto const lead = npc::create(st, from, feet_at(4, 2), rng, {}, player::slugcat_name::white);
+            auto const ln = npc::of(st, lead);
+            w.slugcat_npc_set_leader(ln, ln);
+            std::vector<dcon::player_id> pack{lead};
+            for (int32_t i = 0; i < 8; ++i)
+                pack.push_back(npc::create(st, from, feet_at(5 + i % 8, 2), rng, ln, player::slugcat_name::white));
+            for (auto const q : pack)
+                w.slugcat_npc_get_nav(npc::of(st, q)).goal_timer = -100000;
+            uint32_t const split = npc::stats().split;
+            tick_world(st, 4000);
+            uint32_t alone = 0;
+            for (auto const q : pack)
+                alone += w.slugcat_npc_get_leader(npc::of(st, q)) ? 0 : 1;
+            char d[96];
+            std::snprintf(d, sizeof(d), " split=%u alone=%u of %zu", npc::stats().split - split, alone, pack.size());
+            r.check("a crowded room splits packs", npc::stats().split > split && alone > 0 && alone < pack.size(), d);
+        }
+        {
+            // falling to a certain death (a pit open at the room's bottom) it
+            // goes for the pole beside its fall and holds on; with no pole it
+            // dies; falling onto the ground it doesn't grab the pole by it
+            auto const pit_room = [&](sys::game_state& st, dcon::region_id rgn, bool pole) {
+                auto rows = box(30, 30, [&](int32_t x, int32_t y) {
+                    if (pole && (x == 16 || x == 7) && y >= 4 && y <= 14)
+                        return '|';
+                    return y <= 1 && (x < 12 || x > 19) ? '#' : ' ';
+                });
+                // (the pit open at the bottom)
+                for (int32_t x = 12; x <= 19; ++x)
+                    rows[rows.size() - 1][size_t(x)] = ' ';
+                return make_room(st, rgn, rows);
+            };
+            // (whether it went for a beam, whether it died)
+            auto const drop = [&](bool pole, int32_t x, bool& tried, bool& died) {
+                auto [st_ptr, rgn] = npc_world(pole ? "npc_fall_pole" : "npc_fall");
+                auto& st = *st_ptr;
+                auto& w = st.world;
+                auto const room = pit_room(st, rgn, pole);
+                simulation::populate(st);
+                rw::rng rng{0xFA11u};
+                auto const p = npc::create(st, room, feet_at(x, 24), rng, {}, player::slugcat_name::white);
+                w.slugcat_npc_get_nav(npc::of(st, p)).goal_timer = -100000;
+                uint32_t const before = npc::stats().catches;
+                for (uint32_t t = 0; t < 300 && !player::dead(st, p); ++t)
+                    tick_world(st, 1);
+                tried = npc::stats().catches > before;
+                died = player::dead(st, p);
+            };
+            bool tried = false, died = false, no_pole_tried = false, no_pole_died = false, floor_tried = false, floor_died = false;
+            drop(true, 14, tried, died);
+            drop(false, 14, no_pole_tried, no_pole_died);
+            drop(true, 5, floor_tried, floor_died);
+            char d[200];
+            std::snprintf(d, sizeof(d), " pit+pole: tried=%d died=%d; pit: tried=%d died=%d; floor+pole: tried=%d died=%d", int(tried), int(died), int(no_pole_tried),
+                int(no_pole_died), int(floor_tried), int(floor_died));
+            r.check("NPC catches a beam falling to its death", tried && !died && no_pole_tried && no_pole_died && !floor_tried && !floor_died, d);
+        }
+        {
             // a shelter with more than ten slugcats in it is crowded: one on
             // its way there goes to another one
             auto [st_ptr, from, course, to] = course_world("npc_crowd");

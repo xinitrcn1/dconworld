@@ -121,6 +121,8 @@ namespace npc {
         uint8_t warp_phase = 0;
         // its pack is all Artificers (or it is alone): pyro jumps' ways
         uint8_t pyro_pack = 1;
+        // falling to a certain death: going for a beam (npc.cpp catch_fall)
+        uint8_t catching = 0;
         int32_t warp_timer = 0;
         dcon::warp_point_id own_warp;
         // A spear step (only where no other way on is known): a spear thrown
