@@ -117,6 +117,8 @@ namespace migrate {
             uint8_t k = 0;
             w.room_for_each_warp_point_location(room, [&](dcon::warp_point_location_id l) {
                 auto const wp = w.warp_point_location_get_point(l);
+                if (warps::is_dynamic(state, wp))
+                    return;
                 auto const to = warps::leads_away(state, wp) ? warps::where_to(state, wp).room : dcon::room_id{};
                 if (to && to != room && k < 0x0F)
                     f(to, uint8_t(warp_hop + k));

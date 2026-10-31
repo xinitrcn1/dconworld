@@ -80,7 +80,43 @@ the tools for tracing them, and what is known not to work yet.
   player's slugcat is among them; without it the hover lasts the
   sequence's second half. Each warp keeps its own pull
   (`game_state::warp_pulls`), so warps in different rooms go at once. A
-  tear out of reach from the ground carries it after 400 ticks of waiting.
+  tear out of reach from the ground: after 400 ticks of waiting it asks
+  the warp to take it (`warps::carry`, every tick from then on).
+- **Warps for every creature** (not vanilla): `warps::carry` is a
+  request. A ready warp sets off (the whole sequence, the suck in and its
+  timings) and carries the creature and what it holds, wherever it is in
+  the room; a warp opening, cooling down after a use or closed carries
+  nothing, the creature waits. Something waiting 3 s by a warp that cools
+  down opens it again (`warp_point::wait_ticks`; only what asks to go
+  through counts, so a slugcat that just came out of it standing about
+  doesn't send it back). An activated warp takes everything in its grab,
+  wanted or not.
+- **Strays.** An NPC carried by a warp it didn't mean to take (not its
+  own dynamic warp, not the next hop of its trip) without its leader
+  leaves its pack (no pack: alone, a new target from where it came out;
+  `npc::warped`, "strays"). A leader carried off that way leaves its
+  members to the first of them, who leads them on to the old target.
+- **Crowded shelters.** A shelter with more than 10 slugcats in it
+  (`npc::crowd_limit`, counted serially each tick) is crowded: a pack (or
+  one alone) on its way there and not in it yet gives it up and picks
+  another; picking skips crowded shelters while there is another
+  ("crowded").
+- **The Watcher's dynamic warps.** A Watcher leading (or alone) that
+  knows no walkable way to any shelter, before guessing, makes a warp of
+  its own: it stands while its pack in the room gathers round (up to 400
+  ticks), holds the ability crouched until the tear opens, then stands in
+  it until it sets off. The warp (`warps::spawn_dynamic`) leads to a
+  DynamicWarpTarget of another region picked when it opens, stays 30 s and
+  is set off by anything that comes close, so members that didn't make it
+  (or were elsewhere in the room) follow through it while it lasts
+  (`follow_warp`); they stay in the pack. From the other side the leader
+  picks a shelter as usual. One warp at a time (`dynamic_warp_cooldown`,
+  30 s; 30 s more after a failed try, e.g. on a pole). Not under
+  `--npc-guess`. Tests: "NPC Watcher takes its pack through its own warp"
+  (with a stray from another pack pulled along).
+- **A Watcher in another's pack** in a region with no warps (none placed,
+  no dynamic one open) leaves the pack, to make its own way. A Watcher
+  leading keeps its pack.
 - **Into openings.** A jump may end in a pipe's mouth (in the air in
   front of its entrance: pushing on, it goes in) or at a passage's end (a
   crawlway one tile high it goes into sideways, a corridor it goes up into
@@ -245,9 +281,9 @@ the tools for tracing them, and what is known not to work yet.
 An NPC is an ordinary `player` (Player.cs' state) with an ordinary slugcat
 `creature`, so everything else treats it as a slugcat: lizards hunt it, the
 rot eats it, the rain kills it, the gates cycle for it. The warps never
-start their screen-wide sequence for an NPC Watcher (`warps.cpp`'s
-`player_usable` skips NPCs); an NPC is carried by `warps::carry` like a
-creature. The HUD's meters and the ripple layer look at the first
+start their screen-wide sequence for an NPC (only when the player's
+slugcat is in the pull); an NPC goes through a warp's sequence as the
+Watcher does, or asks to be carried (`warps::carry`) like a creature. The HUD's meters and the ripple layer look at the first
 controlled player.
 
 `think` runs inside the room's parallel update and only reads the room and
@@ -566,6 +602,21 @@ on; `--no-friendly-fire` for story mode's way, through them). NPCs never
 take a slugcat for a threat, so they don't throw at each other. Test:
 "slugcats collide, friendly fire".
 
+## The Watcher's ability, dynamic warps
+
+Not vanilla's way of making them: the Watcher (player or NPC) holding the
+ability (`spec`) crouched on the ground, down held, for 80 ticks opens a
+dynamic warp where it is (`player.cpp`'s `dynamic_warp`; ripple rings while
+it is held). With down held the ability doesn't toggle the camouflage. A
+dynamic warp is a `warp_point` with `dynamic` set and its own
+`warp_placed`; its destination (a DynamicWarpTarget of another region) is
+fixed when it opens, so whatever follows comes out in the same place. It
+fades in, any slugcat or creature close by sets it off (as the Watcher
+does a placed warp), and after 30 s (`life`) it closes, fades out and is
+unlinked from the room; `game_state::free_warps` keeps it for the next
+one. Tests: "dynamic warp: anything close, closes after 30 s", "Watcher
+makes a dynamic warp", "warp cooling down: a creature waits, forced open".
+
 ## Gates
 
 A failsafe, not vanilla: an airlock that stands open in the middle
@@ -642,7 +693,12 @@ Things learnt on the way, mostly about the port's Player.cs:
   `ShelterSpawnPoint` objects.
 - The turning back counts rooms, not distance: a long room counts as much
   as a short one.
-- Dynamic warps are planned with where they led at world load.
+- Dynamic warps are planned with where they led at world load. The
+  Watcher's own dynamic warps aren't in the route tables (`warps::point`
+  and the tables skip them); the NPCs only use them to follow their
+  leader.
+- The dynamic warp has no exit tear on the other side (the slugcats come
+  out at the DynamicWarpTarget without the hover).
 - Packs: members re-plan on their own after fleeing; the leader only waits
   for members in its room.
 - The trip test runs one slugcat; the rest of the world with NPCs is only

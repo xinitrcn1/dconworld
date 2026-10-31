@@ -13,6 +13,7 @@
 #include "player_graphics.hpp"
 #include "tube_worm.hpp"
 #include "dens.hpp"
+#include "npc.hpp"
 
 namespace warps {
     using rw::vec2;
@@ -25,6 +26,9 @@ namespace warps {
         // WarpPoint.successfullWarpCooldownFrames
         constexpr float cooldown_frames = 1200.f;
         constexpr float ripple_cooldown_frames = 10.f;
+        // not vanilla: something waiting by a warp that cools down this long
+        // opens it again
+        constexpr int32_t force_open_ticks = 3 * 40;
 
         float trigger_activation_time(world::warp_effect const& e) { return 50.f + float(e.trigger_duration); }
         float activate_animation_time(world::warp_effect const& e) { return 50.f + float(e.active_duration); }
@@ -75,9 +79,8 @@ namespace warps {
         // WarpPoint.ChooseDynamicWarpTarget, simplified: any good
         // DynamicWarpTarget of another region the ripple level allows, picked
         // with the warp's seed and the number of dynamic warps taken
-        destination dynamic_destination(sys::game_state const& state, dcon::warp_point_id wp) {
+        destination pick_dynamic(sys::game_state const& state, dcon::region_id here, uint32_t seed) {
             auto const& w = state.world;
-            auto const here = region_of(state, room_of(state, wp));
             std::vector<dcon::warp_target_id> options;
             w.for_each_warp_target([&](dcon::warp_target_id t) {
                 auto const room = w.warp_target_get_room_from_warp_target_location(t);
@@ -90,12 +93,15 @@ namespace warps {
             });
             if (options.empty())
                 return {};
-            uint32_t h = w.warp_placed_get_seed(placed_of(state, wp)) ^ (state.dynamic_warps_taken * 0x9E3779B1u);
+            uint32_t h = seed ^ (state.dynamic_warps_taken * 0x9E3779B1u);
             h ^= h >> 15;
             h *= 0x2C1B3C6Du;
             h ^= h >> 12;
             auto const t = options[h % options.size()];
             return destination{w.warp_target_get_room_from_warp_target_location(t), w.warp_target_get_pos(t)};
+        }
+        destination dynamic_destination(sys::game_state const& state, dcon::warp_point_id wp) {
+            return pick_dynamic(state, region_of(state, room_of(state, wp)), state.world.warp_placed_get_seed(placed_of(state, wp)));
         }
 
         destination destination_of(sys::game_state const& state, dcon::warp_point_id wp) {
@@ -137,6 +143,16 @@ namespace warps {
         void change_state(sys::game_state& state, dcon::warp_point_id wp, warp_state next);
         void release(sys::game_state& state, sys::game_state::warp_pull& pull);
 
+        // the pull holds `o` (weightless) and carries it through
+        void hold_object(sys::game_state& state, sys::game_state::warp_pull& pull, dcon::physical_object_id o) {
+            auto& w = state.world;
+            if (std::find(pull.held.begin(), pull.held.end(), o) != pull.held.end())
+                return;
+            pull.held.push_back(o);
+            pull.gravity.push_back(w.physical_object_get_g(o));
+            w.physical_object_set_g(o, 0.f);
+        }
+
         // WarpPoint.SuckInCreatures: zero gravity around the warp, the
         // Watcher drawn into its middle, everything else spiralling in
         void suck_in(sys::game_state& state, dcon::warp_point_id wp) {
@@ -150,13 +166,7 @@ namespace warps {
             vec2 const pos = pos_of(state, wp);
             vec2 const centre{pos.x, pos.y + 30.f};
             auto const room = room_of(state, wp);
-            auto const hold = [&](dcon::physical_object_id o) {
-                if (std::find(pull.held.begin(), pull.held.end(), o) != pull.held.end())
-                    return;
-                pull.held.push_back(o);
-                pull.gravity.push_back(w.physical_object_get_g(o));
-                w.physical_object_set_g(o, 0.f);
-            };
+            auto const hold = [&](dcon::physical_object_id o) { hold_object(state, pull, o); };
             // the slugcats close enough (the one that set it off, those in
             // its grab) float into the middle; one further off in the room
             // stays, neither pulled nor carried
@@ -310,6 +320,7 @@ namespace warps {
                         arrivals.push_back(pl);
                 // a creature pulled along: in its new room (its AI, its trip)
                 if (oc && !is_player && w.creature_get_away(oc) == 0) {
+                    ++dens::stats().warp_carried;
                     dens::changed_rooms(state, oc, src, dest.room, true);
                     creature::placed_in_room(state, oc, dest.room, at);
                 }
@@ -329,6 +340,8 @@ namespace warps {
             });
             if (pull.camera && seq.active && seq.origin == wp)
                 seq.transferred = true;
+            // (the NPC slugcats that came along: their packs)
+            npc::warped(state, arrivals, w.warp_point_get_dynamic(wp) ? w.warp_point_get_owner(wp) : dcon::player_id{});
             bool const camera = pull.camera;
             release(state, pull);
             if (exit) {
@@ -511,17 +524,30 @@ namespace warps {
                 });
             }
 
+            // a dynamic warp closes after a while (not while it carries)
+            bool const dynamic = w.warp_point_get_dynamic(wp) != 0;
+            if (dynamic && w.warp_point_get_life(wp) > 0 && --w.warp_point_get_life(wp) == 0) {
+                auto const st = w.warp_point_get_state(wp);
+                if (st == warp_state::ready || st == warp_state::cool_down)
+                    change_state(state, wp, warp_state::closed);
+                else
+                    w.warp_point_set_life(wp, 1);
+            }
+            bool const asked = w.warp_point_get_asked(wp) != 0;
+            w.warp_point_set_asked(wp, 0);
+
             switch (w.warp_point_get_state(wp)) {
             case warp_state::ready: {
                 // (the player's screen wide sequence elsewhere doesn't hold an
                 // NPC's warp up)
                 if (!transportable(state, wp))
                     break;
-                // the closest slugcat that may warp (the Watcher, an NPC)
+                // the closest slugcat that may warp (the Watcher, an NPC; any
+                // slugcat for a dynamic warp)
                 dcon::player_id who;
                 float best = 0.f;
                 w.for_each_player([&](dcon::player_id p) {
-                    if (!player_usable(state, p, room.id) || !may_warp(state, p) || w.player_get_warp_point_cooldown(p) > 0
+                    if (!player_usable(state, p, room.id) || (!may_warp(state, p) && !dynamic) || w.player_get_warp_point_cooldown(p) > 0
                         || (controlled(state, p) && state.warp.active))
                         return;
                     float const d = rw::distance(pos, main_chunk(state, p));
@@ -559,14 +585,28 @@ namespace warps {
                         trigger += num3;
                     }
                 }
-                if (!who || best >= pull_radius) {
+                // not vanilla: a dynamic warp is set off by anything that
+                // comes close, any warp by a creature waiting to go through
+                // (warps::carry), as by a slugcat standing still in it
+                bool creature_near = asked;
+                if (dynamic)
+                    rooms::for_each_creature(state, room.id, [&](dcon::creature_id c) {
+                        if (!creature_near && !creature::is_slugcat(w, c) && !creature::dead(state, c) && w.creature_get_away(c) == 0
+                            && custom::dist_less(pos, creature::main_pos(state, c), pull_radius))
+                            creature_near = true;
+                    });
+                if (creature_near) {
+                    w.warp_point_set_open_triggered(wp, true);
+                    if (openness(state, wp, 1.f) > 0.5f && (!who || best >= pull_radius))
+                        trigger += 4.f;
+                } else if (!who || best >= pull_radius) {
                     if (!who)
                         w.warp_point_set_open_triggered(wp, false);
                     trigger = trigger > 0.f ? trigger - 2.f : 0.f;
                 }
                 w.warp_point_set_trigger_time(wp, mathf::max(0.f, trigger));
-                if (who && trigger >= needed) {
-                    w.warp_point_set_triggered_by(wp, who);
+                if ((who || creature_near) && trigger >= needed) {
+                    w.warp_point_set_triggered_by(wp, who && best < pull_radius ? who : dcon::player_id{});
                     change_state(state, wp, warp_state::enter);
                 }
                 break;
@@ -623,8 +663,15 @@ namespace warps {
                 w.warp_point_set_open_triggered(wp, false);
                 float const t = w.warp_point_get_cooldown_timer(wp) - rate;
                 w.warp_point_set_cooldown_timer(wp, t);
-                if (t <= 0.f)
+                // not vanilla: a creature standing by it a while waiting to
+                // go through (warps::carry; not one that just came out of it
+                // and stays about) opens it again
+                int32_t& wt = w.warp_point_get_wait_ticks(wp);
+                wt = asked ? wt + 1 : 0;
+                if (t <= 0.f || wt >= force_open_ticks) {
+                    wt = 0;
                     change_state(state, wp, warp_state::ready);
+                }
                 break;
             }
             case warp_state::closed:
@@ -648,8 +695,9 @@ namespace warps {
         dcon::warp_point_id found;
         uint32_t i = 0;
         state.world.room_for_each_warp_point_location(room, [&](dcon::warp_point_location_id l) {
-            if (i++ == k)
-                found = state.world.warp_point_location_get_point(l);
+            auto const wp = state.world.warp_point_location_get_point(l);
+            if (!is_dynamic(state, wp) && i++ == k)
+                found = wp;
         });
         return found;
     }
@@ -667,18 +715,88 @@ namespace warps {
             auto const d = destination_of(st, wp);
             if (!d.room || d.room == room)
                 return;
-            // what it holds comes along, a little behind it
+            w.warp_point_set_asked(wp, 1);
+            auto const pl = creature::player_of(st, c);
+            // ready: it sets off (its whole sequence, as for the Watcher);
+            // opening again, cooling down, closed: it waits
+            if (w.warp_point_get_state(wp) == warp_state::ready && transportable(st, wp)) {
+                w.warp_point_set_triggered_by(wp, pl);
+                change_state(st, wp, warp_state::enter);
+            }
+            if (w.warp_point_get_state(wp) != warp_state::enter)
+                return;
+            // (out of its pull's reach: held all the same, with what it holds)
+            auto& pull = pull_of(st, wp);
+            hold_object(st, pull, creature::body(st, c));
+            if (pl)
+                w.player_set_warp_held(pl, 1);
             for (uint32_t g = 0; g < 2; ++g)
                 if (auto const o = creature::grasped_object(w, c, g); o && w.physical_object_get_room_from_object_location(o) == room)
-                    place_object(st, o, d.room, d.pos + vec2{0.f, -10.f});
-            place_object(st, creature::body(st, c), d.room, d.pos);
-            for (uint32_t g = 0; g < 2; ++g)
-                if (auto const h = creature::grasped(w, c, g))
-                    creature::placed_in_room(st, h, d.room, d.pos);
-            ++dens::stats().warp_carried;
-            dens::changed_rooms(st, c, room, d.room, true);
-            creature::placed_in_room(st, c, d.room, d.pos);
+                    hold_object(st, pull, o);
         });
+    }
+
+    bool is_dynamic(sys::game_state const& state, dcon::warp_point_id wp) noexcept {
+        return state.world.warp_point_get_dynamic(wp) != 0;
+    }
+
+    dcon::warp_point_id spawn_dynamic(sys::game_state& state, dcon::room_id room, vec2 pos, dcon::player_id owner) {
+        auto& w = state.world;
+        spawn_room(state, room);
+        uint32_t const seed = uint32_t(room.index()) * 0x9E3779B1u ^ state.tick * 0x85EBCA6Bu ^ uint32_t(owner.index() + 1) * 0xC2B2AE35u;
+        auto const d = pick_dynamic(state, region_of(state, room), seed);
+        if (!d.room)
+            return {};
+        dcon::warp_point_id wp;
+        if (!state.free_warps.empty()) {
+            wp = state.free_warps.back();
+            state.free_warps.pop_back();
+        } else {
+            wp = w.create_warp_point();
+            w.warp_point_set_placed(wp, w.create_warp_placed());
+        }
+        auto const placed = placed_of(state, wp);
+        // where it leads is picked now: whoever follows comes out there too
+        w.warp_placed_set_pos(placed, pos);
+        w.warp_placed_set_dest_room(placed, w.room_get_name(d.room));
+        w.warp_placed_set_dest_pos(placed, d.pos);
+        w.warp_placed_set_effect(placed, world::warp_effect{});
+        w.warp_placed_set_one_way(placed, false);
+        w.warp_placed_set_one_way_entrance(placed, false);
+        w.warp_placed_set_ripple_warp(placed, false);
+        w.warp_placed_set_limited_use(placed, false);
+        w.warp_placed_set_uses(placed, 0);
+        w.warp_placed_set_any_slugcat(placed, true);
+        w.warp_placed_set_seed(placed, seed);
+        w.warp_point_set_room_from_warp_point_location(wp, room);
+        w.warp_point_set_state(wp, warp_state::ready);
+        w.warp_point_set_trigger_time(wp, 0.f);
+        w.warp_point_set_activation_time(wp, 0);
+        w.warp_point_set_open(wp, 0.f);
+        w.warp_point_set_last_open(wp, 0.f);
+        w.warp_point_set_fade(wp, 0.f);
+        w.warp_point_set_last_fade(wp, 0.f);
+        w.warp_point_set_open_triggered(wp, true);
+        w.warp_point_set_closes_early(wp, false);
+        w.warp_point_set_cooldown_timer(wp, 0.f);
+        w.warp_point_set_uses(wp, 0);
+        w.warp_point_set_shockwave_timer(wp, 0.f);
+        w.warp_point_set_shockwave_limit(wp, 2.f);
+        w.warp_point_set_second_shockwave(wp, false);
+        w.warp_point_set_triggered_by(wp, dcon::player_id{});
+        w.warp_point_set_sound_mode(wp, 0);
+        w.warp_point_set_sound_volume(wp, 0.f);
+        w.warp_point_set_hint_sound(wp, 0);
+        w.warp_point_set_hint_volume(wp, 0.f);
+        w.warp_point_set_dynamic(wp, 1);
+        w.warp_point_set_life(wp, dynamic_life);
+        w.warp_point_set_owner(wp, owner);
+        w.warp_point_set_wait_ticks(wp, 0);
+        w.warp_point_set_asked(wp, 0);
+        pull_of(state, wp) = sys::game_state::warp_pull{};
+        ++state.dynamic_warps_taken;
+        spawn_ripple_ring(state, room, pos, 200.f, 1.f, 1.f);
+        return wp;
     }
 
     bool is_watcher(sys::game_state const& state, dcon::player_id p) noexcept {
@@ -737,9 +855,20 @@ namespace warps {
 
     void update_room(sys::game_state& state, room_view const& room) {
         auto& w = state.world;
+        std::vector<dcon::warp_point_id> gone;
         w.room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
-            update_point(state, room, w.warp_point_location_get_point(l));
+            auto const wp = w.warp_point_location_get_point(l);
+            update_point(state, room, wp);
+            // a dynamic warp closed and faded away: gone from the room
+            if (is_dynamic(state, wp) && w.warp_point_get_state(wp) == warp_state::closed && w.warp_point_get_fade(wp) <= 0.f)
+                gone.push_back(wp);
         });
+        for (auto const wp : gone) {
+            w.warp_point_set_room_from_warp_point_location(wp, dcon::room_id{});
+            w.warp_point_set_dynamic(wp, 0);
+            pull_of(state, wp) = sys::game_state::warp_pull{};
+            state.free_warps.push_back(wp);
+        }
     }
 
     void update_sequence(sys::game_state& state) {

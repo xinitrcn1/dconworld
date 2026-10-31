@@ -259,6 +259,8 @@ namespace player {
     X(eaten) \
     X(warp_point_cooldown) \
     X(warp_protection) \
+    X(dynamic_warp_timer) \
+    X(dynamic_warp_cooldown) \
     X(is_camo) \
     X(camo_progress) \
     X(last_camo_progress) \
@@ -812,6 +814,8 @@ namespace player {
 
 namespace player {
     namespace {
+        constexpr int32_t dynamic_warp_hold = 80;
+
         // Player.camoLimit: how long the camouflage holds at this ripple level
         float camo_limit(float ripple) {
             if (ripple >= 5.f)
@@ -829,7 +833,7 @@ namespace player {
             auto const a = p.animation();
             bool const free_anim = a != animation_index::belly_slide && a != animation_index::crawl_turn && a != animation_index::corridor_turn
                 && a != animation_index::flip && a != animation_index::roll && a != animation_index::grappling_swing && a != animation_index::rocket_jump;
-            return x.in(0).spec && x.consious() && p.camo_charge() < camo_limit(x.state.ripple_level) && p.cancel_camo_cooldown() <= 0
+            return x.in(0).spec && x.in(0).y >= 0 && x.consious() && p.camo_charge() < camo_limit(x.state.ripple_level) && p.cancel_camo_cooldown() <= 0
                 && !p.camo_inputs_need_reset() && free_anim && (x.state.ripple_level < 5.f || !x.state.warp.active);
         }
 
@@ -941,6 +945,35 @@ namespace player {
             }
         }
 
+        // Not vanilla's way of making one: the ability held while crouched
+        // on the ground (down held: not the camouflage) for 2 s opens a
+        // dynamic warp where the Watcher is (warps.hpp), one at a time
+        void dynamic_warp(ctx& x) {
+            pref& p = x.p;
+            if (p.dynamic_warp_cooldown() > 0)
+                --p.dynamic_warp_cooldown();
+            bool const hold = x.in(0).spec && x.in(0).y < 0 && x.consious() && p.dynamic_warp_cooldown() <= 0
+                && (p.can_jump() > 0 || p.body_mode() == body_mode_index::crawl) && !p.warp_held();
+            if (!hold) {
+                p.dynamic_warp_timer() = 0;
+                return;
+            }
+            int32_t const t = ++p.dynamic_warp_timer();
+            if (t % 20 == 0)
+                warps::spawn_ripple_ring(x.state, x.room.id, x.pos(0), 60.f + 2.f * float(t), 0.4f, 1.5f);
+            if (t < dynamic_warp_hold)
+                return;
+            p.dynamic_warp_timer() = 0;
+            p.dynamic_warp_cooldown() = warps::dynamic_life;
+            auto const room = x.room.id;
+            auto const owner = p.id;
+            vec2 const at = x.pos(0);
+            x.state.defer(room, [room, owner, at](sys::game_state& st) {
+                if (!warps::spawn_dynamic(st, room, at, owner))
+                    st.world.player_set_dynamic_warp_cooldown(owner, 0);
+            });
+        }
+
         // Player.WatcherUpdate / CamoUpdate: holding the ability key a moment
         // toggles the camouflage (and lifts the Watcher off the ground from
         // ripple level 3), each hold sends ripples out; the camouflage wears
@@ -957,6 +990,7 @@ namespace player {
                 p.camo_inputs_need_reset() = 0;
             if (p.warp_protection() > 0)
                 --p.warp_protection();
+            dynamic_warp(x);
             bool const held = ability_held(x);
             // the warp's pull owns the body's gravity while it holds it
             if (!p.warp_held() && (ripple >= 3.f || p.levitation_needs_cooldown()))

@@ -43,9 +43,22 @@ namespace warps {
     // it can be taken (not closed, not a one way warp's exit)
     bool leads_away(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
     rw::vec2 position(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
-    // the warp carries `c` (in its middle) and what it holds to where it
-    // leads: a transaction of the warp's room
+    // `c` waits to go through the warp: one that is ready sets off (its
+    // whole sequence) and carries it and what it holds to where it leads,
+    // wherever in the room it is; one opening, cooling down or closed
+    // carries nothing (cooling down, 3 s of something waiting by it opens
+    // it again). A transaction of the warp's room
     void carry(sys::game_state& state, dcon::creature_id c, dcon::warp_point_id wp);
+
+    // The Watcher's dynamic warps (not vanilla's way of making them: its
+    // ability held while crouched, player.cpp): a tear at `pos` open for
+    // 30 s, leading to a DynamicWarpTarget of another region picked as it
+    // opens (whoever follows comes out in the same place), set off by
+    // anything that comes close. Serial; none when there is nowhere to go.
+    // Not among a room's warps by number (`point`, the route tables)
+    inline constexpr int32_t dynamic_life = 30 * 40;
+    dcon::warp_point_id spawn_dynamic(sys::game_state& state, dcon::room_id room, rw::vec2 pos, dcon::player_id owner);
+    bool is_dynamic(sys::game_state const& state, dcon::warp_point_id wp) noexcept;
 
     // the slugcat can use warps (only the Watcher)
     bool is_watcher(sys::game_state const& state, dcon::player_id p) noexcept;

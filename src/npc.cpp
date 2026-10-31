@@ -37,6 +37,17 @@ namespace npc {
     }
 
     namespace {
+        // the slugcats in each shelter (alive, out of the pipes), by room
+        // index: counted in update_world, read while the rooms think
+        std::vector<uint8_t>& crowds() {
+            static std::vector<uint8_t> v;
+            return v;
+        }
+        bool crowded(dcon::room_id r) {
+            auto const& v = crowds();
+            return r && size_t(r.index()) < v.size() && v[size_t(r.index())] > crowd_limit;
+        }
+
         // a room's goals: its exits by node, its warps after them
         constexpr uint32_t warp_bit = routes::max_exits;
         // a search state: a room (its index) and how the slugcat got there,
@@ -1276,6 +1287,9 @@ namespace npc {
                 if (!closest)
                     std::erase_if(options, [&](dcon::room_id r) { return r == home; });
                 nav.guessed = options.empty() ? 1 : 0;
+                // (crowded shelters: another one, if there is one)
+                if (std::any_of(options.begin(), options.end(), [](dcon::room_id r) { return !crowded(r); }))
+                    std::erase_if(options, [](dcon::room_id r) { return crowded(r); });
                 if (options.empty() && !closest)
                     for (auto const st : sp->order)
                         if (sp->via[st] >= migrate::warp_hop) {
@@ -1286,6 +1300,10 @@ namespace npc {
                             ++stats().diverted;
                             return set_trip(state, c, *sp, beyond);
                         }
+                // (the Watcher: a warp of its own, for its pack too, rather
+                // than a guess)
+                if (options.empty() && !closest && start_warp())
+                    return true;
                 if (options.empty()) {
                     sp = &explore(state, room.id, guess_start(), true, &nav);
                     options = shelters_of(state, *sp, room.id);
@@ -1304,6 +1322,8 @@ namespace npc {
                 auto const& s = *sp;
                 if (options.size() > 1 && nav.given_up != 0)
                     std::erase_if(options, [&](dcon::room_id r) { return uint32_t(r.index()) + 1u == nav.given_up; });
+                if (std::any_of(options.begin(), options.end(), [](dcon::room_id r) { return !crowded(r); }))
+                    std::erase_if(options, [](dcon::room_id r) { return crowded(r); });
                 if (options.empty())
                     return false;
                 auto const t = closest ? options.front() : options[size_t(rng.range(0, int32_t(options.size())))];
@@ -1462,6 +1482,11 @@ namespace npc {
                     nav.stuck = 0;
                     return input(0, 0);
                 }
+                // the Watcher making a warp, its pack following it through
+                if (nav.warp_phase != 0)
+                    return make_warp();
+                if (auto const in = follow_warp())
+                    return *in;
                 auto const target = w().slugcat_npc_get_target(n);
                 // (through a warp it made for: a shelter from here)
                 if (target == room.id && !w().room_get_is_shelter(room.id) && leads()) {
@@ -1522,6 +1547,8 @@ namespace npc {
                             ++stats().no_way;
                         return input(0, 0);
                     }
+                    if (nav.warp_phase != 0)
+                        return make_warp();
                 }
                 if (!migrate::want_to(state, c) && !plan()) {
                     ++stats().no_way;
@@ -1545,10 +1572,10 @@ namespace npc {
                         // (still: any input holds the warp back)
                         if (custom::dist_less(pos(state, p, 0), tear, warps::pull_radius - 5.f) || at == goal) {
                             nav.stuck = 0;
-                            if (++nav.warp_wait > warp_patience) {
-                                nav.warp_wait = 0;
+                            // (asking every tick from then on: one cooling
+                            // down opens again for it, warps.hpp)
+                            if (++nav.warp_wait > warp_patience)
                                 warps::carry(state, c, wp);
-                            }
                             return input(0, 0);
                         }
                     }
@@ -1595,6 +1622,85 @@ namespace npc {
                     if (auto const t = spear_lying_here())
                         return go(*t, false);
                 return go(goal, pipe);
+            }
+
+            // The Watcher's dynamic warp (warps.hpp), when it knows no way on:
+            // its pack gathers round it, the ability held until the tear
+            // opens, then it stands in it until it sets off and carries them
+            // all to another region (a new target from there)
+            bool start_warp() {
+                if (!warps::is_watcher(state, p) || !leads() || w().player_get_dynamic_warp_cooldown(p) > 0 || w().room_get_is_gate(room.id) || debug().guess)
+                    return false;
+                nav.warp_phase = 1;
+                nav.warp_timer = 0;
+                nav.own_warp = {};
+                w().slugcat_npc_set_target(n, dcon::room_id{});
+                migrate::cancel(state, c);
+                return true;
+            }
+
+            player::input_package make_warp() {
+                nav.stuck = 0;
+                ++nav.warp_timer;
+                if (nav.warp_phase == 1) {
+                    bool behind = false;
+                    for_each_mate([&](dcon::player_id o, dcon::slugcat_npc_id) {
+                        behind = behind || player::in_shortcut(state, o) || !custom::dist_less(pos(state, o, 1), pos(state, p, 1), 80.f);
+                    });
+                    if (behind && nav.warp_timer < 400)
+                        return input(0, 0);
+                    nav.warp_phase = 2;
+                    nav.warp_timer = 0;
+                }
+                if (nav.warp_phase == 2) {
+                    w().room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
+                        auto const wp = w().warp_point_location_get_point(l);
+                        if (warps::is_dynamic(state, wp) && w().warp_point_get_owner(wp) == p)
+                            nav.own_warp = wp;
+                    });
+                    if (!nav.own_warp) {
+                        // (it can't here: on a pole, nowhere to go; not again a while)
+                        if (nav.warp_timer > 240) {
+                            nav.warp_phase = 0;
+                            w().player_set_dynamic_warp_cooldown(p, warps::dynamic_life);
+                            return input(0, 0);
+                        }
+                        auto in = player::make_input(0.f, -1.f, false, false, false);
+                        in.spec = true;
+                        return in;
+                    }
+                    nav.warp_phase = 3;
+                    nav.warp_timer = 0;
+                    ++stats().warps_made;
+                }
+                // still in it until it sets off (gone: a new start)
+                if (!warps::is_dynamic(state, nav.own_warp) || w().warp_point_get_room_from_warp_point_location(nav.own_warp) != room.id
+                    || w().warp_point_get_state(nav.own_warp) == world::warp_state::closed)
+                    nav.warp_phase = 0;
+                return input(0, 0);
+            }
+
+            // a member: round its leader making a warp, into the leader's
+            // warp once the leader went through (it stays open a while)
+            std::optional<player::input_package> follow_warp() {
+                auto const l = w().slugcat_npc_get_leader(n);
+                if (leads() || !w().slugcat_npc_is_valid(l))
+                    return std::nullopt;
+                auto const lp = w().slugcat_npc_get_player(l);
+                auto const& ln = w().slugcat_npc_get_nav(l);
+                auto const wp = ln.own_warp;
+                vec2 to;
+                if (ln.warp_phase != 0 && rooms::room_of(state, lp) == room.id && !player::in_shortcut(state, lp))
+                    to = pos(state, lp, 1);
+                else if (wp && warps::is_dynamic(state, wp) && w().warp_point_get_owner(wp) == lp && w().warp_point_get_room_from_warp_point_location(wp) == room.id
+                    && w().warp_point_get_state(wp) != world::warp_state::closed)
+                    to = warps::position(state, wp);
+                else
+                    return std::nullopt;
+                nav.stuck = 0;
+                if (custom::dist_less(pos(state, p, 1), to, 60.f))
+                    return input(0, 0);
+                return go(ground_under(room, to), false);
             }
 
             bool holding_spear() { return is_spear(state, items::held(state, p, 0)) || is_spear(state, items::held(state, p, 1)); }
@@ -1928,6 +2034,8 @@ namespace npc {
             uint32_t k = 0;
             w.room_for_each_warp_point_location(r, [&](dcon::warp_point_location_id l) {
                 auto const wp = w.warp_point_location_get_point(l);
+                if (warps::is_dynamic(state, wp))
+                    return;
                 uint32_t const mine = k++;
                 if (mine >= routes::max_warps || !warps::leads_away(state, wp))
                     return;
@@ -2306,6 +2414,50 @@ namespace npc {
 
     void update_world(sys::game_state& state) {
         auto& w = state.world;
+        // the shelters' crowds; a pack (or one alone) on its way to a crowded
+        // one goes somewhere else
+        auto& crowd = crowds();
+        crowd.assign(w.room_size(), 0);
+        w.for_each_player([&](dcon::player_id p) {
+            if (player::dead(state, p) || player::in_shortcut(state, p))
+                return;
+            auto const r = rooms::room_of(state, p);
+            if (r && w.room_get_is_shelter(r) && crowd[size_t(r.index())] < 255)
+                ++crowd[size_t(r.index())];
+        });
+        // a Watcher in a pack another leads, in a region without warps (none
+        // placed, no dynamic one open): on its own (it makes its own way)
+        std::vector<uint8_t> warped_region(w.region_size(), 0);
+        w.for_each_warp_point([&](dcon::warp_point_id wp) {
+            auto const r = w.warp_point_get_room_from_warp_point_location(wp);
+            if (r && w.warp_point_get_state(wp) != world::warp_state::closed)
+                if (auto const g = w.room_get_region_from_region_membership(r))
+                    warped_region[size_t(g.index())] = 1;
+        });
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            auto const l = w.slugcat_npc_get_leader(n);
+            auto const p = w.slugcat_npc_get_player(n);
+            if (!l || l == n || !warps::is_watcher(state, p) || player::dead(state, p))
+                return;
+            auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p));
+            if (!g || warped_region[size_t(g.index())])
+                return;
+            w.slugcat_npc_set_leader(n, dcon::slugcat_npc_id{});
+            w.slugcat_npc_set_target(n, dcon::room_id{});
+            migrate::cancel(state, player::creature_of(state, p));
+            ++stats().strays;
+        });
+        w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+            auto const l = w.slugcat_npc_get_leader(n);
+            auto const p = w.slugcat_npc_get_player(n);
+            auto const target = w.slugcat_npc_get_target(n);
+            if ((l && l != n) || !crowded(target) || player::dead(state, p) || rooms::room_of(state, p) == target)
+                return;
+            w.slugcat_npc_get_nav(n).given_up = uint16_t(target.id.index() + 1);
+            w.slugcat_npc_set_target(n, dcon::room_id{});
+            migrate::cancel(state, player::creature_of(state, p));
+            ++stats().crowded;
+        });
         w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
             if (!player::dead(state, w.slugcat_npc_get_player(n)) && !player::in_shortcut(state, w.slugcat_npc_get_player(n)))
                 look_ahead(state, n);
@@ -2346,6 +2498,47 @@ namespace npc {
                 migrate::cancel(state, player::creature_of(state, w.slugcat_npc_get_player(n)));
             }
         });
+    }
+
+    void warped(sys::game_state& state, std::vector<dcon::player_id> const& arrivals, dcon::player_id owner) {
+        auto& w = state.world;
+        auto const among = [&](dcon::player_id q) { return std::find(arrivals.begin(), arrivals.end(), q) != arrivals.end(); };
+        for (auto const a : arrivals) {
+            auto const n = w.player_get_npc(a);
+            if (!n)
+                continue;
+            auto const c = player::creature_of(state, a);
+            auto& nav = w.slugcat_npc_get_nav(n);
+            nav.warp_phase = 0;
+            // (meant to: its own warp, or the next hop of its trip)
+            auto const& trip = w.creature_get_trip(c);
+            if (owner == a || (trip.next < trip.hops && trip.exit[trip.next] >= migrate::warp_hop))
+                continue;
+            auto const l = w.slugcat_npc_get_leader(n);
+            auto const lp = l && w.slugcat_npc_is_valid(l) ? w.slugcat_npc_get_player(l) : dcon::player_id{};
+            if (l && l != n) {
+                // (its leader came too, or went through this warp of its own)
+                if (among(lp) || (lp && owner == lp))
+                    continue;
+                w.slugcat_npc_set_leader(n, dcon::slugcat_npc_id{});
+                ++stats().strays;
+            } else if (l == n) {
+                // its members left behind: the first of them leads them now
+                dcon::slugcat_npc_id next;
+                w.for_each_slugcat_npc([&](dcon::slugcat_npc_id m) {
+                    if (m == n || w.slugcat_npc_get_leader(m) != n || among(w.slugcat_npc_get_player(m)))
+                        return;
+                    if (!next) {
+                        next = m;
+                        w.slugcat_npc_set_target(m, w.slugcat_npc_get_target(n));
+                    }
+                    w.slugcat_npc_set_leader(m, next);
+                });
+            }
+            // somewhere it didn't mean to go: a new target from there
+            w.slugcat_npc_set_target(n, dcon::room_id{});
+            migrate::cancel(state, c);
+        }
     }
 
     player::input_package think(sys::game_state& state, dcon::player_id p, room_view const& room) {
@@ -2410,6 +2603,7 @@ namespace npc {
                 e[0] = e[1] = ivec2{-1, -1};
             nav.vault_fails = 0;
             nav.vault_bad[0] = nav.vault_bad[1] = ivec2{-1, -1};
+            nav.warp_phase = 0;
             if (nav.what == goal::flee && nav.room_before != 0) {
                 nav.chased = uint8_t(std::min(8, nav.chased + 1));
                 nav.chased_from = nav.room_before;
@@ -2493,12 +2687,13 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[500];
+        char buf[640];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
-            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.crowded.load(),
+            s.warps_made.load(), s.strays.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

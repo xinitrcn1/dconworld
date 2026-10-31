@@ -321,6 +321,8 @@ namespace sys {
             int32_t exit_timer = 0;
         };
         std::vector<warp_pull> warp_pulls;
+        // dynamic warps that closed, to be made again
+        std::vector<dcon::warp_point_id> free_warps;
 
         using ripple_ring = sys::ripple_ring;
         std::vector<ripple_ring> ripple_rings;

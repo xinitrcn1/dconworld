@@ -1449,6 +1449,99 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " camo=%d fade=%.2f lift=%.0fpx back_down=%d", int(camo), fade, peak - y0, int(down));
             r.check("camouflage and levitation", camo && fade > 0.5f && peak - y0 > 15.f && down, s.describe() + d);
         }
+        // dynamic warps lead to another region's DynamicWarpTarget
+        auto const other_region = gs.world.create_region();
+        gs.world.region_set_name(other_region, gs.add_text("dyn"));
+        auto const landing = make_room(gs, other_region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+        {
+            auto& w = gs.world;
+            auto const t = w.create_warp_target();
+            w.warp_target_set_pos(t, feet_at(10, 1) + vec2{0.f, 20.f});
+            w.try_create_warp_target_location(t, landing);
+        }
+        {
+            // a dynamic warp: anything that comes close sets it off (a
+            // lizard here), and after 30 s it closes and is gone
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            gs.ripple_level = 1.f;
+            sim s(gs, a, feet_at(34, 1), player::slugcat_name::white);
+            auto const liz = lizard::create(gs, a, world::room_view::middle_of_tile(8, 1), lizard::breed::green);
+            auto const wp = warps::spawn_dynamic(gs, a, feet_at(8, 1) + vec2{0.f, 20.f}, {});
+            bool carried = false;
+            uint32_t t = 0;
+            for (; t < 1100 && !carried; ++t) {
+                if (rooms::room_of(gs, liz) == a)
+                    w.creature_set_stun(liz, 10);
+                s.run(1, 0, 0);
+                carried = rooms::room_of(gs, liz) == landing;
+            }
+            bool const player_stayed = simulation::player_room(gs, s.p) == a;
+            s.run(uint32_t(warps::dynamic_life) + 200);
+            bool const gone = w.room_range_of_warp_point_location(a).first == w.room_range_of_warp_point_location(a).second;
+            bool const reused = !gs.free_warps.empty() && gs.free_warps.back() == wp;
+            char d[160];
+            std::snprintf(d, sizeof(d), " made=%d carried=%d after %u ticks player_stayed=%d gone=%d reused=%d", int(bool(wp)), int(carried), t, int(player_stayed),
+                int(gone), int(reused));
+            r.check("dynamic warp: anything close, closes after 30 s", wp && carried && player_stayed && gone && reused, s.describe() + d);
+        }
+        {
+            // a creature waiting by a warp that cools down: nothing until it
+            // opens again, forced open after 3 s of waiting; it goes through
+            // the warp's whole sequence
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
+            add_warp(gs, a, {feet_at(8, 1) + vec2{0.f, 20.f}, b, feet_at(10, 1) + vec2{0.f, 20.f}});
+            sim s(gs, a, feet_at(34, 1), player::slugcat_name::white);
+            s.run(1);
+            auto const wp = warps::point(gs, a, 0);
+            w.warp_point_set_state(wp, world::warp_state::cool_down);
+            w.warp_point_set_cooldown_timer(wp, 1.0e6f);
+            auto const liz = lizard::create(gs, a, world::room_view::middle_of_tile(9, 1), lizard::breed::green);
+            bool early = false, entered = false, carried = false;
+            uint32_t t = 0, opened_at = 0;
+            for (; t < 900 && !carried; ++t) {
+                if (rooms::room_of(gs, liz) == a) {
+                    w.creature_set_stun(liz, 10);
+                    warps::carry(gs, liz, wp);
+                }
+                s.run(1, 0, 0);
+                if (t < 100)
+                    early = early || rooms::room_of(gs, liz) != a;
+                if (!entered && w.warp_point_get_state(wp) == world::warp_state::enter) {
+                    entered = true;
+                    opened_at = t;
+                }
+                carried = rooms::room_of(gs, liz) == b;
+            }
+            char d[160];
+            std::snprintf(d, sizeof(d), " early=%d opened_at=%u carried=%d after %u ticks", int(early), opened_at, int(carried), t);
+            r.check("warp cooling down: a creature waits, forced open", !early && entered && opened_at >= 110 && opened_at < 200 && carried, s.describe() + d);
+        }
+        {
+            // the Watcher holding its ability crouched makes a dynamic warp
+            auto& w = gs.world;
+            auto const a = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+            gs.ripple_level = 1.f;
+            sim s(gs, a, feet_at(10, 1), player::slugcat_name::watcher);
+            s.run(20);
+            auto hold = player::make_input(0.f, -1.f, false, false, false);
+            hold.spec = true;
+            for (int i = 0; i < 120; ++i)
+                simulation::tick(gs, std::span{&s.p, 1}, std::span{&hold, 1});
+            dcon::warp_point_id made;
+            w.room_for_each_warp_point_location(a, [&](dcon::warp_point_location_id l) {
+                if (warps::is_dynamic(gs, w.warp_point_location_get_point(l)))
+                    made = w.warp_point_location_get_point(l);
+            });
+            bool const camo = w.player_get_is_camo(s.p) != 0;
+            bool const there = s.until(600, [&] { return simulation::player_room(gs, s.p) == landing; });
+            char d[96];
+            std::snprintf(d, sizeof(d), " made=%d camo=%d through=%d", int(bool(made)), int(camo), int(there));
+            r.check("Watcher makes a dynamic warp", made && w.warp_point_get_owner(made) == s.p && !camo && there, s.describe() + d);
+            s.until(800, [&] { return !gs.warp.active; });
+        }
         {
             // a ripple warp only works from the ripple layer (camouflaged at ripple level 5)
             auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
@@ -2650,8 +2743,10 @@ namespace selftest {
             auto const ln = npc::of(st, lead);
             w.slugcat_npc_set_leader(ln, ln);
             std::vector<dcon::player_id> pack{lead};
+            // (not Watchers: in a region without warps one leaves its pack)
             for (int32_t i = 0; i < 3; ++i)
-                pack.push_back(npc::create(st, from, feet_at(6 + 2 * i, 2), rng, ln));
+                pack.push_back(npc::create(st, from, feet_at(6 + 2 * i, 2), rng, ln, player::slugcat_name::white));
+            std::string names;
             bool waited = false, all_there = false, same_target = true, held_up = false;
             uint32_t t = 0;
             for (; t < 5000 && !all_there; ++t) {
@@ -2679,7 +2774,109 @@ namespace selftest {
             }
             char d[160];
             std::snprintf(d, sizeof(d), " same_target=%d waited=%d all_there=%d after %u ticks, dead=%u;", int(same_target), int(waited), int(all_there), t, dead);
-            r.check("NPC pack travels together", same_target && waited && all_there && dead == 0, d + (all_there ? std::string{} : where));
+            for (auto const p : pack)
+                names += w.slugcat_npc_get_leader(npc::of(st, p)) ? "" : " (one left)";
+            r.check("NPC pack travels together", same_target && waited && all_there && dead == 0, d + names + (all_there ? std::string{} : where));
+        }
+        {
+            // a shelter with more than ten slugcats in it is crowded: one on
+            // its way there goes to another one
+            auto [st_ptr, from, course, to] = course_world("npc_crowd");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0xC20Du};
+            for (int32_t i = 0; i < 11; ++i) {
+                auto const q = npc::create(st, to, feet_at(3 + i % 10, 2), rng, {}, player::slugcat_name::white);
+                w.slugcat_npc_get_nav(npc::of(st, q)).goal_timer = -100000;
+            }
+            auto const p = npc::create(st, course, feet_at(30, 6), rng, {}, player::slugcat_name::white);
+            auto const n = npc::of(st, p);
+            w.slugcat_npc_set_target(n, to);
+            uint32_t const crowded = npc::stats().crowded;
+            bool went_in = false, other = false;
+            for (uint32_t t = 0; t < 4000 && !other; ++t) {
+                tick_world(st, 1);
+                went_in = went_in || rooms::room_of(st, p) == to;
+                other = rooms::room_of(st, p) == from && w.slugcat_npc_get_nav(n).what == npc::goal::rest;
+            }
+            char d[120];
+            std::snprintf(d, sizeof(d), " crowded=%u went_in=%d other=%d", npc::stats().crowded - crowded, int(went_in), int(other));
+            r.check("NPC goes elsewhere than a crowded shelter", npc::stats().crowded > crowded && !went_in && other, d + (" " + npc::describe(st, p)));
+        }
+        {
+            // a Watcher in a pack another leads, where there are no warps:
+            // it leaves the pack; a Watcher leading keeps its pack
+            auto [st_ptr, from, course, to] = course_world("npc_detach");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0xDE7Au};
+            auto const lead = npc::create(st, from, feet_at(4, 2), rng, {}, player::slugcat_name::white);
+            auto const ln = npc::of(st, lead);
+            w.slugcat_npc_set_leader(ln, ln);
+            auto const wm = npc::create(st, from, feet_at(6, 2), rng, ln, player::slugcat_name::watcher);
+            auto const wl = npc::create(st, course, feet_at(10, 6), rng, {}, player::slugcat_name::watcher);
+            auto const wln = npc::of(st, wl);
+            w.slugcat_npc_set_leader(wln, wln);
+            auto const sm = npc::create(st, course, feet_at(12, 6), rng, wln, player::slugcat_name::white);
+            tick_world(st, 2);
+            bool const left = !w.slugcat_npc_get_leader(npc::of(st, wm));
+            bool const kept = w.slugcat_npc_get_leader(npc::of(st, sm)) == wln && w.slugcat_npc_get_leader(wln) == wln;
+            char d[80];
+            std::snprintf(d, sizeof(d), " member_left=%d watcher_leader_kept=%d", int(left), int(kept));
+            r.check("Watcher leaves a pack where there are no warps", left && kept, d);
+        }
+        {
+            // A Watcher leading a pack, nowhere to go from here: it makes a
+            // dynamic warp, its pack gathered round it, and they all come out
+            // in another region and find a shelter there. A slugcat of
+            // another pack standing by is pulled along and leaves its pack
+            auto [st_ptr, rgn] = npc_world("npc_dyn");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const rgn2 = w.create_region();
+            w.region_set_name(rgn2, st.add_text("npc_dyn2"));
+            w.region_set_never_rains(rgn2, true);
+            auto const stuck = make_room(st, rgn, box(40, 10, [](int32_t, int32_t y) { return y <= 1 ? '#' : ' '; }));
+            auto const land = make_room(st, rgn2, box(30, 10, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 27, 2, 1))
+                    return c;
+                return y <= 1 ? '#' : ' ';
+            }));
+            auto const shelter = shelter_room(st, rgn2, -1);
+            link(st, side_exit(st, land, true), land, exits_of(st, shelter)[0], shelter);
+            auto const t = w.create_warp_target();
+            w.warp_target_set_pos(t, feet_at(6, 2) + vec2{0.f, 20.f});
+            w.try_create_warp_target_location(t, land);
+            simulation::populate(st);
+            rw::rng rng{0xD1A9u};
+            auto const lead = npc::create(st, stuck, feet_at(20, 2), rng, {}, player::slugcat_name::watcher);
+            auto const ln = npc::of(st, lead);
+            w.slugcat_npc_set_leader(ln, ln);
+            std::vector<dcon::player_id> pack{lead};
+            pack.push_back(npc::create(st, stuck, feet_at(12, 2), rng, ln, player::slugcat_name::white));
+            pack.push_back(npc::create(st, stuck, feet_at(28, 2), rng, ln, player::slugcat_name::white));
+            auto const other_lead = npc::create(st, stuck, feet_at(37, 2), rng, {}, player::slugcat_name::white);
+            auto const oln = npc::of(st, other_lead);
+            w.slugcat_npc_set_leader(oln, oln);
+            auto const stray = npc::create(st, stuck, feet_at(22, 2), rng, oln, player::slugcat_name::white);
+            uint32_t const made = npc::stats().warps_made, strays = npc::stats().strays;
+            bool all_there = false;
+            uint32_t tt = 0;
+            for (; tt < 6000 && !all_there; ++tt) {
+                tick_world(st, 1);
+                all_there = std::all_of(pack.begin(), pack.end(), [&](dcon::player_id p) {
+                    return rooms::room_of(st, p) == shelter && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+                });
+            }
+            bool const together = std::all_of(pack.begin(), pack.end(), [&](dcon::player_id p) { return w.slugcat_npc_get_leader(npc::of(st, p)) == ln; });
+            bool const strayed = !w.slugcat_npc_get_leader(npc::of(st, stray)) && w.room_get_region_from_region_membership(rooms::room_of(st, stray)) == rgn2;
+            std::string where;
+            for (auto const p : pack)
+                where += " [" + npc::describe(st, p) + " in " + std::string{st.to_string_view(w.room_get_name(rooms::room_of(st, p)))} + "]";
+            char d[200];
+            std::snprintf(d, sizeof(d), " made=%u all_there=%d after %u ticks together=%d strays=%u stray_left=%d", npc::stats().warps_made - made, int(all_there), tt,
+                int(together), npc::stats().strays - strays, int(strayed));
+            r.check("NPC Watcher takes its pack through its own warp", npc::stats().warps_made > made && all_there && together && strayed, d + where);
         }
         {
             // in the shelter it lies down where slugcats sleep (not by the

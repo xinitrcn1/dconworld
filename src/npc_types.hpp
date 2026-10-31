@@ -111,6 +111,13 @@ namespace npc {
         int32_t wait = 0;
         // ticks standing in a warp waiting for it to set off
         int32_t warp_wait = 0;
+        // The Watcher making a dynamic warp for its pack (no way it knows on
+        // from here): 0 none, 1 its pack gathering round it, 2 the ability
+        // held, 3 standing in it until it sets off; ticks in the phase, the
+        // warp (a member follows its leader's through)
+        uint8_t warp_phase = 0;
+        int32_t warp_timer = 0;
+        dcon::warp_point_id own_warp;
         // A spear step (only where no other way on is known): a spear thrown
         // from `spear_from` (standing there) towards `spear_dir` sticks in the
         // wall and lends `spear_beam` (and the tile behind it) a beam to climb

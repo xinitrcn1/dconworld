@@ -81,6 +81,13 @@ namespace npc {
     // Serial, before the rooms update: the packs (a dead leader's place
     // goes to the next one), the leaders' targets for the others
     void update_world(sys::game_state& state);
+    // a warp carried these slugcats (`owner`'s dynamic warp, if it is one):
+    // an NPC without its leader leaves its pack (alone, a new target); a
+    // pack whose leader was carried off by another's warp gets a new one
+    void warped(sys::game_state& state, std::vector<dcon::player_id> const& arrivals, dcon::player_id owner);
+    // a shelter with more slugcats in it than this is crowded: packs on
+    // their way there go somewhere else
+    inline constexpr uint32_t crowd_limit = 10;
     // This tick's input of an NPC slugcat out in `room` (its room's update)
     player::input_package think(sys::game_state& state, dcon::player_id p, world::room_view const& room);
 
@@ -158,6 +165,11 @@ namespace npc {
         std::atomic<uint32_t> diverted{0};
         std::atomic<uint32_t> spear_steps{0};
         std::atomic<uint32_t> gave_up{0};
+        // packs that went elsewhere than a crowded shelter, dynamic warps the
+        // Watchers made, slugcats carried off from their packs
+        std::atomic<uint32_t> crowded{0};
+        std::atomic<uint32_t> warps_made{0};
+        std::atomic<uint32_t> strays{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

@@ -727,6 +727,10 @@ object{
 	// Watcher: warps (Player.warpPointCooldown, standingInWarpPointProtectionTime)
 	property{ name{warp_point_cooldown} type{int32_t} }
 	property{ name{warp_protection} type{int32_t} }
+	// the Watcher making a dynamic warp (the ability held, crouched): ticks
+	// held, ticks before it can make another
+	property{ name{dynamic_warp_timer} type{int32_t} }
+	property{ name{dynamic_warp_cooldown} type{int32_t} }
 	// camouflage (isCamo, camoCharge, the hold to toggle timers) and how
 	// faded out the slugcat is drawn
 	property{ name{is_camo} type{uint8_t} }
@@ -1463,6 +1467,16 @@ object{
 	property{ name{sound_volume} type{float} }
 	property{ name{hint_sound} type{uint8_t} }
 	property{ name{hint_volume} type{float} }
+	// a dynamic warp the Watcher made (not the room's: last after them,
+	// unlinked from the room once it closed and faded, reused later), the
+	// ticks it stays open, who made it
+	property{ name{dynamic} type{uint8_t} }
+	property{ name{life} type{int32_t} }
+	property{ name{owner} type{player_id} }
+	// not vanilla: ticks something waiting for it stood by while it cools
+	// down (forced open after a while), something asked this tick
+	property{ name{wait_ticks} type{int32_t} }
+	property{ name{asked} type{uint8_t} }
 }
 relationship{
 	name{warp_point_location}
