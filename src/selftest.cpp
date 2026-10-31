@@ -1165,6 +1165,83 @@ namespace selftest {
             gs.sounds.clear();
         }
         {
+            // every long legs variant is a big creature (so is_big_creature
+            // keeps them from eating each other), as are the loaches, rain
+            // deer, vultures and miros birds; the slugcat and lizards aren't
+            auto const hall = make_room(gs, region, box(30, 14, [](int32_t, int32_t) { return ' '; }));
+            bool all_big = true;
+            std::string bad;
+            for (uint32_t v = 0; v < daddy::variant_count; ++v) {
+                auto const d = daddy::create(gs, hall, world::room_view::middle_of_tile(15, 6), daddy::variant(v));
+                auto const t = creature::template_of(gs, d);
+                bool const ok = creature::is_big_creature(t) && t != creature::tmpl::drop_bug;
+                if (!ok)
+                    bad += std::string(" ") + daddy::to_string(daddy::variant(v)) + "=" + creature::to_string(t);
+                all_big = all_big && ok;
+                daddy::destroy(gs, d);
+            }
+            using T = creature::tmpl;
+            for (auto const t : {T::loach, T::deer, T::vulture, T::king_vulture, T::miros_vulture, T::miros_bird})
+                all_big = all_big && creature::is_big_creature(t);
+            bool const small_ok = !creature::is_big_creature(T::slugcat) && !creature::is_big_creature(T::pink_lizard);
+            r.check("long legs and the big creatures are big", all_big && small_ok, bad);
+            gs.sounds.clear();
+        }
+        {
+            // two long legs side by side never grab each other
+            auto const hall = make_room(gs, region, box(40, 14, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(2, 1));
+            auto const a = daddy::create(gs, hall, world::room_view::middle_of_tile(17, 5), daddy::variant::daddy);
+            auto const b = daddy::create(gs, hall, world::room_view::middle_of_tile(23, 5), daddy::variant::brother);
+            bool grabbed = false;
+            s.until(800, [&] {
+                grabbed = grabbed || daddy::holds(gs, a, b) || daddy::holds(gs, b, a) || daddy::eating(gs, a, b) || daddy::eating(gs, b, a);
+                return grabbed;
+            });
+            r.check("long legs don't eat long legs", !grabbed, s.describe());
+            daddy::destroy(gs, a);
+            daddy::destroy(gs, b);
+            gs.sounds.clear();
+        }
+        {
+            // a grandmother long legs over a pack of ten slugcats reaches for
+            // all of them at once, not one at a time
+            auto& w = gs.world;
+            auto const hall = make_room(gs, region, box(60, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, hall, feet_at(30, 1));
+            rw::rng rng{0xDADDu};
+            std::vector<dcon::player_id> pack;
+            for (int32_t i = 0; i < 9; ++i) {
+                pack.push_back(npc::create(gs, hall, feet_at(12 + i * 4 + (i >= 4 ? 4 : 0), 1), rng, {}, player::slugcat_name::white));
+                w.slugcat_npc_get_nav(npc::of(gs, pack.back())).goal_timer = -100000;
+            }
+            pack.push_back(s.p);
+            auto const d = daddy::create(gs, hall, world::room_view::middle_of_tile(30, 8), daddy::variant::grandmother);
+            size_t most = 0;
+            s.until(2500, [&] {
+                std::vector<dcon::creature_id> targets;
+                for (uint32_t k = 0; k < daddy::tentacle_count(gs, d); ++k) {
+                    auto const& t = w.daddy_tentacle_get_t(daddy::tentacle_of(gs, d, k));
+                    for (auto const c : {t.hunt, t.grab})
+                        if (c && std::find(targets.begin(), targets.end(), c) == targets.end())
+                            targets.push_back(c);
+                }
+                for (auto const p : pack)
+                    if (daddy::eating(gs, d, player::creature_of(gs, p)) && std::find(targets.begin(), targets.end(), player::creature_of(gs, p)) == targets.end())
+                        targets.push_back(player::creature_of(gs, p));
+                most = std::max(most, targets.size());
+                return most >= 5;
+            });
+            char dd[64];
+            std::snprintf(dd, sizeof(dd), " at most %zu slugcats reached for at once", most);
+            r.check("grandmother long legs reaches for the whole pack", most >= 5, s.describe() + dd);
+            daddy::destroy(gs, d);
+            for (auto const p : pack)
+                if (p != s.p)
+                    npc::destroy(gs, p);
+            gs.sounds.clear();
+        }
+        {
             // one sent to the far side of a wall finds its way over it on a
             // real-time distance field, the tentacles reaching for grips
             auto const hall = make_room(gs, region, box(60, 22, [](int32_t x, int32_t y) {

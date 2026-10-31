@@ -864,7 +864,7 @@ namespace daddy::detail {
                         }
                         if (t.needed_for_locomotion || (t.current != task::locomotion && t.current != task::examine_sound) || is_creature_caught_enough(x, ref))
                             break;
-                        if (x.seen != ref)
+                        if (!tracks(x, ref))
                             break;
                         bool flag4 = false;
                         for (auto const& o : x.tents)
@@ -892,21 +892,36 @@ namespace daddy::detail {
                 t.sticky = mathf::max(0.f, t.sticky - 0.016666668f);
         }
 
-        // DaddyTentacle.LookForCreaturesToHunt (PreyTracker: the one slugcat)
+        // DaddyTentacle.LookForCreaturesToHunt. Vanilla tries one random
+        // tracked prey and gives up when it is out of reach or already
+        // hunted; here the tentacle goes for the nearest tracked prey in its
+        // reach that no other tentacle hunts, so a long legs among a pack
+        // reaches for every one of them
         void look_for_creatures_to_hunt(ctx& x, tentacle_work& tw) {
-            if (tw.t.needed_for_locomotion || !x.seen)
+            uint32_t const total = prey_count(x);
+            if (tw.t.needed_for_locomotion || total == 0)
                 return;
-            // GetTrackedPrey(Random.Range(0, TotalTrackedPrey))
-            x.rng.range(0, 1);
-            dcon::creature_id const ref = x.seen;
-            for (auto const& o : x.tents)
-                if (o.t.hunt == ref)
-                    return;
-            if (is_creature_caught_enough(x, ref))
-                return;
-            if (!target_here(x.state, ref, x.room.id))
-                return;
-            if (rw::distance(room_view::middle_of_tile(best_guess(x)), float_base(x, tw)) > tw.t.ideal_length + 40.f)
+            // (GetTrackedPrey's Random.Range(0, TotalTrackedPrey))
+            x.rng.range(0, int32_t(total));
+            vec2 const base = float_base(x, tw);
+            dcon::creature_id ref;
+            float best = tw.t.ideal_length + 40.f;
+            for (uint32_t i = 0; i < total; ++i) {
+                auto const p = prey_at(x, i);
+                if (!creature::live(x.state, p) || !target_here(x.state, p, x.room.id) || is_creature_caught_enough(x, p))
+                    continue;
+                bool hunted = false;
+                for (auto const& o : x.tents)
+                    hunted = hunted || o.t.hunt == p;
+                if (hunted)
+                    continue;
+                float const dist = rw::distance(room_view::middle_of_tile(best_guess(x, p)), base);
+                if (dist <= best) {
+                    best = dist;
+                    ref = p;
+                }
+            }
+            if (!ref)
                 return;
             if (auto* s = source(x.a, tw.t.check_sound))
                 s->slated_for_deletion = 1;
@@ -1127,14 +1142,14 @@ namespace daddy::detail {
         void hunt(ctx& x, tentacle_work& tw, std::vector<ivec2>& path) {
             auto& t = tw.t;
             auto const p = t.hunt;
-            if (!p || x.seen != t.hunt || !target_here(x.state, p, x.room.id)) {
+            if (!p || !tracks(x, t.hunt) || !target_here(x.state, p, x.room.id)) {
                 switch_task(x, tw, task::locomotion);
                 return;
             }
-            if (x.sees)
+            if (sees(x, p))
                 move_grab_dest(x, tw, creature::main_pos(x.state, p), path);
             else
-                move_grab_dest(x, tw, room_view::middle_of_tile(best_guess(x)), path);
+                move_grab_dest(x, tw, room_view::middle_of_tile(best_guess(x, p)), path);
             if (float(tw.grab_path.size()) * 20.f > t.ideal_length || t.needed_for_locomotion) {
                 float num = float_max;
                 int32_t num2 = -1;
@@ -1154,7 +1169,7 @@ namespace daddy::detail {
                     return;
                 }
             }
-            if (rw::distance(room_view::middle_of_tile(best_guess(x)), float_base(x, tw)) > t.ideal_length * 1.5f) {
+            if (rw::distance(room_view::middle_of_tile(best_guess(x, p)), float_base(x, tw)) > t.ideal_length * 1.5f) {
                 t.hunt = dcon::creature_id{};
                 update_climb_grab_pos(x, tw);
                 return;
@@ -1462,7 +1477,7 @@ namespace daddy::detail {
         } else if (t.current != task::locomotion) {
             switch_task(x, tw, task::locomotion);
         }
-        if (t.current == task::hunt && (!t.hunt || x.seen != t.hunt))
+        if (t.current == task::hunt && (!t.hunt || !tracks(x, t.hunt)))
             switch_task(x, tw, task::locomotion);
         else if (t.current != task::hunt && bool(t.hunt))
             t.hunt = dcon::creature_id{};

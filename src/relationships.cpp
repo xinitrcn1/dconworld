@@ -231,6 +231,24 @@ namespace creature {
         return t == tmpl::leech || t == tmpl::sea_leech || t == tmpl::jungle_leech || t == tmpl::small_needle_worm;
     }
 
+    bool is_big_creature(tmpl t) noexcept {
+        switch (t) {
+        case tmpl::daddy_long_legs:
+        case tmpl::brother_long_legs:
+        case tmpl::terror_long_legs:
+        case tmpl::hunter_daddy:
+        case tmpl::loach:
+        case tmpl::deer:
+        case tmpl::miros_bird:
+        case tmpl::vulture:
+        case tmpl::king_vulture:
+        case tmpl::miros_vulture:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     char const* to_string(tmpl t) noexcept {
         return t < tmpl::count ? names[size_t(t)] : "?";
     }
@@ -243,7 +261,16 @@ namespace creature {
         case type::dropbug: return tmpl::drop_bug;
         case type::cicada: return pl.cicada.gender ? tmpl::cicada_a : tmpl::cicada_b;
         case type::lizard: return tmpl(uint32_t(tmpl::pink_lizard) + uint32_t(pl.lizard.breed));
-        case type::daddy: return tmpl(uint32_t(tmpl::daddy_long_legs) + uint32_t(pl.daddy.variant));
+        case type::daddy:
+            // (the grandmother is a TerrorLongLegs, superSizeMe)
+            switch (pl.daddy.variant) {
+            case daddy::variant::daddy: return tmpl::daddy_long_legs;
+            case daddy::variant::brother: return tmpl::brother_long_legs;
+            case daddy::variant::mother:
+            case daddy::variant::grandmother: return tmpl::terror_long_legs;
+            case daddy::variant::hunter: return tmpl::hunter_daddy;
+            }
+            return tmpl::daddy_long_legs;
         case type::leech: return tmpl(uint32_t(tmpl::leech) + uint32_t(pl.leech.variant));
         case type::tube_worm: return tmpl::tube_worm;
         case type::needle_worm: return pl.needle_worm.variant == needle_worm::variant::small ? tmpl::small_needle_worm : tmpl::big_needle_worm;

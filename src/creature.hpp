@@ -213,6 +213,10 @@ namespace creature {
     // CreatureTemplate.bodySize, smallCreature
     float body_size(tmpl t) noexcept;
     bool small_creature(tmpl t) noexcept;
+    // too big for a long legs to eat (and never what one hunts): the
+    // loaches, rain deer, vultures, miros birds and the long legs themselves
+    // (none of them eats another)
+    bool is_big_creature(tmpl t) noexcept;
     // AbstractRoom.CreatureAttractionToFloat
     float attraction_value(attraction a) noexcept;
 

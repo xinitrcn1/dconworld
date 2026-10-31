@@ -56,7 +56,11 @@ namespace daddy {
     inline constexpr uint32_t max_tentacles = 12;
     inline constexpr uint32_t max_tubes = 16;
     inline constexpr uint32_t max_sources = 8;
-    inline constexpr uint32_t max_eats = 4;
+    // (vanilla's 4-ish eat objects and 5-7 tracked prey are lifted: a long
+    // legs takes everything it can reach at once, a pack of slugcats each
+    // gets a tentacle)
+    inline constexpr uint32_t max_eats = 12;
+    inline constexpr uint32_t max_prey = 16;
     inline constexpr uint32_t past_positions = 80;
 
     // Tentacle.TentacleChunk
@@ -196,11 +200,22 @@ namespace daddy {
         int32_t forget_time = 320;
     };
 
+    // a tracked prey other than the current one (felt this tick, ticks
+    // since, where)
+    struct prey_rep {
+        dcon::creature_id who;
+        uint8_t sees = 0;
+        uint8_t felt = 0;
+        int32_t ticks_since_seen = 0;
+        rw::vec2 last_seen_pos{0.f, 0.f};
+    };
+
     // DaddyAI with its Tracker, PreyTracker and NoiseTracker. A blind
-    // creature knows only what its tentacles feel (and hears): one
-    // representation here, the creature or slugcat it hunts (felt this
-    // tick, ticks since, where); the behavior and destination are the
-    // creature's
+    // creature knows only what its tentacles feel (and hears). `seen` and
+    // the three after it are the current prey (PreyTracker.currentPrey: the
+    // nearest, what the body walks to); `others` the rest of what it
+    // tracks, each one a tentacle can go for; the behavior and destination
+    // are the creature's
     struct ai_state {
         dcon::creature_id seen;
         uint8_t sees = 0;
@@ -215,6 +230,8 @@ namespace daddy {
         rw::ivec2 react_target{0, 0};
         // felt this tick (SeeCreature)
         uint8_t seen_this_tick = 0;
+        prey_rep others[max_prey - 1];
+        uint8_t other_count = 0;
         noise_tracker noise;
     };
 

@@ -343,6 +343,9 @@ with this heading change and bullets. Rename the section heading to
 ## Daddy long legs
 
 - The tubes are the shared GPU rope (see above); the bulbs are one quad each whose fragment shader draws the jagged circle (the same rolls and 18 corners as the TriangleMesh fan).
+- Hunting is greedier than vanilla's. The PreyTracker keeps everything edible the tentacles feel (up to 16, not 5-7). The current prey, the nearest one (felt ones first), is what the body walks to. Each free tentacle goes for the nearest tracked prey in its reach that no other tentacle is hunting. Vanilla picks one random tracked prey and gives up when that one is out of reach or already hunted. Up to 12 creatures can be digested at once (vanilla's list has no cap, the port had 4), so a long legs over a pack of slugcats reaches for all of them.
+- No long legs eats a big creature: the loaches, rain deer, vultures (King and Miros too), miros birds and every long legs variant (`creature::is_big_creature`). Vanilla's table lets the Daddy eat the Brother, and Remix's CheckDaddyConsumption lets the big ones eat smaller long legs. The grandmother is a TerrorLongLegs to the relationship table, and the HunterDaddy is a HunterDaddy (the variant used to be read one template off).
+- The body chunks (the core bulbs) weigh 0.1 each instead of vanilla's num5 (up to several each). superSizeMe's lower gravity (0.75) is gone. The heavy bodies of the big variants used to drop through what their tentacles held. The Hunter's two slugcat-dummy chunks keep their 20.
 
 ## Lizards
 

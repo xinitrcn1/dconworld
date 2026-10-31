@@ -44,8 +44,9 @@ namespace daddy::detail {
         rw::rng rng;
         body_state& z;
         ai_state& a;
-        // the Tracker's one representation (what it hunts, felt this tick,
-        // ticks since and where) and the destination
+        // the Tracker's current prey (what the body hunts, felt this tick,
+        // ticks since and where; ai_state.others are the rest) and the
+        // destination
         dcon::creature_id& seen;
         uint8_t& sees;
         int32_t& ticks_since_seen;
@@ -116,8 +117,19 @@ namespace daddy::detail {
     creature::relationship relationship_to(ctx const& x, dcon::creature_id t);
     // Tracker.SeeCreature (what it doesn't eat is ignored)
     void see(ctx& x, dcon::creature_id t);
-    // Tracker.CreatureRepresentation.BestGuessForPosition
+    // the tracked prey: the current one (`seen`) and the others
+    prey_rep* other(ai_state& a, dcon::creature_id t) noexcept;
+    prey_rep const* other(ai_state const& a, dcon::creature_id t) noexcept;
+    bool tracks(ctx const& x, dcon::creature_id t);
+    uint32_t prey_count(ctx const& x);
+    dcon::creature_id prey_at(ctx const& x, uint32_t i);
+    void forget(ai_state& a, dcon::creature_id t) noexcept;
+    // felt this tick
+    bool sees(ctx const& x, dcon::creature_id t);
+    // Tracker.CreatureRepresentation.BestGuessForPosition, of the current
+    // prey or of `t`
     rw::ivec2 best_guess(ctx& x);
+    rw::ivec2 best_guess(ctx& x, dcon::creature_id t);
     rw::vec2 hunted_pos(ctx& x);
 
     //

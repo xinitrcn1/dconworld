@@ -115,32 +115,104 @@ namespace daddy {
             return source(const_cast<ai_state&>(a), id);
         }
 
-        // DaddyAI.UpdateDynamicRelationship: StaticWorld's (no Remix: a
-        // big plain Daddy ignores the Brothers)
+        // DaddyAI.UpdateDynamicRelationship: StaticWorld's, but the big
+        // creatures (the long legs of every variant among them) are never
+        // food (this also covers vanilla's big plain Daddy ignoring the
+        // Brothers)
         creature::relationship relationship_to(ctx const& x, dcon::creature_id t) {
             auto const tt = creature::template_of(x.state, t);
-            if (x.size_class() && x.v == variant::daddy && tt == creature::tmpl::brother_long_legs)
+            if (creature::is_big_creature(tt))
                 return creature::relationship{};
             return creature::static_relationship(creature::template_of(x.state, x.d), tt);
         }
 
-        // Tracker.SeeCreature: what the tentacles feel is what it knows of;
-        // with one representation, something new takes the place of what it
-        // hasn't felt for a while (PreyTracker's pick of the most attractive)
+        prey_rep* other(ai_state& a, dcon::creature_id t) noexcept {
+            for (uint32_t i = 0; i < a.other_count; ++i)
+                if (a.others[i].who == t)
+                    return &a.others[i];
+            return nullptr;
+        }
+        prey_rep const* other(ai_state const& a, dcon::creature_id t) noexcept { return other(const_cast<ai_state&>(a), t); }
+
+        bool tracks(ctx const& x, dcon::creature_id t) {
+            return bool(t) && (t == x.seen || other(x.a, t) != nullptr);
+        }
+
+        uint32_t prey_count(ctx const& x) { return (x.seen ? 1u : 0u) + x.a.other_count; }
+        dcon::creature_id prey_at(ctx const& x, uint32_t i) {
+            if (x.seen) {
+                if (i == 0)
+                    return x.seen;
+                --i;
+            }
+            return x.a.others[i].who;
+        }
+
+        void forget(ai_state& a, dcon::creature_id t) noexcept {
+            if (a.seen == t)
+                a.seen = dcon::creature_id{};
+            for (uint32_t i = 0; i < a.other_count;)
+                if (a.others[i].who == t)
+                    a.others[i] = a.others[--a.other_count];
+                else
+                    ++i;
+        }
+
+        // Tracker.SeeCreature: what the tentacles feel is what it knows of.
+        // Everything edible it feels is tracked (vanilla's PreyTracker keeps
+        // 5-7); when the list is full the one longest unfelt goes
         void see(ctx& x, dcon::creature_id t) {
             if (!t || t == x.d || relationship_to(x, t).type != creature::rel::eats)
                 return;
-            if (x.seen && x.seen != t && creature::live(x.state, x.seen) && x.ticks_since_seen < 40)
+            vec2 const at = creature::main_pos(x.state, t);
+            if (!x.seen || x.seen == t) {
+                if (!x.seen)
+                    forget(x.a, t);
+                x.seen = t;
+                x.a.seen_this_tick = 1;
+                x.sees = 1;
+                x.ticks_since_seen = 0;
+                x.last_seen_pos = at;
                 return;
-            x.seen = t;
-            x.a.seen_this_tick = 1;
-            x.sees = 1;
-            x.ticks_since_seen = 0;
-            x.last_seen_pos = creature::main_pos(x.state, t);
+            }
+            prey_rep* r = other(x.a, t);
+            if (!r) {
+                if (x.a.other_count < max_prey - 1) {
+                    r = &x.a.others[x.a.other_count++];
+                } else {
+                    r = &x.a.others[0];
+                    for (uint32_t i = 1; i < x.a.other_count; ++i)
+                        if (x.a.others[i].ticks_since_seen > r->ticks_since_seen)
+                            r = &x.a.others[i];
+                }
+                *r = prey_rep{};
+                r->who = t;
+            }
+            r->felt = 1;
+            r->sees = 1;
+            r->ticks_since_seen = 0;
+            r->last_seen_pos = at;
+        }
+
+        bool sees(ctx const& x, dcon::creature_id t) {
+            if (t && t == x.seen)
+                return x.sees != 0;
+            auto const* r = other(x.a, t);
+            return r && r->sees;
         }
 
         // BestGuessForPosition: where it is while it is felt, else where it
         // was last felt (the ghosts wandering off aren't ported)
+        ivec2 best_guess(ctx& x, dcon::creature_id t) {
+            if (!t || t == x.seen)
+                return best_guess(x);
+            auto const* r = other(x.a, t);
+            if (!r)
+                return best_guess(x);
+            if (r->sees && creature::live(x.state, t) && target_here(x.state, t, x.room.id))
+                return room_view::get_tile_position(creature::main_pos(x.state, t));
+            return room_view::get_tile_position(r->last_seen_pos);
+        }
         ivec2 best_guess(ctx& x) {
             if (auto const p = x.tracked(); p && x.sees && target_here(x.state, p, x.room.id))
                 return room_view::get_tile_position(creature::main_pos(x.state, p));
@@ -155,6 +227,8 @@ namespace daddy {
         constexpr ivec2 zero_and_eight_directions_diagonals_last[9] = {
             {0, 0}, {-1, 0}, {0, -1}, {1, 0}, {0, 1}, {-1, -1}, {1, -1}, {1, 1}, {-1, 1}
         };
+        // the mass of a body chunk (a core bulb)
+        constexpr float core_mass = 0.1f;
         // CreatureTemplate.damageRestistances[Explosion, 0]
         constexpr float explosion_resistance = 0.03f;
 
@@ -406,6 +480,47 @@ namespace daddy {
             return mathf::min(num, chance_of_finding(x) * mathf::inverse_lerp(50.f, 25.f, generation(x)));
         }
 
+        // PreyTracker.currentPrey: the nearest of what it tracks (felt ones
+        // first) is what the body goes for; the others stay for the
+        // tentacles
+        void choose_current_prey(ctx& x) {
+            auto& a = x.a;
+            auto const score = [&](dcon::creature_id t, bool s, ivec2 g) {
+                if (!creature::live(x.state, t) || !target_here(x.state, t, x.room.id))
+                    return float_max;
+                return mathf::max(1.f, float_dist(x.here(), g)) * (s ? 1.f : 3.f);
+            };
+            float best = x.seen ? score(x.seen, x.sees != 0, best_guess(x)) : float_max;
+            int32_t k = -1;
+            for (uint32_t i = 0; i < a.other_count; ++i) {
+                auto const& r = a.others[i];
+                float const sc = score(r.who, r.sees != 0, best_guess(x, r.who));
+                // (a margin keeps it from flipping between two)
+                if (sc < best * 0.8f || (sc < float_max && best == float_max)) {
+                    best = sc;
+                    k = int32_t(i);
+                }
+            }
+            if (k < 0)
+                return;
+            prey_rep const next = a.others[size_t(k)];
+            if (x.seen) {
+                auto& o = a.others[size_t(k)];
+                o.who = x.seen;
+                o.sees = x.sees;
+                o.felt = a.seen_this_tick;
+                o.ticks_since_seen = x.ticks_since_seen;
+                o.last_seen_pos = x.last_seen_pos;
+            } else {
+                a.others[size_t(k)] = a.others[--a.other_count];
+            }
+            x.seen = next.who;
+            x.sees = next.sees;
+            a.seen_this_tick = next.felt;
+            x.ticks_since_seen = next.ticks_since_seen;
+            x.last_seen_pos = next.last_seen_pos;
+        }
+
         // DaddyAI.Update
         void ai_update(ctx& x) {
             auto& a = x.a;
@@ -417,6 +532,7 @@ namespace daddy {
                         heard_noise(x, n, hearing);
             x.set_current(behavior::idle);
             --a.react_noise_time;
+            choose_current_prey(x);
             // UtilityComparer: prey at 1, rain at 1, noise at 0.1
             float const prey = prey_utility(x);
             float const rain = dens::rain_utility(x.state, x.d, x.room.id);
@@ -499,6 +615,16 @@ namespace daddy {
                 ++x.ticks_since_seen;
             }
             a.seen_this_tick = 0;
+            for (int32_t i = int32_t(a.other_count) - 1; i >= 0; --i) {
+                auto& r = a.others[size_t(i)];
+                if (!r.felt) {
+                    r.sees = 0;
+                    ++r.ticks_since_seen;
+                }
+                r.felt = 0;
+                if (float(r.ticks_since_seen) / 10.f > 100.f || !creature::live(x.state, r.who) || creature::eaten(x.state, r.who))
+                    a.others[size_t(i)] = a.others[--a.other_count];
+            }
             if (listens)
                 noise_tracker_update(x);
         }
@@ -703,8 +829,7 @@ namespace daddy {
                 if (tw.t.hunt == p)
                     tw.t.hunt = dcon::creature_id{};
             }
-            if (x.seen == p)
-                x.seen = dcon::creature_id{};
+            forget(x.a, p);
             // it drops what it holds, the other kinds let go of it (the
             // daddies did above), the rot too
             creature::lose_all_grasps(x.state, p);
@@ -723,12 +848,13 @@ namespace daddy {
                     else
                         ++i;
                 auto& oa = x.state.world.daddy_data_get_ai(creature::daddy_data(x.state.world, o));
-                if (oa.seen == p)
-                    oa.seen = dcon::creature_id{};
+                forget(oa, p);
                 for (uint32_t i = 0; i < tentacle_count(x.state, o); ++i) {
                     auto& t = x.state.world.daddy_tentacle_get_t(tentacle_of(x.state, o, i));
                     if (t.grab == p)
                         t.grab = dcon::creature_id{};
+                    if (t.hunt == p)
+                        t.hunt = dcon::creature_id{};
                 }
             });
             creature::kill(x.state, p, creature::template_of(x.state, x.d));
@@ -863,8 +989,10 @@ namespace daddy {
                 act(x, num);
                 // (Room.BackgroundNoise is 0 here)
             } else {
-                if (x.hd() && !x.dead())
+                if (x.hd() && !x.dead()) {
                     x.seen = dcon::creature_id{};
+                    x.a.other_count = 0;
+                }
                 z.eyes_closed = std::max(z.eyes_closed, 15);
             }
         }
@@ -886,7 +1014,7 @@ namespace daddy {
             auto& z = w.daddy_data_get_core(creature::daddy_data(w, d));
             // the tracker knows it and it eats it (CheckDaddyConsumption, the
             // weight limit, is Remix's)
-            if (w.daddy_data_get_ai(creature::daddy_data(w, d)).seen != ref)
+            if (auto const& ai = w.daddy_data_get_ai(creature::daddy_data(w, d)); ai.seen != ref && !other(ai, ref))
                 return;
             if (!size_class(state, d) && z.digesting_counter > 0)
                 return;
@@ -1071,8 +1199,9 @@ namespace daddy {
         desc.surface_friction = 0.4f;
         desc.water_friction = 0.96f;
         desc.buoyancy = 0.95f;
+        // (superSizeMe's lower gravity, 0.75, is gone: the body chunks are
+        // light instead, see core_mass)
         if (v == variant::mother || v == variant::grandmother) {
-            desc.gravity = 0.75f;
             desc.water_friction = 0.99f;
             desc.buoyancy = 0.75f;
         }
@@ -1085,7 +1214,11 @@ namespace daddy {
             num -= num5;
             float const rad = num5 * 3.5f + 3.5f;
             // Creature.PlaceInRoom puts every chunk a pixel from the tile's middle
-            cs.push_back(physics::add_chunk(state, o, at, rad, (hd && i < 2) ? 20.f : num5));
+            // (vanilla's mass is num5, up to several per bulb: the heavy body
+            // of the big ones dropped through what its tentacles hold; the
+            // core bulbs are near weightless instead, the Hunter's slugcat
+            // dummy keeps its 20)
+            cs.push_back(physics::add_chunk(state, o, at, rad, (hd && i < 2) ? 20.f : core_mass));
             list.push_back(custom::rnv(r) * rad);
         }
         for (int32_t j = 0; j < 5; ++j) {
@@ -1297,8 +1430,7 @@ namespace daddy {
                     core.eats[i] = core.eats[--core.eat_count];
                 else
                     ++i;
-            if (auto& a = w.daddy_data_get_ai(creature::daddy_data(w, d)); a.seen == ref)
-                a.seen = dcon::creature_id{};
+            forget(w.daddy_data_get_ai(creature::daddy_data(w, d)), ref);
             for (uint32_t i = 0; i < tentacle_count(state, d); ++i) {
                 auto& t = w.daddy_tentacle_get_t(tentacle_of(state, d, i));
                 if (t.grab == ref)
