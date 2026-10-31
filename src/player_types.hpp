@@ -82,6 +82,8 @@ namespace player {
         saint,
         inv,        // Sofanthiel
         watcher,
+        // Downpour's slugpup (NPCs; --slugcat slugpup for the player)
+        slugpup,
         count
     };
 
@@ -156,6 +158,8 @@ namespace player {
         uint8_t throw_hand = 0;
         // Watcher after the Void Weaver: longer tail, fluff, halo, gold eyes
         uint8_t weaver = 0;
+        // drawn as a pup (PlayerGraphics.RenderAsPup): a shorter body and tail
+        uint8_t pup = 0;
         float halo_flux = 1.f;
         uint32_t ticks = 0;
         rw::vec2 look_direction{0.f, 0.f};

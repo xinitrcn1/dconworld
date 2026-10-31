@@ -39,6 +39,8 @@
 #include "world.hpp"
 
 namespace npc {
+    // the share of a group that are slugpups
+    inline constexpr float pup_share = 0.2f;
     // the share of shelters that get a group at world load (`--npcs`)
     inline constexpr float default_shelter_chance = 0.25f;
 
@@ -172,6 +174,10 @@ namespace npc {
         std::atomic<uint32_t> strays{0};
         // the Artificer's pyro jumps up to a ledge
         std::atomic<uint32_t> pyro_jumps{0};
+        // piggybacks: on a back, off again, into another pack by it
+        std::atomic<uint32_t> piggybacks{0};
+        std::atomic<uint32_t> dismounts{0};
+        std::atomic<uint32_t> joined{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

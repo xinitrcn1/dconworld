@@ -737,6 +737,10 @@ object{
 	property{ name{pyro_jumpped} type{uint8_t} }
 	property{ name{pyro_jump_counter} type{int32_t} }
 	property{ name{pyro_jump_cooldown} type{float} }
+	// Player.SlugOnBack: the slugcat this one rides on the back of
+	// (Player.onBack), the one riding on its back; stacks have no limit
+	property{ name{on_back_of} type{player_id} }
+	property{ name{back_slug} type{player_id} }
 	// camouflage (isCamo, camoCharge, the hold to toggle timers) and how
 	// faded out the slugcat is drawn
 	property{ name{is_camo} type{uint8_t} }

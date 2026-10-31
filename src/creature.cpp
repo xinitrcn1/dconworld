@@ -19,6 +19,7 @@
 #include "tube_worm_graphics.hpp"
 #include "migrate.hpp"
 #include "physics.hpp"
+#include "piggyback.hpp"
 #include "player.hpp"
 #include "items.hpp"
 #include "rooms.hpp"
@@ -616,7 +617,8 @@ namespace creature {
             auto const& w = state.world;
             std::vector<dcon::creature_id> cats;
             rooms::for_each_creature(state, room.id, type::slugcat, [&](dcon::creature_id c) {
-                if (w.creature_get_away(c) == 0 && collides(state, c, c, room.id) && !held(state, c))
+                // (not one on another's back: SlugOnBack.ChangeOverlap)
+                if (w.creature_get_away(c) == 0 && collides(state, c, c, room.id) && !held(state, c) && !piggyback::riding(state, player_of(state, c)))
                     cats.push_back(c);
             });
             for (size_t a = 0; a < cats.size(); ++a)
@@ -750,6 +752,8 @@ namespace creature {
         // passes through the slugcats only with friendly fire off (story
         // mode's default; here it is on, game_state::friendly_fire)
         bool const by_slugcat = thrown_by && w.creature_is_valid(thrown_by) && is_slugcat(w, thrown_by) && !state.friendly_fire;
+        auto const stack = thrown_by && w.creature_is_valid(thrown_by) && is_slugcat(w, thrown_by) ? piggyback::bottom(state, player_of(state, thrown_by))
+                                                                                                    : dcon::player_id{};
         // the closest of every creature's chunks along the segment, then
         // the appendages (a daddy's tentacles) when they are closer still
         float best = 2.f;
@@ -758,8 +762,15 @@ namespace creature {
         rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
             if (c == thrown_by || (by_slugcat && is_slugcat(w, c)) || w.creature_get_away(c) != 0)
                 return;
-            // a grapple worm in a hand can't be hit (TubeWorm.canBeHitByWeapons)
+            // a grapple worm in a hand can't be hit (TubeWorm.canBeHitByWeapons),
+            // nor a slugcat on another's back (SlugOnBack.ChangeOverlap)
             if (w.creature_get_type(c) == type::tube_worm && held(state, c))
+                return;
+            if (is_slugcat(w, c) && piggyback::riding(state, player_of(state, c)))
+                return;
+            // (nor the one it rides on, or anyone in its stack: Spearmaster
+            // throws from a back)
+            if (stack && is_slugcat(w, c) && piggyback::bottom(state, player_of(state, c)) == stack)
                 return;
             uint32_t const n = chunk_count(state, c);
             for (uint32_t i = 0; i < n; ++i) {

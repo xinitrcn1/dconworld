@@ -64,7 +64,8 @@ namespace player_graphics {
             t.pos += t.vel;
             t.vel *= tail_air_friction;
             t.stretched = 1.f;
-            float const cr = (g.weaver ? weaver_tail_connection_rad : tail_connection_rad)[i];
+            // (a pup's: half as long, its npcStats.Size taken as 0.5)
+            float const cr = (g.weaver ? weaver_tail_connection_rad : tail_connection_rad)[i] * (g.pup ? 0.5f : 1.f);
             if (i > 0) {
                 auto& prev = g.tail[i - 1];
                 if (!custom::dist_less(t.pos, prev.pos, cr)) {
@@ -439,6 +440,10 @@ namespace player_graphics {
             g.last_draw_pos[i] = g.draw_pos[i];
         g.draw_pos[0] = c0;
         g.draw_pos[1] = c1;
+        // RenderAsPup: the upper body drawn closer to the hips
+        g.pup = w.player_get_stats(p).name == player::slugcat_name::slugpup ? 1 : 0;
+        if (g.pup)
+            g.draw_pos[0] = rw::lerp(c0, c1, 0.35f + (0.25f - 0.5f * 0.25f));
 
         // per body mode bobbing of the draw positions
         bool running = false;

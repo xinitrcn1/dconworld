@@ -122,7 +122,9 @@ the tools for tracing them, and what is known not to work yet.
   the route table keeps its walkable masks apart (`pyro_exit`,
   `pyro_arrival`, built only for rooms with pyro jumps, the others
   copied); `walking()` picks them for the NPC thinking (thread_local, set
-  by `think`, `look_ahead`, `reachable_shelters`, `planned_exit`). The
+  by `think`, `look_ahead`, `reachable_shelters`, `planned_exit`), only
+  for an Artificer alone or in a pack of Artificers (`nav.pyro_pack`, set
+  in `update_world`: the others couldn't follow it up). The
   move (`move::pyro`): lined up in the middle of its column standing, a
   jump straight up, the ability key pressed fresh once the feet hardly
   rise, straight up again, across onto the ledge once over it. Hot (4 or
@@ -632,6 +634,46 @@ does a placed warp), and after 30 s (`life`) it closes, fades out and is
 unlinked from the room; `game_state::free_warps` keeps it for the next
 one. Tests: "dynamic warp: anything close, closes after 30 s", "Watcher
 makes a dynamic warp", "warp cooling down: a creature waits, forced open".
+
+## Slugpups and piggyback
+
+**Slugpups** (`slugcat_name::slugpup`, Downpour's SlugcatStats: body
+weight 0.65, run, pole and corridor speed 0.8, lungs 0.8, no throwing
+skill; drawn as PlayerGraphics.RenderAsPup: the upper body closer to the
+hips, the tail half as long) are a fifth of each group spawned in the
+shelters (`npc::pup_share`; never rolled otherwise). `--slugcat slugpup`
+plays one.
+
+**Piggyback** (`piggyback.cpp`, Player.SlugOnBack): any slugcat on any
+other's back, in stacks of any height (`on_back_of`, `back_slug`). After
+the room's players move, each rider's hips go to its carrier's head
+(bottom up). A rider doesn't move on its own, doesn't bump into slugcats
+and isn't hit by weapons; a weapon thrown from a stack passes through
+everyone in it. It goes where the bottom goes, into pipes and out of them
+(`shortcuts.cpp` moves the stack with the vessel). A link comes apart when
+the rider dies or is grabbed, the carrier dies, or they end up apart.
+The player's slugcat takes a slugpup close by on its back with pick up
+(a free hand needed), lets it off with down and pick up, and gets off with
+jump; a slugpup played climbs on whoever it is by. Vanilla carries the pup
+in a hand first: here it goes straight onto the back.
+
+The NPCs (`piggybacks` in `update_world`, rolled from each one's own
+generator, only while travelling): a pup climbs on a slugcat within 60 px
+(its pack's first, any pack's) about every 15 s; a grown one asks a mate
+of its pack close by about every 150 s; a grown one takes a pup close by
+up about every 40 s. Onto the top of the stack. It gets off again after a
+while (about 22 s, a pup 75 s; not in a pipe, not with a threat about). A
+rider is in its carrier's pack: one of another pack joins it (the pack it
+led goes to the first of its members), a carrier alone becomes a pack's
+leader, a leader carried by one of its own hands the pack to that one;
+carried by the player's slugcat, no pack. A rider's brain only keeps an
+eye out: Spearmaster pulls needles out of its tail and throws them from up
+there (`arm()`). The Artificer's pyro jump blows apart every stack with a
+slugcat within 120 px, its own included (not vanilla). Stats:
+"piggybacks", "off", "joined". Tests: "piggyback: the player takes a pup,
+stacks", "a pyro jump scatters the stacks", "Spearmaster throws from a
+back", "joins the pack, rides through pipes". Not ported: a pup held in a
+hand, the throw of one.
 
 ## The Artificer
 

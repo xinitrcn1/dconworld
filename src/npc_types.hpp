@@ -119,6 +119,8 @@ namespace npc {
         // held, 3 standing in it until it sets off; ticks in the phase, the
         // warp (a member follows its leader's through)
         uint8_t warp_phase = 0;
+        // its pack is all Artificers (or it is alone): pyro jumps' ways
+        uint8_t pyro_pack = 1;
         int32_t warp_timer = 0;
         dcon::warp_point_id own_warp;
         // A spear step (only where no other way on is known): a spear thrown

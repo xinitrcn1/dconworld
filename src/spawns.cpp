@@ -43,7 +43,7 @@ namespace spawns {
 
         // SlugcatStats.Timeline's name for a campaign
         char const* timeline(::player::slugcat_name n) noexcept {
-            static char const* const names[] = {"White", "Yellow", "Red", "Gourmand", "Artificer", "Rivulet", "Spear", "Saint", "Inv", "Watcher"};
+            static char const* const names[] = {"White", "Yellow", "Red", "Gourmand", "Artificer", "Rivulet", "Spear", "Saint", "Inv", "Watcher", "Slugpup"};
             return n < ::player::slugcat_name::count ? names[size_t(n)] : "";
         }
 

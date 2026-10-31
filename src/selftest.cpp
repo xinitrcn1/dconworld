@@ -39,6 +39,7 @@
 #include "dens.hpp"
 #include "migrate.hpp"
 #include "npc.hpp"
+#include "piggyback.hpp"
 #include "rain.hpp"
 #include "spawns.hpp"
 #include "world.hpp"
@@ -1596,6 +1597,78 @@ namespace selftest {
             creature::destroy(gs, liz);
         }
         {
+            // piggyback: the player's slugcat takes a slugpup on its back with
+            // pick up (it leaves its pack), another slugcat climbs on top of
+            // it; they stay on as it runs, down and pick up lets the pup (and
+            // what rides on it) off
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(50, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, room, feet_at(10, 1), player::slugcat_name::white);
+            rw::rng rng{0x9166u};
+            auto const lead = npc::create(gs, room, feet_at(30, 1), rng, {}, player::slugcat_name::white);
+            w.slugcat_npc_set_leader(npc::of(gs, lead), npc::of(gs, lead));
+            auto const pup = npc::create(gs, room, feet_at(11, 1), rng, npc::of(gs, lead), player::slugcat_name::slugpup);
+            auto const top = npc::create(gs, room, feet_at(12, 1), rng, {}, player::slugcat_name::rivulet);
+            for (auto const q : {lead, pup, top})
+                w.slugcat_npc_get_nav(npc::of(gs, q)).goal_timer = -100000;
+            s.run(20, 0, 1);
+            s.run(1, 0, 0);
+            auto grab = player::make_input(0.f, 0.f, false, false, true);
+            simulation::tick(gs, std::span{&s.p, 1}, std::span{&grab, 1});
+            bool const took = piggyback::rider(gs, s.p) == pup;
+            s.run(2);
+            bool const left_pack = !w.slugcat_npc_get_leader(npc::of(gs, pup));
+            bool const stacked = piggyback::mount(gs, s.p, top) && piggyback::height(gs, s.p) == 3 && piggyback::carrier(gs, top) == pup;
+            float worst = 0.f;
+            for (int i = 0; i < 80; ++i) {
+                s.run(1, 1, 0);
+                worst = std::max(worst, rw::distance(gs.world.body_chunk_get_pos(player::body_chunk(gs, pup, 1)), s.pos(0)));
+            }
+            bool const moved = s.pos(1).x > feet_at(16, 1).x;
+            s.run(5);
+            auto off = player::make_input(0.f, -1.f, false, false, true);
+            simulation::tick(gs, std::span{&s.p, 1}, std::span{&off, 1});
+            bool const let_off = !piggyback::rider(gs, s.p) && !piggyback::riding(gs, pup);
+            char d[200];
+            std::snprintf(d, sizeof(d), " took=%d left_pack=%d stacked=%d kept_on=%.0fpx moved=%d let_off=%d (back %d)", int(took), int(left_pack), int(stacked), worst,
+                int(moved), int(let_off), int(bool(piggyback::rider(gs, s.p))));
+            r.check("piggyback: the player takes a pup, stacks", took && left_pack && stacked && worst < 40.f && moved && let_off, s.describe() + d);
+            for (auto const q : {lead, pup, top})
+                npc::destroy(gs, q);
+        }
+        {
+            // the Artificer's pyro jump blows the stacks close by apart (its
+            // own too); Spearmaster on a back pulls needles and throws them
+            // at a lizard
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(50, 20, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, room, feet_at(10, 1), player::slugcat_name::artificer);
+            rw::rng rng{0x9167u};
+            auto const pup = npc::create(gs, room, feet_at(10, 1), rng, {}, player::slugcat_name::slugpup);
+            auto const a = npc::create(gs, room, feet_at(13, 1), rng, {}, player::slugcat_name::white);
+            auto const b = npc::create(gs, room, feet_at(13, 1), rng, {}, player::slugcat_name::slugpup);
+            auto const far_a = npc::create(gs, room, feet_at(40, 1), rng, {}, player::slugcat_name::white);
+            auto const far_b = npc::create(gs, room, feet_at(40, 1), rng, {}, player::slugcat_name::slugpup);
+            for (auto const q : {pup, a, b, far_a, far_b})
+                w.slugcat_npc_get_nav(npc::of(gs, q)).goal_timer = -100000;
+            s.run(5);
+            bool const made = piggyback::mount(gs, s.p, pup) && piggyback::mount(gs, a, b) && piggyback::mount(gs, far_a, far_b);
+            s.run(20, 0, 1);
+            for (int i = 0; i < 40; ++i) {
+                auto in = player::make_input(0.f, 0.f, true, false, false);
+                if (i > 3 && s.vel(1).y < 1.f && !w.player_get_pyro_jump_counter(s.p))
+                    in.spec = true;
+                simulation::tick(gs, std::span{&s.p, 1}, std::span{&in, 1});
+            }
+            bool const scattered = !piggyback::rider(gs, s.p) && !piggyback::rider(gs, a);
+            bool const far_kept = piggyback::rider(gs, far_a) == far_b;
+            for (auto const q : {pup, a, b, far_a, far_b})
+                npc::destroy(gs, q);
+            char d[120];
+            std::snprintf(d, sizeof(d), " made=%d scattered=%d far_kept=%d", int(made), int(scattered), int(far_kept));
+            r.check("piggyback: a pyro jump scatters the stacks", made && scattered && far_kept, s.describe() + d);
+        }
+        {
             // a ripple warp only works from the ripple layer (camouflaged at ripple level 5)
             auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
             auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
@@ -2897,6 +2970,69 @@ namespace selftest {
                 int(arrived), t, npc::stats().pyro_jumps - pyros, hottest);
             r.check("NPC Artificer pyro jumps up a wall", survivor_cant && artificer_can && arrived && npc::stats().pyro_jumps > pyros && hottest < 7 && !player::dead(st, p),
                 d + (" " + npc::describe(st, p)));
+        }
+        {
+            // Spearmaster on another's back pulls needles out of its tail and
+            // throws them at a lizard
+            auto [st_ptr, from, course, to] = course_world("npc_spear_back");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0x5BA6u};
+            auto const under = npc::create(st, course, feet_at(30, 6), rng, {}, player::slugcat_name::gourmand);
+            auto const sm = npc::create(st, course, feet_at(30, 6), rng, {}, player::slugcat_name::spear);
+            w.slugcat_npc_get_nav(npc::of(st, under)).goal_timer = -100000;
+            tick_world(st, 2);
+            bool const on = piggyback::mount(st, under, sm);
+            auto const liz = lizard::create(st, course, world::room_view::middle_of_tile(40, 6), lizard::breed::green);
+            uint32_t const thrown = npc::stats().thrown;
+            float const health = w.creature_get_health(liz);
+            bool hurt = false, stayed = true;
+            for (uint32_t t = 0; t < 800 && !hurt; ++t) {
+                // (once it has been seen to: held where it is, stunned, it
+                // can't bite back)
+                if (npc::stats().thrown > thrown)
+                    w.creature_set_stun(liz, 40);
+                tick_world(st, 1);
+                stayed = stayed && piggyback::carrier(st, sm) == under;
+                hurt = creature::dead(st, liz) || w.creature_get_health(liz) < health;
+            }
+            char d[120];
+            std::snprintf(d, sizeof(d), " on=%d stayed=%d throws=%u lizard_hit=%d", int(on), int(stayed), npc::stats().thrown - thrown, int(hurt));
+            r.check("piggyback: Spearmaster throws from a back", on && stayed && npc::stats().thrown > thrown && hurt, d + (" " + npc::describe(st, sm)));
+        }
+        {
+            // a pup of one pack on the back of another pack's slugcat joins
+            // that pack; a pack's leader carried by one of its own: that one
+            // leads; the stack goes through the pipes to the shelter together
+            auto [st_ptr, from, course, to] = course_world("npc_piggy_pack");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            rw::rng rng{0x9168u};
+            auto const lead = npc::create(st, from, feet_at(4, 2), rng, {}, player::slugcat_name::white);
+            auto const ln = npc::of(st, lead);
+            w.slugcat_npc_set_leader(ln, ln);
+            auto const mate = npc::create(st, from, feet_at(6, 2), rng, ln, player::slugcat_name::white);
+            auto const other = npc::create(st, from, feet_at(8, 2), rng, {}, player::slugcat_name::white);
+            auto const on = npc::of(st, other);
+            w.slugcat_npc_set_leader(on, on);
+            auto const pup = npc::create(st, from, feet_at(9, 2), rng, on, player::slugcat_name::slugpup);
+            tick_world(st, 1);
+            bool const mounted = piggyback::mount(st, mate, pup) && piggyback::mount(st, lead, mate);
+            tick_world(st, 2);
+            bool const joined = w.slugcat_npc_get_leader(npc::of(st, pup)) == w.slugcat_npc_get_leader(npc::of(st, mate))
+                && w.slugcat_npc_get_leader(npc::of(st, mate)) == ln;
+            bool through = false, all_there = false;
+            uint32_t t = 0;
+            for (; t < 4000 && !all_there; ++t) {
+                tick_world(st, 1);
+                through = through || (rooms::room_of(st, pup) == course && piggyback::riding(st, pup));
+                all_there = rooms::room_of(st, lead) == to && rooms::room_of(st, mate) == to && rooms::room_of(st, pup) == to
+                    && w.slugcat_npc_get_nav(ln).what == npc::goal::rest;
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " mounted=%d joined=%d carried_through=%d all_there=%d after %u ticks", int(mounted), int(joined), int(through), int(all_there), t);
+            r.check("piggyback: joins the pack, rides through pipes", mounted && joined && through && all_there,
+                d + (" " + npc::describe(st, lead) + " / " + npc::describe(st, mate) + " / " + npc::describe(st, pup)));
         }
         {
             // a shelter with more than ten slugcats in it is crowded: one on

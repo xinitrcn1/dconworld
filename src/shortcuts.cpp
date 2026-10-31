@@ -6,6 +6,7 @@
 #include "cicada.hpp"
 #include "items.hpp"
 #include "physics.hpp"
+#include "piggyback.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "tube_worm.hpp"
@@ -44,6 +45,9 @@ namespace shortcuts {
             cicada::follow_player(state, p, room, false);
             centipede::follow_player(state, p, room, false);
             tube_worm::follow_player(state, p, room, false);
+            // the slugcat on its back (and on that one's) comes along
+            if (auto const r = piggyback::rider(state, p))
+                move_to_room(state, r, room);
         }
 
         // Creature/Player.SpitOutOfShortCut
@@ -64,6 +68,8 @@ namespace shortcuts {
             cicada::follow_player(state, p, room.id, true);
             centipede::follow_player(state, p, room.id, true);
             tube_worm::follow_player(state, p, room.id, true);
+            if (auto const r = piggyback::rider(state, p))
+                spit_out(state, r, tile);
         }
 
         // the vessel heads back to where it came from
@@ -126,6 +132,11 @@ namespace shortcuts {
                 return true;
             w.creature_set_away(player::creature_of(state, p), 1);
             w.creature_set_away_room(player::creature_of(state, p), room.id);
+            // (the stack on its back goes in with it)
+            for (auto r = piggyback::rider(state, p); r; r = piggyback::rider(state, r)) {
+                w.creature_set_away(player::creature_of(state, r), 1);
+                w.creature_set_away_room(player::creature_of(state, r), room.id);
+            }
             w.creature_set_vessel_shortcut(player::creature_of(state, p), sc);
             w.creature_set_vessel_reverse(player::creature_of(state, p), 0);
             w.creature_set_vessel_progress(player::creature_of(state, p), 0.f);

@@ -17,6 +17,7 @@
 #include "items.hpp"
 #include "outposts.hpp"
 #include "pathing.hpp"
+#include "piggyback.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "rooms.hpp"
@@ -234,6 +235,8 @@ namespace simulation {
                 items::carry_update(state, p);
                 items::back_spear_update(state, p);
             }
+            // the riders on their carriers' backs (SlugOnBack)
+            piggyback::update_room(state, view);
             // the vessels in the room's pipes and the creatures in its dens
             dens::update_room(state, view);
             creature::update_room(state, view);
@@ -270,8 +273,11 @@ namespace simulation {
         // it first, serially (coming out moves them to another room). The
         // controlled ones, then the NPCs
         std::vector<driven> out;
+        // (a rider goes through a pipe on its carrier's back)
         for (size_t i = 0; i < players.size(); ++i) {
             auto const p = players[i];
+            if (player::in_shortcut(state, p) && piggyback::riding(state, p))
+                continue;
             if (player::in_shortcut(state, p))
                 shortcuts::update_vessel(state, p);
             else
@@ -279,6 +285,8 @@ namespace simulation {
         }
         w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
             auto const p = w.slugcat_npc_get_player(n);
+            if (player::in_shortcut(state, p) && piggyback::riding(state, p))
+                return;
             if (player::in_shortcut(state, p))
                 shortcuts::update_vessel(state, p);
             else

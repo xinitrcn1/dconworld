@@ -71,6 +71,7 @@ namespace items {
             switch (n) {
             case ::player::slugcat_name::yellow:
             case ::player::slugcat_name::saint:
+            case ::player::slugcat_name::slugpup:
                 return 0;
             case ::player::slugcat_name::red:
             case ::player::slugcat_name::gourmand:
@@ -402,6 +403,7 @@ namespace items {
             case slugcat_name::spear: return 10;
             case slugcat_name::saint: return 5;
             case slugcat_name::inv: return 12;
+            case slugcat_name::slugpup: return 5;
             default: return 7;
             }
         }

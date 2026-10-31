@@ -11,6 +11,7 @@
 #include "items.hpp"
 #include "migrate.hpp"
 #include "pathing.hpp"
+#include "piggyback.hpp"
 #include "player.hpp"
 #include "player_graphics.hpp"
 #include "rain.hpp"
@@ -42,10 +43,13 @@ namespace npc {
         // (thread_local: the rooms think in parallel)
         thread_local bool artificer_now = false;
         pathing::movement const& walking() { return artificer_now ? pathing::artificer : pathing::slugcat; }
+        // (an Artificer in a pack with others goes their way: they can't
+        // follow it up its pyro jumps; update_world's `pyro_pack`)
         struct walking_as {
             bool before;
             walking_as(sys::game_state const& state, dcon::player_id p) : before(artificer_now) {
-                artificer_now = state.world.player_get_stats(p).name == player::slugcat_name::artificer;
+                auto const n = state.world.player_get_npc(p);
+                artificer_now = state.world.player_get_stats(p).name == player::slugcat_name::artificer && (!n || state.world.slugcat_npc_get_nav(n).pyro_pack);
             }
             ~walking_as() { artificer_now = before; }
         };
@@ -2002,8 +2006,9 @@ namespace npc {
         auto& w = state.world;
         if (state.slugcat_routes.size() != size_t(w.room_size()))
             build_routes(state);
-        // (rolled either way: the same colours whatever the slugcat)
-        auto const rolled = player::slugcat_name(rng.range(0, int32_t(player::slugcat_name::count)));
+        // (rolled either way: the same colours whatever the slugcat; pups
+        // only when asked for, spawn_group)
+        auto const rolled = player::slugcat_name(rng.range(0, int32_t(player::slugcat_name::slugpup)));
         if (name == player::slugcat_name::count)
             name = rolled;
         auto const p = player::create(state, room, feet, name);
@@ -2057,7 +2062,10 @@ namespace npc {
         for (uint32_t i = 0; i < count; ++i) {
             ivec2 const t = spots[size_t(i) % std::min<size_t>(spots.size(), 6)];
             vec2 const feet = room_view::middle_of_tile(t) + vec2{rng.value() * 8.f - 4.f, -2.f};
-            auto const p = create(state, room, feet, rng, packed >= 2 && pack[i] ? leader : dcon::slugcat_npc_id{});
+            // (a fifth of them slugpups)
+            bool const pup = rng.value() < pup_share;
+            auto const p = create(state, room, feet, rng, packed >= 2 && pack[i] ? leader : dcon::slugcat_npc_id{},
+                pup ? player::slugcat_name::slugpup : player::slugcat_name::count);
             if (packed >= 2 && pack[i] && !leader) {
                 leader = w.player_get_npc(p);
                 w.slugcat_npc_set_leader(leader, leader);
@@ -2510,6 +2518,140 @@ namespace npc {
         }
     }
 
+    namespace {
+        // `n`'s members (but those `stays` says) get the first of them as
+        // their leader, who keeps `n`'s target
+        template<typename F>
+        void hand_over(sys::game_state& state, dcon::slugcat_npc_id n, F&& stays) {
+            auto& w = state.world;
+            dcon::slugcat_npc_id next;
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id m) {
+                if (m == n || w.slugcat_npc_get_leader(m) != n || stays(m))
+                    return;
+                if (!next) {
+                    next = m;
+                    w.slugcat_npc_set_target(m, w.slugcat_npc_get_target(n));
+                }
+                w.slugcat_npc_set_leader(m, next);
+            });
+        }
+            // Piggyback (piggyback.hpp), rolled from each slugcat's own
+        // generator: a slugpup climbs on a slugcat close by (its pack's
+        // first, any pack's), a slugcat asks a mate of its pack close by to
+        // carry it, a grown slugcat takes a slugpup close by on its back
+        // (onto the top of the stack: stacks have no limit); after a while
+        // it gets off again (a pup later). Not the player's slugcat (it
+        // takes pups with pick up, piggyback.cpp)
+        constexpr float pup_climb = 1.f / 600.f, ask = 1.f / 6000.f, take_pup = 1.f / 1500.f;
+        constexpr float pup_off = 1.f / 3000.f, off = 1.f / 900.f;
+        constexpr float piggy_reach = 60.f;
+
+        void piggybacks(sys::game_state& state) {
+            auto& w = state.world;
+            std::vector<dcon::slugcat_npc_id> all;
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) { all.push_back(n); });
+            auto const able = [&](dcon::player_id q) {
+                return !player::dead(state, q) && !player::in_shortcut(state, q) && player::stun_of(state, q) <= 0 && !w.player_get_eaten(q);
+            };
+            auto const is_pup = [&](dcon::player_id q) { return w.player_get_stats(q).name == player::slugcat_name::slugpup; };
+            for (auto const n : all) {
+                auto const p = w.slugcat_npc_get_player(n);
+                if (!able(p))
+                    continue;
+                auto const c = player::creature_of(state, p);
+                auto& rng = w.creature_get_random(c);
+                auto& nav = w.slugcat_npc_get_nav(n);
+                bool const pup = is_pup(p);
+                if (piggyback::riding(state, p)) {
+                    // (not in a pipe, nor with a threat about: Spearmaster fights from up there)
+                    bool const threat = nav.threat && nav.threat_timer < forget_threat;
+                    if (!threat && rng.value() < (pup ? pup_off : off) && !player::in_shortcut(state, piggyback::bottom(state, p))) {
+                        piggyback::drop(state, piggyback::carrier(state, p));
+                        nav.goal_tile = ivec2{-1, -1};
+                        migrate::cancel(state, c);
+                        ++stats().dismounts;
+                    }
+                    continue;
+                }
+                if (nav.what != goal::travel)
+                    continue;
+                float const r = rng.value();
+                bool const climb = r < (pup ? pup_climb : ask);
+                bool const take = !pup && !climb && r < ask + take_pup;
+                if (!climb && !take)
+                    continue;
+                auto const l = w.slugcat_npc_get_leader(n);
+                auto const room = rooms::room_of(state, p);
+                vec2 const at = pos(state, p, 0);
+                dcon::player_id best;
+                float best_d = 0.f;
+                bool best_mate = false;
+                rooms::for_each_player(state, room, [&](dcon::player_id o) {
+                    auto const on = w.player_get_npc(o);
+                    if (o == p || !on || !able(o) || !custom::dist_less(pos(state, o, 0), at, piggy_reach))
+                        return;
+                    bool const mate = l && w.slugcat_npc_get_leader(on) == l;
+                    if (take) {
+                        // a pup not on anyone's back
+                        if (!is_pup(o) || piggyback::riding(state, o))
+                            return;
+                    } else {
+                        // (not one on its own back; a grown one only its pack's)
+                        if (piggyback::bottom(state, o) == p || (!pup && !mate))
+                            return;
+                    }
+                    float const d = rw::distance(pos(state, o, 0), at);
+                    if (!best || (mate && !best_mate) || (mate == best_mate && d < best_d)) {
+                        best = o;
+                        best_d = d;
+                        best_mate = mate;
+                    }
+                });
+                if (!best)
+                    continue;
+                if (take ? piggyback::mount(state, p, best) : piggyback::mount(state, best, p)) {
+                    migrate::cancel(state, player::creature_of(state, take ? best : p));
+                    ++stats().piggybacks;
+                }
+            }
+            // a rider is in its carrier's pack (a carrier alone leads a pack
+            // of its own now; a leader carried by one of its own: that one
+            // leads; carried by the player's slugcat: no pack)
+            for (auto const n : all) {
+                auto const p = w.slugcat_npc_get_player(n);
+                auto const under = piggyback::carrier(state, p);
+                if (!under || player::dead(state, p))
+                    continue;
+                auto const un = w.player_get_npc(under);
+                dcon::slugcat_npc_id want;
+                if (un) {
+                    auto ul = w.slugcat_npc_get_leader(un);
+                    if (!ul || !w.slugcat_npc_is_valid(ul) || ul == n) {
+                        if (ul == n) {
+                            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id m) {
+                                if (w.slugcat_npc_get_leader(m) == n)
+                                    w.slugcat_npc_set_leader(m, un);
+                            });
+                            w.slugcat_npc_set_target(un, w.slugcat_npc_get_target(n));
+                        }
+                        w.slugcat_npc_set_leader(un, un);
+                        ul = un;
+                    }
+                    want = ul;
+                }
+                if (w.slugcat_npc_get_leader(n) == want)
+                    continue;
+                // (it led a pack: the first of its members leads it now)
+                if (w.slugcat_npc_get_leader(n) == n)
+                    hand_over(state, n, [](dcon::slugcat_npc_id) { return false; });
+                w.slugcat_npc_set_leader(n, want);
+                w.slugcat_npc_set_target(n, want ? w.slugcat_npc_get_target(want) : dcon::room_id{});
+                migrate::cancel(state, player::creature_of(state, p));
+                ++stats().joined;
+            }
+        }
+    }
+
     void update_world(sys::game_state& state) {
         auto& w = state.world;
         // the shelters' crowds; a pack (or one alone) on its way to a crowded
@@ -2523,6 +2665,22 @@ namespace npc {
             if (r && w.room_get_is_shelter(r) && crowd[size_t(r.index())] < 255)
                 ++crowd[size_t(r.index())];
         });
+        // who rides on whom, and the riders' packs
+        piggybacks(state);
+        // the packs whose slugcats are all Artificers (and those alone) take
+        // the pyro jumps' ways
+        {
+            std::vector<uint8_t> mixed(w.slugcat_npc_size(), 0);
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+                auto const l = w.slugcat_npc_get_leader(n);
+                if (l && w.player_get_stats(w.slugcat_npc_get_player(n)).name != player::slugcat_name::artificer)
+                    mixed[size_t(l.id.index())] = 1;
+            });
+            w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
+                auto const l = w.slugcat_npc_get_leader(n);
+                w.slugcat_npc_get_nav(n).pyro_pack = !l || !mixed[size_t(l.id.index())] ? 1 : 0;
+            });
+        }
         // a Watcher in a pack another leads, in a region without warps (none
         // placed, no dynamic one open): on its own (it makes its own way)
         std::vector<uint8_t> warped_region(w.region_size(), 0);
@@ -2622,16 +2780,7 @@ namespace npc {
                 ++stats().strays;
             } else if (l == n) {
                 // its members left behind: the first of them leads them now
-                dcon::slugcat_npc_id next;
-                w.for_each_slugcat_npc([&](dcon::slugcat_npc_id m) {
-                    if (m == n || w.slugcat_npc_get_leader(m) != n || among(w.slugcat_npc_get_player(m)))
-                        return;
-                    if (!next) {
-                        next = m;
-                        w.slugcat_npc_set_target(m, w.slugcat_npc_get_target(n));
-                    }
-                    w.slugcat_npc_set_leader(m, next);
-                });
+                hand_over(state, n, [&](dcon::slugcat_npc_id m) { return among(w.slugcat_npc_get_player(m)); });
             }
             // somewhere it didn't mean to go: a new target from there
             w.slugcat_npc_set_target(n, dcon::room_id{});
@@ -2720,6 +2869,24 @@ namespace npc {
         }
         migrate::tick(state, c);
         ++nav.goal_timer;
+        // on another's back: it goes where that one goes; it keeps an eye
+        // out, and Spearmaster pulls needles out of its tail and throws them
+        // (arm() throws what is in hand)
+        if (piggyback::riding(state, p)) {
+            nav.stuck = 0;
+            nav.how = move::walk;
+            if (w.creature_get_stun(c) > 0)
+                return player::input_package{};
+            walking_as walk{state, p};
+            brain b{state, p, n, c, room, nav, w.creature_get_random(c), tile_of(state, p, room)};
+            b.see_threats();
+            auto in = input(0, 0);
+            if (b.spearmaster() && nav.threat && creature::here(state, nav.threat, room.id) && !creature::dead(state, nav.threat)
+                && !weapon(state, items::held(state, p, 0)) && !weapon(state, items::held(state, p, 1)))
+                in.pckp = true;
+            arm(state, p, room, nav, in);
+            return in;
+        }
         // stunned, held, sucked into a pipe: its legs aren't its own
         if (w.creature_get_stun(c) > 0 || w.creature_get_entering_shortcut(c).x >= 0)
             return player::input_package{};
@@ -2768,6 +2935,10 @@ namespace npc {
             s += " to " + std::string{state.to_string_view(w.room_get_name(target))};
         if (l)
             s += l == n ? " (leads a pack)" : " (in a pack)";
+        if (piggyback::riding(state, p))
+            s += " (on a back)";
+        else if (piggyback::rider(state, p))
+            s += " (carries " + std::to_string(piggyback::height(state, p) - 1) + ")";
         if (player::dead(state, p))
             s += " dead";
         return s;
@@ -2786,13 +2957,13 @@ namespace npc {
             if (state.world.slugcat_npc_get_leader(n) == n)
                 ++packs;
         });
-        char buf[640];
+        char buf[760];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pyro jumps, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pyro jumps, %u piggybacks (%u off, %u joined), %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
             s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.crowded.load(),
-            s.warps_made.load(), s.strays.load(), s.pyro_jumps.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.warps_made.load(), s.strays.load(), s.pyro_jumps.load(), s.piggybacks.load(), s.dismounts.load(), s.joined.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

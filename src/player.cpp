@@ -3,6 +3,7 @@
 
 #include "player.hpp"
 #include "explosions.hpp"
+#include "piggyback.hpp"
 #include "rooms.hpp"
 #include "physics.hpp"
 #include "cicada.hpp"
@@ -157,6 +158,15 @@ namespace player {
             s.eye_color = white_eyes;
             s.lungs_fac = 0.8f;
             break;
+        case slugcat_name::slugpup:
+            // a player's pup's NPCStats colour (HSL 0.383, 0.55, 0.84)
+            s.body_color = custom::hsl2rgb(0.38333333f, 0.55f, 0.84f);
+            s.body_weight_fac = 0.65f;
+            s.lungs_fac = 0.8f;
+            s.pole_climb_speed_fac = 0.8f;
+            s.corridor_climb_speed_fac = 0.8f;
+            s.runspeed_fac = 0.8f;
+            break;
         default:
             break;
         }
@@ -165,7 +175,7 @@ namespace player {
 
     char const* to_string(slugcat_name n) noexcept {
         static char const* const names[] = {
-            "Survivor", "Monk", "Hunter", "Gourmand", "Artificer", "Rivulet", "Spearmaster", "Saint", "Sofanthiel", "Watcher",
+            "Survivor", "Monk", "Hunter", "Gourmand", "Artificer", "Rivulet", "Spearmaster", "Saint", "Sofanthiel", "Watcher", "Slugpup",
         };
         return n < slugcat_name::count ? names[size_t(n)] : "?";
     }
@@ -596,6 +606,10 @@ namespace player {
 
     void destroy(sys::game_state& state, dcon::player_id id) {
         items::release_all(state, id);
+        // off the back it rode on, the one on its back off it
+        if (auto const c = piggyback::carrier(state, id))
+            piggyback::drop(state, c);
+        piggyback::drop(state, id);
         rot::release(state, state.world.player_get_creature(id));
         auto const cr = state.world.player_get_creature(id);
         creature::release_target(state, cr);
@@ -810,10 +824,16 @@ namespace player {
         physics::update_object(state, room, x.o, &terrain_impact, &x);
 
         x.go_through_floors(false);
-        if (p.stun() < 1 && !p.dead())
+        // (on another's back it doesn't move on its own: SlugOnBack holds it
+        // there, piggyback.cpp; its hands still work)
+        bool const on_back = piggyback::riding(state, id);
+        if (p.stun() < 1 && !p.dead() && !on_back)
             movement_update(x);
         artificer_update(x);
-        if (p.stun() < 1 && !p.dead())
+        // the player's slugcat taking a slugpup on its back, letting it off,
+        // getting off (the NPCs' is npc.cpp's)
+        bool const took = !state.world.player_get_npc(id) && p.stun() < 1 && !p.dead() && piggyback::player_input(state, id);
+        if (p.stun() < 1 && !p.dead() && !took)
             items::grab_update(state, id, room);
     }
 }
@@ -2938,6 +2958,7 @@ namespace player {
         constexpr int32_t pyro_capacity = 10;
         constexpr int32_t pyro_hot = pyro_capacity - 5;
         constexpr int32_t pyro_stun = pyro_capacity - 3;
+        constexpr float pyro_scatter = 120.f;
 
         void pyro_burst(ctx& x, vec2 at) {
             auto& state = x.state;
@@ -2986,11 +3007,14 @@ namespace player {
             auto const m = p.body_mode();
             bool const holding_on = a == animation_index::hang_from_beam || a == animation_index::climb_on_beam || m == body_mode_index::wall_climb
                 || m == body_mode_index::swimming;
-            if (pressed && !p.pyro_jumpped() && p.can_jump() <= 0 && x.in(0).y >= 0 && x.consious() && m != body_mode_index::crawl
+            if (pressed && !p.pyro_jumpped() && p.can_jump() <= 0 && x.in(0).y >= 0 && x.consious() && !piggyback::riding(x.state, p.id) && m != body_mode_index::crawl
                 && m != body_mode_index::corridor_climb && m != body_mode_index::climb_into_shortcut && !holding_on) {
                 p.pyro_jumpped() = 1;
                 p.no_grab_counter() = 5;
                 pyro_burst(x, x.pos(0));
+                // (not vanilla: it blows the piggyback stacks close by apart,
+                // its own too)
+                piggyback::scatter(x.state, x.room.id, x.pos(0), pyro_scatter);
                 // (zero gravity isn't ported)
                 int32_t const ix = x.in(0).x;
                 if (ix != 0) {

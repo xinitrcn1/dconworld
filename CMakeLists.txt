@@ -68,6 +68,7 @@ add_executable(rwcpp
     src/outposts.cpp
     src/item_graphics.cpp
     src/gates.cpp
+    src/piggyback.cpp
     src/simulation.cpp
     src/rain.cpp
     src/dens.cpp
