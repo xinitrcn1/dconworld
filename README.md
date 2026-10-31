@@ -276,15 +276,16 @@ Watcher's WARA, WAUA, WBLA, WMPA, WORA, WPTA, WRSA, WSSR, WTDA, WTDB, WVWB).
 Vanilla: one group led by CC (every other region), SS dry; with the Watcher
 its regions (linked by warps, not gates) are groups of their own.
 
-The death rain is short: `rain::deadly_rain_ticks` (400, ten seconds) from
-the moment it hits, then the region (group) rolls its next cycle and goes
-on; no restart, sleep screen or karma. Its phases are vanilla's
-(`NextDeathRainMode`: 70% AlternateBuildUp then GradeAPlateu, 30%
-CalmBeforeStorm, GradeABuildUp, GradeAPlateu; then GradeBBuildUp,
-GradeBPlateu, FinalBuildUp, Mayhem), each with its vanilla length rolled when
-the rain hits and the whole sequence squeezed into the window in proportion:
-the phases before Mayhem share 300 ticks (CalmBeforeStorm, which isn't
-deadly, at most 60 of them), Mayhem has the last 100. Their intensity, rumble
+The death rain is short: one to two minutes (`rain::deadly_rain_min` to
+`deadly_rain_max`, rolled every time it hits) from the moment it hits, then
+the region (group) rolls its next cycle and goes on; no restart, sleep
+screen or karma. Its phases are vanilla's (`NextDeathRainMode`: 70%
+AlternateBuildUp then GradeAPlateu, 30% CalmBeforeStorm, GradeABuildUp,
+GradeAPlateu; then GradeBBuildUp, GradeBPlateu, FinalBuildUp, Mayhem), each
+with its vanilla length rolled when the rain hits; when they don't fit in
+the first three quarters of the rain (CalmBeforeStorm, which isn't deadly,
+at most 15% of it) the sequence is squeezed in proportion, never slowed
+down, and Mayhem has the rest. Their intensity, rumble
 and screen shake curves are vanilla's over the compressed progression; the
 flood rises with the same time scale (vanilla's speed and acceleration times
 the compression, so it reaches vanilla's height), and drains away over 400

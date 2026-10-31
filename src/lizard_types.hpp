@@ -703,6 +703,13 @@ namespace lizard {
         movement_animation move_anim;
         bool apply_gravity = false;
         int32_t in_allowed_terrain_counter = 0;
+        // Lizard.LegsGripping and NoGripCounter, kept by the body itself
+        // (lizard.cpp update_grip) instead of read from LizardGraphics' legs:
+        // the legs gripping, ticks without any grip, and every leg's ticks
+        // in a row with terrain in reach (LizardLimb.gripCounter)
+        int32_t legs_gripping = 2;
+        int32_t no_grip_counter = 0;
+        uint8_t limb_grip[6] = {};
         bool has_grip_point = false;
         rw::vec2 grip_point{0.f, 0.f};
         int32_t time_spent_trying_this_move = 0;

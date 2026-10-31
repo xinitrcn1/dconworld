@@ -388,7 +388,7 @@ namespace pole_mimic_graphics {
     }
 
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
-        std::vector<sprites::strip_vertex>& strip) {
+        std::vector<sprites::strip_vertex>& strip, std::vector<sprites::rope_point>& ropes) {
         auto const& w = state.world;
         auto const d = data(state, c);
         auto const& g = w.pole_mimic_data_get_graphics(d);
@@ -407,29 +407,25 @@ namespace pole_mimic_graphics {
         vec3 const color = mix(pal.black(), mimic_color, mathf::lerp(g.last_look_like_a_pole, g.look_like_a_pole, alpha));
 
         // sprite 0: the stalk (sprite 1, its shadow mesh in the Shadows
-        // container, has no renderer layer here)
+        // container, has no renderer layer here). Vanilla's TriangleMesh
+        // runs from the root through every rope segment, each quad's half
+        // width alternating thick and thin (thicker toward the root) until
+        // the plant looks like a pole; here those points and half widths
+        // go to the GPU rope (sprites::add_rope), which curves between them
         {
-            std::vector<vec2> v(size_t(n) * 4);
+            vec4 const col{color.x, color.y, color.z, 1.f};
             vec2 at = b.root_pos - b.stick_out_dir * 30.f;
             at += custom::dir_vec(rw::lerp(seg[1].last_pos, seg[1].pos, alpha), at) * 1.f;
-            float wa = 2.f;
+            size_t const first = ropes.size();
+            ropes.push_back(sprites::rope_point{at, 2.f, col});
             for (uint32_t i = 0; i < n; ++i) {
                 float const num = float(i) / float(n - 1);
                 vec2 const v2 = rw::lerp(seg[i].last_pos, seg[i].pos, alpha);
-                vec2 const nrm = rw::normalized(at - v2);
-                vec2 const a2 = custom::perpendicular_vector(nrm);
-                float const dd = rw::distance(at, v2) / 3.f;
                 float const f = stem_look_like_pole(g, lv, num, alpha);
                 float const num2 = mathf::lerp(i % 2 == 0 ? mathf::lerp(4.f, 1.5f, num) : mathf::lerp(1.4f, 0.75f, num), 2.f, mathf::pow(f, 0.75f));
-                float const wm = mathf::lerp(wa, num2, 0.5f);
-                v[i * 4] = at - nrm * dd - a2 * wm;
-                v[i * 4 + 1] = at - nrm * dd + a2 * wm;
-                v[i * 4 + 2] = v2 + nrm * dd - a2 * num2;
-                v[i * 4 + 3] = v2 + nrm * dd + a2 * num2;
-                at = v2;
-                wa = num2;
+                ropes.push_back(sprites::rope_point{v2, num2, col});
             }
-            sprites::long_mesh(out, strip, v.data(), v.size(), color);
+            sprites::add_rope(out, ropes, first);
         }
 
         // the leaves, then their decorations

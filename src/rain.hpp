@@ -13,8 +13,9 @@
 // rains or floods: Five Pebbles, the Watcher's dry regions) aren't synced and
 // don't link the regions around them.
 //
-// The death rain is short: `deadly_rain_ticks` from the moment it hits, its
-// phases rolled like vanilla's DeathRain and squeezed into that window
+// The death rain is short: one to two minutes from the moment it hits (rolled
+// every time, `deadly_rain_min`..`deadly_rain_max`), its phases rolled like
+// vanilla's DeathRain and fit into the first part of it
 // (`death_rain_window`), then the region rolls its next cycle and keeps
 // going: no restart, no sleep screen, no karma. The flood it raised drains
 // away over `flood_drain_ticks`.
@@ -37,12 +38,14 @@
 #include "world.hpp"
 
 namespace rain {
-    // the deadly rain lasts 10 seconds, then the cycle starts over
-    inline constexpr int32_t deadly_rain_ticks = 400;
-    // the death rain's phases before Mayhem share this much of the window
-    // (CalmBeforeStorm at most `calm_ticks` of it), Mayhem has the rest
-    inline constexpr int32_t death_rain_window = 300;
-    inline constexpr int32_t calm_ticks = 60;
+    // the deadly rain lasts one to two minutes (rolled when it hits), then
+    // the cycle starts over
+    inline constexpr int32_t deadly_rain_min = 40 * 60;
+    inline constexpr int32_t deadly_rain_max = 40 * 120;
+    // the death rain's phases before Mayhem share at most this much of it
+    // (CalmBeforeStorm at most `calm_share` of it), Mayhem has the rest
+    inline constexpr float death_rain_window = 0.75f;
+    inline constexpr float calm_share = 0.15f;
     // the flood goes back down over this long after the rain
     inline constexpr int32_t flood_drain_ticks = 400;
     // a region where fewer of its rooms than this have a RoomRain that

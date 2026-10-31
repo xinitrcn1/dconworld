@@ -18,6 +18,10 @@
 #include "shaders/decal_vert.h"
 #include "shaders/flat_frag.h"
 #include "shaders/flat_vert.h"
+#include "shaders/circle_frag.h"
+#include "shaders/circle_vert.h"
+#include "shaders/rope_frag.h"
+#include "shaders/rope_vert.h"
 #include "shaders/room_frag.h"
 #include "shaders/room_vert.h"
 #include "shaders/warp_screen_frag.h"
@@ -34,6 +38,8 @@ namespace gpu {
         constexpr VkFormat target_format = VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkDeviceSize uniform_range = 1024; // the biggest uniform block a draw may pass
         constexpr uint32_t textures_per_draw = 3;    // bindings 1..3
+        constexpr uint32_t storage_binding = 1 + textures_per_draw;
+        constexpr VkDeviceSize storage_align = 32; // a whole number of rope_points and circles
         constexpr uint32_t sets_per_pool = 1024;
 
         // anything unexpected past initialisation is fatal
@@ -70,10 +76,11 @@ namespace gpu {
             VkSemaphore acquired = VK_NULL_HANDLE;
             std::vector<VkDescriptorPool> pools;
             uint32_t pool_index = 0;
-            buffer vertices, uniforms;
-            VkDeviceSize vertices_used = 0, uniforms_used = 0;
+            buffer vertices, uniforms, storage;
+            VkDeviceSize vertices_used = 0, uniforms_used = 0, storage_used = 0;
             std::vector<buffer> garbage; // outgrown, freed once the frame is done
-            // descriptor sets by their textures (the uniform buffer is the frame's)
+            // descriptor sets by their textures (the uniform and storage
+            // buffers are the frame's)
             std::unordered_map<uint64_t, VkDescriptorSet> sets;
         };
 
@@ -385,7 +392,7 @@ namespace gpu {
         }
 
         void make_pipelines(context& c) {
-            std::array<VkDescriptorSetLayoutBinding, 1 + textures_per_draw> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 2 + textures_per_draw> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
             bindings[0].descriptorCount = 1;
@@ -396,6 +403,10 @@ namespace gpu {
                 bindings[i].descriptorCount = 1;
                 bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             }
+            bindings[storage_binding].binding = storage_binding;
+            bindings[storage_binding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[storage_binding].descriptorCount = 1;
+            bindings[storage_binding].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
             VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
             li.bindingCount = uint32_t(bindings.size());
             li.pBindings = bindings.data();
@@ -450,6 +461,8 @@ namespace gpu {
             ri.pColorAttachmentFormats = &target_format;
 
             spirv const warp_vert{warp_vert_spv, warp_vert_spv_size};
+            // the vertex pulling ones have no vertex input
+            VkPipelineVertexInputStateCreateInfo no_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
             std::array<std::array<spirv, 2>, size_t(pipeline::count)> const sources = {{
                 {spirv{flat_vert_spv, flat_vert_spv_size}, spirv{flat_frag_spv, flat_frag_spv_size}},
                 {spirv{room_vert_spv, room_vert_spv_size}, spirv{room_frag_spv, room_frag_spv_size}},
@@ -457,6 +470,8 @@ namespace gpu {
                 {warp_vert, spirv{warp_tear_frag_spv, warp_tear_frag_spv_size}},
                 {warp_vert, spirv{warp_screen_frag_spv, warp_screen_frag_spv_size}},
                 {warp_vert, spirv{water_frag_spv, water_frag_spv_size}},
+                {spirv{rope_vert_spv, rope_vert_spv_size}, spirv{rope_frag_spv, rope_frag_spv_size}},
+                {spirv{circle_vert_spv, circle_vert_spv_size}, spirv{circle_frag_spv, circle_frag_spv_size}},
             }};
             for (size_t i = 0; i < sources.size(); ++i) {
                 VkShaderModule const vs = make_module(c, sources[i][0]);
@@ -473,7 +488,8 @@ namespace gpu {
                 pi.pNext = &ri;
                 pi.stageCount = 2;
                 pi.pStages = stages;
-                pi.pVertexInputState = &vi;
+                bool const pulled = i == size_t(pipeline::rope) || i == size_t(pipeline::circle);
+                pi.pVertexInputState = pulled ? &no_input : &vi;
                 pi.pInputAssemblyState = &ia;
                 pi.pViewportState = &vp;
                 pi.pRasterizationState = &rs;
@@ -666,13 +682,14 @@ namespace gpu {
             VkDescriptorSet set = VK_NULL_HANDLE;
             while (true) {
                 if (f.pool_index == f.pools.size()) {
-                    VkDescriptorPoolSize const sizes[2] = {
+                    VkDescriptorPoolSize const sizes[3] = {
                         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, sets_per_pool},
                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sets_per_pool * textures_per_draw},
+                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sets_per_pool},
                     };
                     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
                     pi.maxSets = sets_per_pool;
-                    pi.poolSizeCount = 2;
+                    pi.poolSizeCount = 3;
                     pi.pPoolSizes = sizes;
                     VkDescriptorPool pool;
                     check(vkCreateDescriptorPool(c.device, &pi, nullptr, &pool), "vkCreateDescriptorPool");
@@ -691,7 +708,8 @@ namespace gpu {
             }
             VkDescriptorBufferInfo const ub{f.uniforms.buf, 0, uniform_range};
             std::array<VkDescriptorImageInfo, textures_per_draw> images;
-            std::array<VkWriteDescriptorSet, 1 + textures_per_draw> writes{};
+            VkDescriptorBufferInfo const sb{f.storage.buf, 0, VK_WHOLE_SIZE};
+            std::array<VkWriteDescriptorSet, 2 + textures_per_draw> writes{};
             writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet = set;
             writes[0].dstBinding = 0;
@@ -709,6 +727,13 @@ namespace gpu {
                 w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w.pImageInfo = &images[i];
             }
+            auto& ws = writes[storage_binding];
+            ws.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            ws.dstSet = set;
+            ws.dstBinding = storage_binding;
+            ws.descriptorCount = 1;
+            ws.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ws.pBufferInfo = &sb;
             vkUpdateDescriptorSets(c.device, uint32_t(writes.size()), writes.data(), 0, nullptr);
             f.sets.emplace(key, set);
             return set;
@@ -728,6 +753,7 @@ namespace gpu {
             f.sets.clear();
             f.vertices_used = 0;
             f.uniforms_used = 0;
+            f.storage_used = 0;
         }
     }
 
@@ -811,6 +837,7 @@ namespace gpu {
             check(vkCreateSemaphore(c->device, &si, nullptr, &f.acquired), "vkCreateSemaphore");
             f.vertices = make_buffer(*c, 4u << 20, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
             f.uniforms = make_buffer(*c, 1u << 20, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            f.storage = make_buffer(*c, 1u << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         }
         make_pipelines(*c);
 
@@ -832,6 +859,7 @@ namespace gpu {
                     free_buffer(*c, b);
                 free_buffer(*c, f.vertices);
                 free_buffer(*c, f.uniforms);
+                free_buffer(*c, f.storage);
                 for (VkDescriptorPool p : f.pools)
                     vkDestroyDescriptorPool(c->device, p, nullptr);
                 if (f.fence != VK_NULL_HANDLE)
@@ -958,32 +986,56 @@ namespace gpu {
             std::memcpy(f.vertices.map + c.vertex_base, v, count * sizeof(vertex));
     }
 
+    namespace {
+        // the pipeline with its uniforms and textures, for a draw
+        void bind_draw(context& c, pipeline p, void const* uniforms, size_t size, std::initializer_list<texture> textures) {
+            frame& f = cur(c);
+            resume(c, false);
+            c.readback_valid = false;
+            VkDeviceSize const ubo = stream(c, f.uniforms, f.uniforms_used, std::min<size_t>(size, uniform_range), c.props.limits.minUniformBufferOffsetAlignment,
+                uniform_range, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            std::memcpy(f.uniforms.map + ubo, uniforms, std::min<size_t>(size, uniform_range));
+            // unused slots: whichever kind the shader declares there, nothing reads them
+            std::array<texture, textures_per_draw> t{c.white_2d, c.white_array, c.white_2d};
+            size_t i = 0;
+            for (texture const x : textures)
+                if (i < textures_per_draw) {
+                    if (x != 0 && x <= c.textures.size() && tex(c, x).used)
+                        t[i] = x;
+                    ++i;
+                }
+            VkDescriptorSet const set = descriptor_set(c, t);
+            VkCommandBuffer const cmd = f.cmd;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipelines[size_t(p)]);
+            uint32_t const dyn = uint32_t(ubo);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.layout, 0, 1, &set, 1, &dyn);
+        }
+    }
+
     void draw(context& c, pipeline p, void const* uniforms, size_t size, std::initializer_list<texture> textures, size_t first, size_t count) {
         if (count == 0)
             return;
+        bind_draw(c, p, uniforms, size, textures);
         frame& f = cur(c);
-        resume(c, false);
-        c.readback_valid = false;
-        VkDeviceSize const ubo = stream(c, f.uniforms, f.uniforms_used, std::min<size_t>(size, uniform_range), c.props.limits.minUniformBufferOffsetAlignment,
-            uniform_range, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-        std::memcpy(f.uniforms.map + ubo, uniforms, std::min<size_t>(size, uniform_range));
-        // unused slots: whichever kind the shader declares there, nothing reads them
-        std::array<texture, textures_per_draw> t{c.white_2d, c.white_array, c.white_2d};
-        size_t i = 0;
-        for (texture const x : textures)
-            if (i < textures_per_draw) {
-                if (x != 0 && x <= c.textures.size() && tex(c, x).used)
-                    t[i] = x;
-                ++i;
-            }
-        VkDescriptorSet const set = descriptor_set(c, t);
-        VkCommandBuffer const cmd = f.cmd;
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.pipelines[size_t(p)]);
-        uint32_t const dyn = uint32_t(ubo);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, c.layout, 0, 1, &set, 1, &dyn);
         VkDeviceSize const offset = c.vertex_base;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &f.vertices.buf, &offset);
-        vkCmdDraw(cmd, uint32_t(count), 1, uint32_t(first), 0);
+        vkCmdBindVertexBuffers(f.cmd, 0, 1, &f.vertices.buf, &offset);
+        vkCmdDraw(f.cmd, uint32_t(count), 1, uint32_t(first), 0);
+    }
+
+    size_t upload_storage(context& c, void const* data, size_t bytes) {
+        frame& f = cur(c);
+        // (a grown buffer clears the descriptor sets: the next draws' point at it)
+        VkDeviceSize const at = stream(c, f.storage, f.storage_used, std::max<size_t>(bytes, 1), storage_align, 0, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (bytes > 0)
+            std::memcpy(f.storage.map + at, data, bytes);
+        return size_t(at);
+    }
+
+    void draw_pulled(context& c, pipeline p, void const* uniforms, size_t size, std::initializer_list<texture> textures, size_t vertices) {
+        if (vertices == 0)
+            return;
+        bind_draw(c, p, uniforms, size, textures);
+        vkCmdDraw(cur(c).cmd, uint32_t(vertices), 1, 0, 0);
     }
 
     texture grab_scene(context& c) {

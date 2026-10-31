@@ -2187,17 +2187,19 @@ namespace selftest {
             for (auto const g : rg)
                 lengths = lengths && w.region_get_rain(g).cycle_length >= 16000 && w.region_get_rain(g).cycle_length <= 32000;
             rain::rain_in(st, rg[0], 50);
-            rain::rain_in(st, rg[2], 2000);
+            rain::rain_in(st, rg[2], 12000);
             bool synced = true, hit = false, deadly_max = false, flooded = false;
-            int32_t hit_at = -1, over_at = -1;
+            int32_t hit_at = -1, over_at = -1, rain_length = -1;
             float peak = 0.f;
-            for (int32_t t = 0; t < 600; ++t) {
+            for (int32_t t = 0; t < 50 + rain::deadly_rain_max + 200 && (over_at < 0 || t < over_at + 200); ++t) {
                 tick_world(st, 1);
                 auto const& a = w.region_get_rain(rg[0]);
                 auto const& b = w.region_get_rain(rg[1]);
                 synced = synced && a.timer == b.timer && a.cycle_length == b.cycle_length && a.intensity == b.intensity;
-                if (rain::deadly(a) && hit_at < 0)
+                if (rain::deadly(a) && hit_at < 0) {
                     hit_at = t;
+                    rain_length = a.death_rain_length;
+                }
                 if (hit_at >= 0 && !rain::deadly(a) && over_at < 0)
                     over_at = t;
                 hit = hit || rain::deadly(a);
@@ -2210,10 +2212,11 @@ namespace selftest {
             bool const restarted = a.cycles == 1 && a.timer < 300 && a.cycle_length >= 16000 && !rain::deadly(a);
             bool const own = !rain::deadly(c) && rain::time_until_rain(c) > 1000 && c.cycle_length != a.cycle_length;
             bool const dry = rain::tracker_utility(st, rr[3]) == 0.f && !rain::rains_in(st, rr[3]) && rain::rains_in(st, rr[0]);
+            bool const rain_lasts = rain_length >= rain::deadly_rain_min && rain_length <= rain::deadly_rain_max && over_at - hit_at == rain_length;
             char d[256];
-            std::snprintf(d, sizeof(d), " leaders=%d lengths=%d synced=%d hit_at=%d over_at=%d peak=%.2f mayhem=%d flooded=%d restarted=%d own=%d dry=%d",
-                int(leaders), int(lengths), int(synced), hit_at, over_at, peak, int(deadly_max), int(flooded), int(restarted), int(own), int(dry));
-            r.check("rain cycles and gate groups", leaders && lengths && synced && hit && over_at - hit_at == rain::deadly_rain_ticks && peak > 0.95f
+            std::snprintf(d, sizeof(d), " leaders=%d lengths=%d synced=%d hit_at=%d over_at=%d length=%d peak=%.2f mayhem=%d flooded=%d restarted=%d own=%d dry=%d",
+                int(leaders), int(lengths), int(synced), hit_at, over_at, rain_length, peak, int(deadly_max), int(flooded), int(restarted), int(own), int(dry));
+            r.check("rain cycles and gate groups", leaders && lengths && synced && hit && rain_lasts && peak > 0.95f
                 && deadly_max && flooded && restarted && own && dry, d);
         }
         {
@@ -2284,7 +2287,7 @@ namespace selftest {
             // the rain, then the next cycle: out again
             bool stayed = true, out_again = false;
             vec2 out_at{0.f, 0.f};
-            for (uint32_t t = 0; t < 2600 && !out_again; ++t) {
+            for (uint32_t t = 0; t < 2600 + uint32_t(rain::deadly_rain_max) && !out_again; ++t) {
                 tick_world(st, 1);
                 if (rain::deadly(w.region_get_rain(rgn)))
                     stayed = stayed && dens::where_is(st, l) != dens::where::room;

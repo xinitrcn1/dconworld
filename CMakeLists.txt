@@ -64,6 +64,8 @@ set(SHADERS
     room.vert room.frag
     decal.vert decal.frag
     warp.vert warp_tear.frag warp_screen.frag water.frag
+    rope.vert rope.frag
+    circle.vert circle.frag
 )
 # #included by the shaders above
 set(SHADER_INCLUDES "${SHADER_DIR}/warp_common.glsl")

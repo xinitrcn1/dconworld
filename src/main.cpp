@@ -562,7 +562,7 @@ namespace {
                 char rb[200];
                 int32_t const left = rain::time_until_rain(*rc);
                 if (rain::deadly(*rc))
-                    std::snprintf(rb, sizeof(rb), "\nDEATH RAIN %d/%d  intensity %.2f  room %.2f  flood %.0f", rc->death_rain_ticks, rain::deadly_rain_ticks,
+                    std::snprintf(rb, sizeof(rb), "\nDEATH RAIN %d/%d  intensity %.2f  room %.2f  flood %.0f", rc->death_rain_ticks, rc->death_rain_length,
                         rc->intensity, w.room_get_rain_now(room), rc->flood);
                 else
                     std::snprintf(rb, sizeof(rb), "\nrain in %d:%02d (cycle %d s)  intensity %.2f  room %.2f%s", left / 40 / 60, left / 40 % 60,

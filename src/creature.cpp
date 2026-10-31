@@ -572,7 +572,7 @@ namespace creature {
             auto const x = lizard_data(w, c);
             return std::string{lizard::to_string(pl.lizard.breed)} + " lizard at " + at(w.body_chunk_get_pos(chunk(state, c, 0)))
                 + " behavior " + behavior + " animation " + std::to_string(int(w.lizard_data_get_core(x).anim))
-                + " legs " + std::to_string(w.lizard_data_get_graphics(x).legs_grabbing) + (lizard::grasped(state, c) ? std::string{" holding a "} + to_string(w.creature_get_type(lizard::grasped(state, c))) : std::string{})
+                + " legs " + std::to_string(w.lizard_data_get_core(x).legs_gripping) + (lizard::grasped(state, c) ? std::string{" holding a "} + to_string(w.creature_get_type(lizard::grasped(state, c))) : std::string{})
                 + (w.lizard_data_get_tongue(x).state != lizard::tongue_state::hidden ? " tongue out" : "") + dead;
         }
         case type::daddy: {
@@ -656,6 +656,46 @@ namespace creature {
 
         void update_kind(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed);
 
+        // CreatureTemplate.canFly
+        bool can_fly(tmpl t) {
+            switch (t) {
+            case tmpl::centiwing:
+            case tmpl::cicada_a:
+            case tmpl::cicada_b:
+            case tmpl::big_needle_worm:
+            case tmpl::small_needle_worm:
+            case tmpl::vulture:
+            case tmpl::king_vulture:
+            case tmpl::miros_vulture:
+            case tmpl::overseer:
+            case tmpl::sky_whale:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // Creature.Update's death pit: the main chunk down at the bottom of
+        // a room with no water below (pinned at -restrictInRoomRange by the
+        // physics), not able to fly out (a flier only when stunned or dead):
+        // it dies and is destroyed. The destroying waits for the rooms'
+        // parallel pass (`state.defer`)
+        void death_pit(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
+            auto& w = state.world;
+            if (room.default_water_level >= 0)
+                return;
+            auto const k = chunk(state, c, 0);
+            if (w.body_chunk_get_pos(k).y >= -w.body_chunk_get_restrict_in_room_range(k) + 1.f)
+                return;
+            if (can_fly(template_of(state, c)) && w.creature_get_stun(c) <= 0 && !w.creature_get_dead(c))
+                return;
+            die(state, c);
+            state.defer(room.id, [c](sys::game_state& st) {
+                if (st.world.creature_is_valid(c))
+                    creature::destroy(st, c);
+            });
+        }
+
         // the kind's Update, and its graphics module's where a camera looks
         void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room, bool viewed) {
             // squeezing into a pipe: only that (Creature.Update's enteringShortCut)
@@ -663,6 +703,9 @@ namespace creature {
                 return;
             migrate::tick(state, c);
             update_kind(state, c, room, viewed);
+            // (a slugcat's own: player.cpp, npc.cpp)
+            if (state.world.creature_get_type(c) != type::slugcat)
+                death_pit(state, c, room);
             // close to the pipe home: in it goes
             dens::after_update(state, c, room);
         }
@@ -689,8 +732,8 @@ namespace creature {
                 return;
             case type::lizard:
                 lizard::update(state, c, room);
-                // (the legs' grip the body runs on falls back to
-                // Lizard.LegsGripping's 2 without it)
+                // (the body keeps its own legs' grip, lizard.cpp update_grip:
+                // it never reads LizardGraphics')
                 if (viewed)
                     lizard_graphics::update(state, c, room);
                 return;
@@ -1021,11 +1064,6 @@ namespace creature {
         case type::cicada: cicada_graphics::reset_positions(state, c); return;
         case type::lizard: {
             lizard_graphics::reset_positions(state, c);
-            // no limb has found a grip yet: Lizard.LegsGripping's 2 until
-            // the first update
-            auto& g = w.lizard_data_get_graphics(lizard_data(w, c));
-            g.legs_grabbing = 2;
-            g.no_grip_counter = 0;
             return;
         }
         case type::daddy: daddy_graphics::reset(state, c); return;

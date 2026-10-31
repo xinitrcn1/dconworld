@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <type_traits>
 
 #include <SDL3/SDL.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -140,6 +141,18 @@ namespace render {
             glm::vec2 screen;
         };
         static_assert(offsetof(water_uniforms, time) == 76 && offsetof(water_uniforms, screen) == 112);
+        struct rope_uniforms {
+            glm::mat4 proj;
+            uint32_t first; // the draw's first point in the storage buffer
+            uint32_t steps; // quads per segment
+            float smooth;
+        };
+        struct circle_uniforms {
+            glm::mat4 proj;
+            uint32_t first; // the draw's first circle in the storage buffer
+        };
+        // quads per rope segment along a Bezier (a straight one is one quad)
+        constexpr uint32_t rope_steps = 4;
 
         // the batch as the vertices of the next draws
         void upload(state& r) {
@@ -604,6 +617,106 @@ namespace render {
             return rgba(b(c.x), b(c.y), b(c.z), b(a));
         }
 
+        // ---- the vertex pulling draws among a pass's batch (see state::pulled)
+
+        void clear_pulled(state& r) {
+            r.rope_points.clear();
+            r.circles.clear();
+            r.pulled.clear();
+        }
+
+        // the pulled draw `p` at the batch's end, joining the last one if
+        // nothing came between (and its data is the last of its kind)
+        state::pulled_draw& pulled_at_end(state& r, gpu::pipeline p, uint32_t first, bool smooth = true) {
+            if (!r.pulled.empty()) {
+                auto& last = r.pulled.back();
+                if (last.at == r.batch.size() && last.p == p && last.smooth == smooth && last.first + last.count == first)
+                    return last;
+            }
+            r.pulled.push_back(state::pulled_draw{r.batch.size(), p, first, 0, smooth});
+            return r.pulled.back();
+        }
+
+        // a rope through `n` points (rope.vert), between its two padding
+        // points: its ends carried on, for the ends' directions
+        void pull_rope(state& r, sprites::rope_point const* pts, size_t n, bool smooth, float vis = 1.f) {
+            if (n < 2)
+                return;
+            auto const conv = [&](rw::vec2 pos, float rad, rw::vec4 c) {
+                return gpu::rope_point{pos.x, pos.y, rad, to_rgba(rw::vec3{c.x, c.y, c.z}, c.w * vis)};
+            };
+            auto& d = pulled_at_end(r, gpu::pipeline::rope, uint32_t(r.rope_points.size()), smooth);
+            r.rope_points.push_back(conv(pts[0].pos * 2.f - pts[1].pos, -1.f, pts[0].col));
+            for (size_t i = 0; i < n; ++i)
+                r.rope_points.push_back(conv(pts[i].pos, mathf::max(0.f, pts[i].rad), pts[i].col));
+            r.rope_points.push_back(conv(pts[n - 1].pos * 2.f - pts[n - 2].pos, -1.f, pts[n - 1].col));
+            d.count += uint32_t(n + 2);
+        }
+
+        // a disc (circle.vert/frag), round or with `jag` jagged
+        void pull_circle(state& r, rw::vec2 pos, float rad, uint32_t col, float rotation = 0.f, float jag = 0.f, uint32_t seed = 0) {
+            auto& d = pulled_at_end(r, gpu::pipeline::circle, uint32_t(r.circles.size()));
+            r.circles.push_back(gpu::circle{pos.x, pos.y, rad, col, rotation, jag, seed, 0.f});
+            ++d.count;
+        }
+
+        // where upload_pulled put the pass's ropes and circles (in their own
+        // units) and the next pulled draw to make
+        struct pulled_upload {
+            uint32_t points = 0, circles = 0;
+            size_t next = 0;
+        };
+        // the pass's ropes and circles into the storage buffer, both at once
+        pulled_upload upload_pulled(state& r) {
+            pulled_upload u;
+            if (r.pulled.empty())
+                return u;
+            static std::vector<uint8_t> blob;
+            size_t const points_bytes = r.rope_points.size() * sizeof(gpu::rope_point);
+            size_t const circles_at = (points_bytes + sizeof(gpu::circle) - 1) / sizeof(gpu::circle) * sizeof(gpu::circle);
+            blob.assign(circles_at + r.circles.size() * sizeof(gpu::circle), 0);
+            if (points_bytes > 0)
+                std::memcpy(blob.data(), r.rope_points.data(), points_bytes);
+            if (!r.circles.empty())
+                std::memcpy(blob.data() + circles_at, r.circles.data(), r.circles.size() * sizeof(gpu::circle));
+            size_t const at = gpu::upload_storage(*r.gpu, blob.data(), blob.size());
+            u.points = uint32_t(at / sizeof(gpu::rope_point));
+            u.circles = uint32_t((at + circles_at) / sizeof(gpu::circle));
+            return u;
+        }
+
+        void draw_one_pulled(state& r, glm::mat4 const& proj, state::pulled_draw const& d, pulled_upload const& u) {
+            if (d.p == gpu::pipeline::rope) {
+                if (d.count < 4)
+                    return;
+                uint32_t const steps = d.smooth ? rope_steps : 1u;
+                rope_uniforms const ru{proj, u.points + d.first, steps, d.smooth ? 1.f : 0.f};
+                // one segment between each two neighbouring points but the paddings' outer ones
+                gpu::draw_pulled(*r.gpu, gpu::pipeline::rope, &ru, sizeof(ru), {}, size_t(d.count - 3) * steps * 6);
+            } else {
+                circle_uniforms const cu{proj, u.circles + d.first};
+                gpu::draw_pulled(*r.gpu, gpu::pipeline::circle, &cu, sizeof(cu), {}, size_t(d.count) * 6);
+            }
+        }
+
+        // the uploaded batch's [first, first + count) with the flat shader
+        // (textured with `tex`, 0: plain colours), the pulled draws that go
+        // in up to its end in their places
+        void draw_flat_pulled(state& r, glm::mat4 const& proj, uint32_t tex, size_t first, size_t count, pulled_upload& u) {
+            size_t const end = first + count;
+            size_t at = first;
+            while (u.next < r.pulled.size() && r.pulled[u.next].at <= end) {
+                auto const& d = r.pulled[u.next++];
+                size_t const to = std::max(d.at, at);
+                if (to > at)
+                    draw_flat_range(r, proj, tex, at, to - at);
+                at = to;
+                draw_one_pulled(r, proj, d, u);
+            }
+            if (end > at)
+                draw_flat_range(r, proj, tex, at, end - at);
+        }
+
         // RoomPalette.GetPixel(x, y) of the room's palette (rows count from the bottom)
         rw::vec3 palette_texel(state const& r, sys::game_state const& s, dcon::room_id room, int x, int y) {
             auto const palette = s.world.room_get_palette(room).id;
@@ -628,9 +741,18 @@ namespace render {
         // (`strip`: the strip commands' vertices)
         template<typename Find>
         void emit_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, Find&& frame, float tw, float th, vec2 white_uv, float vis = 1.f,
-            std::vector<sprites::strip_vertex> const* strip = nullptr) {
+            std::vector<sprites::strip_vertex> const* strip = nullptr, std::vector<sprites::rope_point> const* ropes = nullptr) {
             static thread_local std::vector<vertex> sv;
             for (auto const& c : cmds) {
+                if (c.is_rope) {
+                    if (ropes != nullptr && size_t(c.strip_first) + c.strip_count <= ropes->size())
+                        pull_rope(r, ropes->data() + c.strip_first, c.strip_count, c.rope_smooth, vis);
+                    continue;
+                }
+                if (c.is_circle) {
+                    pull_circle(r, c.spr.pos, c.spr.scale.x, to_rgba(c.color, vis), c.spr.rotation, c.circle_jag, c.circle_seed);
+                    continue;
+                }
                 if (c.is_strip) {
                     if (strip == nullptr || c.strip_count < 3)
                         continue;
@@ -698,9 +820,10 @@ namespace render {
         }
 
         // through the game's own atlases (game_texture)
-        void emit_game_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const* strip = nullptr) {
+        void emit_game_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const* strip = nullptr,
+            std::vector<sprites::rope_point> const* ropes = nullptr) {
             emit_cmds(r, cmds, [&](std::string_view e) { return find_game_frame(r, e); }, float(r.game_width), float(r.game_height),
-                vec2{1.f / float(r.game_width), 1.f / float(r.game_height)}, 1.f, strip);
+                vec2{1.f / float(r.game_width), 1.f / float(r.game_height)}, 1.f, strip, ropes);
         }
 
         // PlayerGraphics sprites through the slugcat atlas (textured batch)
@@ -1507,15 +1630,21 @@ namespace render {
         // A ported DrawSprites' commands through the game's atlases, or
         // without them its triangles and strips flat and its sprites as
         // circles of their colour
-        void emit_or_flat(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const& strip, bool atlas) {
+        void emit_or_flat(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const& strip, bool atlas,
+            std::vector<sprites::rope_point> const* ropes = nullptr) {
             if (atlas) {
-                emit_game_cmds(r, cmds, &strip);
+                emit_game_cmds(r, cmds, &strip, ropes);
                 return;
             }
             painter p{r.batch};
             auto const vcol = [](rw::vec4 c) { return to_rgba(rw::vec3{c.x, c.y, c.z}, c.w); };
             for (auto const& cmd : cmds) {
-                if (cmd.is_strip) {
+                if (cmd.is_rope) {
+                    if (ropes != nullptr && size_t(cmd.strip_first) + cmd.strip_count <= ropes->size())
+                        pull_rope(r, ropes->data() + cmd.strip_first, cmd.strip_count, cmd.rope_smooth);
+                } else if (cmd.is_circle) {
+                    pull_circle(r, cmd.spr.pos, cmd.spr.scale.x, to_rgba(cmd.color), cmd.spr.rotation, cmd.circle_jag, cmd.circle_seed);
+                } else if (cmd.is_strip) {
                     for (uint32_t k = 0; k + 2 < cmd.strip_count; ++k) {
                         auto const& a = strip[cmd.strip_first + k];
                         p.tri(a.pos, strip[cmd.strip_first + k + 1].pos, strip[cmd.strip_first + k + 2].pos, vcol(a.col));
@@ -1536,14 +1665,23 @@ namespace render {
         void build_kind_sprites(state& r, sys::game_state const& s, world::room_view const& room, creature::type t, float alpha, bool atlas, Build&& build) {
             static std::vector<sprites::draw_cmd> cmds;
             static std::vector<sprites::strip_vertex> strip;
+            static std::vector<sprites::rope_point> ropes;
             auto const pal = room_palette(r, s, room.id);
             rooms::for_each_creature(s, room.id, t, [&](dcon::creature_id c) {
                 if (s.world.creature_get_away(c) != 0)
                     return;
                 cmds.clear();
                 strip.clear();
-                build(s, c, alpha, pal, cmds, strip);
-                emit_or_flat(r, cmds, strip, atlas);
+                ropes.clear();
+                // (a kind with rope-like parts takes the ropes too)
+                if constexpr (std::is_invocable_v<Build&, sys::game_state const&, dcon::creature_id, float, decltype(pal) const&,
+                                  std::vector<sprites::draw_cmd>&, std::vector<sprites::strip_vertex>&, std::vector<sprites::rope_point>&>) {
+                    build(s, c, alpha, pal, cmds, strip, ropes);
+                    emit_or_flat(r, cmds, strip, atlas, &ropes);
+                } else {
+                    build(s, c, alpha, pal, cmds, strip);
+                    emit_or_flat(r, cmds, strip, atlas);
+                }
             });
         }
 
@@ -1740,18 +1878,20 @@ namespace render {
         void build_daddy_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             static std::vector<sprites::draw_cmd> cmds;
             static std::vector<sprites::strip_vertex> strip;
+            static std::vector<sprites::rope_point> ropes;
             auto const pal = daddy_palette(r, s, room.id);
             rooms::for_each_creature(s, room.id, creature::type::daddy, [&](dcon::creature_id d) {
                 cmds.clear();
                 strip.clear();
-                daddy_graphics::build(s, d, alpha, pal, cmds, strip);
-                emit_game_cmds(r, cmds, &strip);
+                ropes.clear();
+                daddy_graphics::build(s, d, alpha, pal, cmds, strip, ropes);
+                emit_game_cmds(r, cmds, &strip, &ropes);
             });
         }
 
         // Without the game's atlases: daddy long legs with shapes of our own
         // over the simulated DaddyGraphics parts: every tube (legs, dead legs,
-        // danglers) a line along its graphic segments in the tube colours with
+        // danglers) a rope along its graphic segments in the tube colours with
         // its bumps as dots, the body chunks as discs with an eye slit each
         // in the eye colour (closed: the body's), the Hunter's dummy as a
         // pale body and head
@@ -1766,13 +1906,14 @@ namespace render {
                 for (uint32_t i = 0; i < daddy::tube_count(s, d); ++i) {
                     auto const t = daddy::tube_of(s, d, i);
                     uint32_t const n = w.daddy_tube_get_segments(daddy::tube_data(w, t)).size();
-                    vec2 prev = daddy_graphics::tube_pos(s, t, 0.f, alpha);
-                    for (uint32_t k = 1; k <= 2 * n; ++k) {
-                        float const f = float(k) / float(2 * n);
-                        vec2 const q = daddy_graphics::tube_pos(s, t, f, alpha);
-                        p.line(prev, q, width, to_rgba(daddy_graphics::tube_color(s, d, t, mathf::inverse_lerp(0.3f, 1.f, f), pal)));
-                        prev = q;
+                    static std::vector<sprites::rope_point> pts;
+                    pts.clear();
+                    for (uint32_t k = 0; k < n; ++k) {
+                        float const f = n > 1 ? float(k) / float(n - 1) : 0.f;
+                        rw::vec3 const col = daddy_graphics::tube_color(s, d, t, mathf::inverse_lerp(0.3f, 1.f, f), pal);
+                        pts.push_back(sprites::rope_point{daddy_graphics::tube_pos(s, t, f, alpha), width * 0.5f, rw::vec4{col.x, col.y, col.z, 1.f}});
                     }
+                    pull_rope(r, pts.data(), pts.size(), true);
                     for (auto const& b : w.daddy_tube_get_bumps(daddy::tube_data(w, t))) {
                         vec2 const c = daddy_graphics::on_tube_pos(s, t, b.pos, alpha);
                         float const rad = mathf::lerp(2.f, 6.f, b.size);
@@ -1788,7 +1929,7 @@ namespace render {
                     auto const k = daddy::chunk(s, d, j);
                     vec2 const c = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
                     float const rad = w.body_chunk_get_rad(k);
-                    p.circle(c, rad * 1.1f + 2.f, to_rgba(body));
+                    pull_circle(r, c, rad * 1.1f + 2.f, to_rgba(body));
                     if (daddy::hunter(s, d) && j < 2)
                         continue;
                     auto const& e = g.eyes[j];
@@ -2994,6 +3135,7 @@ namespace render {
         }
         gpu::begin_frame(*r.gpu, r.width, r.height, sky.x, sky.y, sky.z);
         r.batch.clear();
+        clear_pulled(r);
 
         // room camera images with the level shader. Pass 0 draws everything
         // behind the creature layers, pass 1 only the foreground depths
@@ -3039,11 +3181,13 @@ namespace render {
         // untextured triangles, flat shader
         auto const draw_flat = [&](auto&& build) {
             r.batch.clear();
+            clear_pulled(r);
             build();
-            if (r.batch.empty())
+            if (r.batch.empty() && r.pulled.empty())
                 return;
             upload(r);
-            draw_flat_range(r, proj, 0, 0, r.batch.size());
+            pulled_upload pu = upload_pulled(r);
+            draw_flat_pulled(r, proj, 0, 0, r.batch.size(), pu);
         };
         auto const draw_geometry = [&] {
             draw_flat([&] { build_geometry(r, s, room, cam, view_w, view_h, textured_room ? 110 : 255); });
@@ -3063,11 +3207,13 @@ namespace render {
         bool const atlas = r.game_texture != 0;
         auto const draw_game = [&](auto&& build) {
             r.batch.clear();
+            clear_pulled(r);
             build();
-            if (r.batch.empty())
+            if (r.batch.empty() && r.pulled.empty())
                 return;
             upload(r);
-            draw_flat_range(r, proj, atlas ? r.game_texture : 0, 0, r.batch.size());
+            pulled_upload pu = upload_pulled(r);
+            draw_flat_pulled(r, proj, atlas ? r.game_texture : 0, 0, r.batch.size(), pu);
         };
         // the ground that isn't tiles, the plants on it and the dangle fruits'
         // stalks (the Background container)
@@ -3084,6 +3230,7 @@ namespace render {
         draw_game([&] { build_outposts(r, s, room); });
         draw_game([&] { build_items(r, s, room, alpha, true); });
         r.batch.clear();
+        clear_pulled(r);
         bool const sprites = r.slugcat_texture != 0;
         if (sprites)
             build_slugcats(r, s, room, alpha);
@@ -3098,8 +3245,11 @@ namespace render {
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);
         upload(r);
-        draw_flat_range(r, proj, sprites ? r.slugcat_texture : 0, 0, bodies_end);
-        draw_flat_range(r, proj, atlas ? r.game_texture : 0, bodies_end, r.batch.size() - bodies_end);
+        // (the ropes and circles among them: daddy long legs' tubes and bulbs)
+        pulled_upload pu = upload_pulled(r);
+        draw_flat_pulled(r, proj, sprites ? r.slugcat_texture : 0, 0, bodies_end, pu);
+        draw_flat_pulled(r, proj, atlas ? r.game_texture : 0, bodies_end, r.batch.size() - bodies_end, pu);
+        clear_pulled(r);
 
         if (textured_room) {
             draw_cameras(1);

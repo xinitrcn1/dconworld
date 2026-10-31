@@ -48,9 +48,11 @@ namespace rain {
         float time_in_this_mode = 0.f;
         float progression = 0.f;
         float calm_before_storm_sunlight = 0.f;
-        // the short rain (rain.hpp): ticks since it hit, and how much faster
-        // than vanilla's its phases run to fit in the window
+        // the short rain (rain.hpp): ticks since it hit, how long it lasts
+        // (rolled when it hits), and how much faster than vanilla's its
+        // phases run to fit in the window (1: vanilla's pace)
         int32_t death_rain_ticks = 0;
+        int32_t death_rain_length = 0;
         float time_scale = 1.f;
         // every phase's length in the window (ticks, by death_mode), rolled
         // when the rain hits

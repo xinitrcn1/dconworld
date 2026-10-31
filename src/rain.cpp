@@ -88,17 +88,20 @@ namespace rain {
             }
         }
 
-        // GlobalRain.InitDeathRain: the DeathRain's first mode, and how much
-        // faster than vanilla its phases have to run to fit the window.
-        // Vanilla's phases last 1300 to 3800 ticks before Mayhem, which then
-        // never ends; here they get `death_rain_window` ticks between them
-        // (CalmBeforeStorm at most `calm_ticks`, it isn't deadly) in their
-        // vanilla proportions, and Mayhem the rest of `deadly_rain_ticks`.
-        // Every phase rolls its vanilla length now, in path order, and runs
-        // `time_scale` times faster; the flood rises that much faster too.
+        // GlobalRain.InitDeathRain: the DeathRain's first mode, how long
+        // this rain lasts, and how much faster than vanilla its phases have
+        // to run to fit. Vanilla's phases last 1300 to 3800 ticks before
+        // Mayhem, which then never ends; here the rain lasts
+        // `deadly_rain_min` to `deadly_rain_max` ticks and the phases get at
+        // most `death_rain_window` of it (CalmBeforeStorm at most
+        // `calm_share`, it isn't deadly), keeping their vanilla proportions,
+        // and Mayhem the rest. Every phase rolls its vanilla length now, in
+        // path order, and runs `time_scale` times faster (never slower than
+        // vanilla); the flood rises that much faster too.
         void init_death_rain(cycle& c) {
             // (without Downpour the 30% that would be Pulses is AlternateBuildUp)
             death_mode const first = c.random.value() < 0.7f ? death_mode::alternate_build_up : death_mode::calm_before_storm;
+            c.death_rain_length = int32_t(mathf::lerp(float(deadly_rain_min), float(deadly_rain_max), c.random.value()));
             death_mode path[10];
             int32_t const n = path_of(first, path);
             float calm = 0.f, rest = 0.f;
@@ -107,8 +110,9 @@ namespace rain {
                 lengths[i] = vanilla_time_in_mode(path[i], c.random);
                 (path[i] == death_mode::calm_before_storm ? calm : rest) += lengths[i];
             }
-            float const window_calm = calm > 0.f ? float(calm_ticks) : 0.f;
-            c.time_scale = rest / mathf::max(1.f, float(death_rain_window) - window_calm);
+            float const length = float(c.death_rain_length);
+            float const window_calm = mathf::min(calm, calm_share * length);
+            c.time_scale = mathf::max(1.f, rest / mathf::max(1.f, death_rain_window * length - window_calm));
             for (auto& t : c.phase_ticks)
                 t = 1.f;
             for (int32_t i = 0; i + 1 < n; ++i)
@@ -227,7 +231,7 @@ namespace rain {
                 // RainHit
                 init_death_rain(c);
                 c.death_rain_has_hit = 1;
-            } else if (c.death_rain_has_hit && ++c.death_rain_ticks >= deadly_rain_ticks) {
+            } else if (c.death_rain_has_hit && ++c.death_rain_ticks >= c.death_rain_length) {
                 // the short rain is over: the next cycle, right away
                 c.mode = death_mode::none;
                 c.death_rain_has_hit = 0;

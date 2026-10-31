@@ -23,5 +23,5 @@ namespace pole_mimic_graphics {
     // DrawSprites (ApplyPalette from `pal`); a TriangleMesh.MakeLongMesh's
     // vertices go to `strip`
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
-        std::vector<sprites::strip_vertex>& strip);
+        std::vector<sprites::strip_vertex>& strip, std::vector<sprites::rope_point>& ropes);
 }

@@ -483,31 +483,6 @@ namespace daddy_graphics {
             return 0.f;
         }
 
-        // a jagged disc (the JaggedCircle shader over Futile_White): the rim's
-        // dents rolled once per eye, turned with the sprite
-        void jagged_circle(std::vector<sprites::draw_cmd>& out, vec2 pos, float rad, float rotation, uint32_t seed, vec3 color) {
-            constexpr int segs = 18;
-            float radii[segs];
-            uint32_t h = seed | 1u;
-            for (int k = 0; k < segs; ++k) {
-                h ^= h << 13;
-                h ^= h >> 17;
-                h ^= h << 5;
-                radii[k] = rad * (0.84f + 0.16f * float(h & 0xFFFF) / 65535.f);
-            }
-            for (int k = 0; k < segs; ++k) {
-                vec2 const a = custom::deg_to_vec(rotation + float(k) * 360.f / segs) * radii[k];
-                vec2 const b = custom::deg_to_vec(rotation + float(k + 1) * 360.f / segs) * radii[(k + 1) % segs];
-                sprites::draw_cmd c;
-                c.is_triangle = true;
-                c.tri[0] = pos;
-                c.tri[1] = pos + a;
-                c.tri[2] = pos + b;
-                c.color = color;
-                out.push_back(c);
-            }
-        }
-
         // the eye slits' Random.value flicker (a render-time roll)
         float flicker(uint32_t& s) {
             s ^= s << 13;
@@ -856,9 +831,10 @@ namespace daddy_graphics {
 
     namespace {
         // DaddyTubeGraphic.DrawSprite + ApplyPalette: the tube's long mesh as
-        // one strip, then its bumps and their eyes
+        // one rope (the GPU makes the ribbon out of its points), then its
+        // bumps and their eyes over it
         void tube_cmds(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float alpha, palette const& pal,
-            std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip) {
+            std::vector<sprites::draw_cmd>& out, std::vector<sprites::rope_point>& ropes) {
             auto const& w = state.world;
             auto const segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             uint32_t const ns = segs.size();
@@ -880,31 +856,22 @@ namespace daddy_graphics {
             }
             auto const color = [&](float f) { return mix(body, effect, dangler ? mathf::lerp(fa, fb, f) : mathf::pow(f, 1.5f) * k); };
             auto const at = [&](uint32_t i) { return rw::lerp(segs.at(i).last_pos, segs.at(i).pos, alpha); };
-            // TriangleMesh.MakeLongMesh: four vertices per segment
+            // TriangleMesh.MakeLongMesh's four vertices per segment, as the
+            // rope's points: the segments' ends (the first carried a pixel
+            // back), `rad` either side, each point in the colour of its
+            // vertices' places along the mesh
             uint32_t const nv = ns * 4;
-            sprites::draw_cmd c;
-            c.is_strip = true;
-            c.strip_first = uint32_t(strip.size());
-            c.strip_count = nv;
-            strip.resize(strip.size() + nv);
-            sprites::strip_vertex* sv = strip.data() + c.strip_first;
             float const step = 1.f / float(nv - 1);
-            auto const put = [&](uint32_t i, vec2 p) {
-                vec3 const col = color(mathf::inverse_lerp(0.3f, 1.f, float(i) * step));
-                sv[i] = sprites::strip_vertex{p, rw::vec4{col.x, col.y, col.z, 1.f}};
+            auto const put = [&](vec2 p, float vertex) {
+                vec3 const col = color(mathf::inverse_lerp(0.3f, 1.f, vertex * step));
+                ropes.push_back(sprites::rope_point{p, rad, rw::vec4{col.x, col.y, col.z, 1.f}});
             };
-            vec2 v = at(0);
-            v += custom::dir_vec(at(1), v) * 1.f;
-            for (uint32_t i = 0; i < ns; ++i) {
-                vec2 const v2 = at(i);
-                vec2 const a = custom::perpendicular_vector(rw::normalized(v - v2)) * rad;
-                put(i * 4, v - a);
-                put(i * 4 + 1, v + a);
-                put(i * 4 + 2, v2 - a);
-                put(i * 4 + 3, v2 + a);
-                v = v2;
-            }
-            out.push_back(c);
+            size_t const first = ropes.size();
+            vec2 const v = at(0);
+            put(v + custom::dir_vec(at(1), v) * 1.f, 0.5f);
+            for (uint32_t i = 0; i < ns; ++i)
+                put(at(i), mathf::min(float(i) * 4.f + 3.5f, float(nv) - 1.5f));
+            sprites::add_rope(out, ropes, first);
             // the bumps' places along the tube, worked out once for both passes
             auto const bumps = w.daddy_tube_get_bumps(daddy::tube_data(w, t));
             static thread_local std::vector<vec2> places;
@@ -990,7 +957,8 @@ namespace daddy_graphics {
         }
     }
 
-    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip) {
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip,
+        std::vector<sprites::rope_point>& ropes) {
         auto const& w = state.world;
         auto const& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         bool const hd = daddy::hunter(state, d);
@@ -1000,7 +968,7 @@ namespace daddy_graphics {
         float const bump = bump_size(state, d);
         // InitiateSprites' order: the legs, dead legs and danglers, then the eyes
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i)
-            tube_cmds(state, d, daddy::tube_of(state, d, i), alpha, pal, out, strip);
+            tube_cmds(state, d, daddy::tube_of(state, d, i), alpha, pal, out, ropes);
         // EyePushOutFromPos: the body's centre of mass between ticks
         vec2 middle{0.f, 0.f};
         float total = 0.f;
@@ -1019,8 +987,10 @@ namespace daddy_graphics {
             if (hd && j < 2)
                 continue;
             float const rotation = custom::aim(pos, middle) + e.rotats[0];
-            // the bulb: JaggedCircle over Futile_White, (rad * 1.1 + 2) / 8 of 16 pixels
-            jagged_circle(out, pos, e.rad * 1.1f + 2.f, rotation, e.jag_seed, body);
+            // the bulb: JaggedCircle over Futile_White, (rad * 1.1 + 2) / 8 of
+            // 16 pixels, as one disc whose rim's 18 corners are dented by up
+            // to 0.16 of the radius, rolled once per eye, turned with the sprite
+            sprites::add_circle(out, pos, e.rad * 1.1f + 2.f, body, rotation, 0.16f, e.jag_seed);
             // Eye.RenderSlits
             float const num = mathf::pow(mathf::max(0.f, mathf::lerp(e.last_closed, e.closed, alpha)), 0.6f);
             float const num2 = bump * (1.f - num);

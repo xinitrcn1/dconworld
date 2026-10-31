@@ -7,6 +7,8 @@ notices (what it hunts, flees, how it moves, how it reacts to the slugcat
 and its weapons) and leave out the rest.
 
 Shared by every kind ported here:
+- Death pits (Creature.Update): a creature that isn't a slugcat, with its first chunk down at the bottom of a room without water (pinned at -restrictInRoomRange), and that can't fly (CreatureTemplate.canFly: centiwings, squidcadas, noodleflies, vultures, overseers, sky whales; those only when stunned or dead) dies and is destroyed. The destroy waits for the end of the rooms' parallel pass. Slugcats keep their own handling.
+- Rope-like parts drawn on the GPU (sprites::add_rope: the daddy long legs' tubes, the pole plant's stalk) curve between their points (a cubic Bezier through the neighbours' directions) instead of vanilla's straight TriangleMesh segments.
 - Each kind's world file name is read by spawns.cpp and it spawns from its
   den like the rest; `--creature <WorldFileName>,x,y` spawns one by hand.
 - The relationships (relationships.cpp) are replayed from StaticWorld.cs,
@@ -45,7 +47,7 @@ Shared by every kind ported here:
 - Climbing: the stalk is a vine of rot::vines (ClimbableVinesSystem), with the player's vine position carrying the plant (`player.vine_mimic`); VineBeingClimbedOn and VineCurrentlyClimbable are called as in Player.cs. Zero gravity vine grabbing isn't ported (as for the rot vines).
 - The "huntChunk in another collision layer" manual Collide only covers leeches (the only other collision layer here).
 - Sounds: Pole_Mimic_Stick, Pole_Mimic_Unstick, Pole_Mimic_Grab_Player, Pole_Mimic_Grab_Creature, Player_Grab_Pole_Mimic and Pole_Mimic_Movement_LOOP have no sound ids in sound_types.hpp: skipped.
-- Graphics: the shadow mesh (sprite 1, in the Shadows container) isn't drawn (the renderer has no shadow layer). The reveal's "first reveals" (PoleMimicEverSeen in the save) is kept per plant, not per save file. The rolls of the leaves' cosmetics use the creature's graphics_random; the leaves' ruffle when a chunk sticks only happens once a camera has made the graphics module (vanilla's module always exists).
+- Graphics: the stalk's TriangleMesh is the shared GPU rope (sprites::add_rope, vertex pulled): the same points and alternating half widths, curved between the rope segments instead of vanilla's overlapping straight quads. The shadow mesh (sprite 1, in the Shadows container) isn't drawn (the renderer has no shadow layer). The reveal's "first reveals" (PoleMimicEverSeen in the save) is kept per plant, not per save file. The rolls of the leaves' cosmetics use the creature's graphics_random; the leaves' ruffle when a chunk sticks only happens once a camera has made the graphics module (vanilla's module always exists).
 - The tentacle's Visual and Rope.Update use the room's terrain proximity map to skip ray traces that can't hit terrain (same results, as daddy_tentacle.cpp).
 
 ## Monster kelp (TentaclePlant)
@@ -320,3 +322,11 @@ with this heading change and bullets. Rename the section heading to
 - Thruster smoke is cosmetic (vanilla's NewVultureSmoke pushes nothing either): drawn as dust puffs, bubbles under water. Not drawn: the shadow cast while high over the room (shadowMode), the snapping head's jitter, the Blinded eye colours, the Gourmand dropped more often (not told apart).
 - Silent (no samples): every Vulture_*, King_Vulture_*, Miros_* sound, the jet and wing loops.
 - Thread safety: the vulture only touches creatures and the slugcats of its own room; graphics-module state is never read by the simulation (take off / fall colour waves are requested through a counter in the body state, which the module consumes).
+
+## Daddy long legs
+
+- The tubes are the shared GPU rope (see above); the bulbs are one quad each whose fragment shader draws the jagged circle (the same rolls and 18 corners as the TriangleMesh fan).
+
+## Lizards
+
+- Lizard.LegsGripping and NoGripCounter don't come from LizardGraphics' legs (vanilla: the limbs' gripCounter when the room has a graphicsModule, 2 and 0 without one). The body keeps its own count every tick (lizard.cpp `update_grip`): each leg runs Limb.FindGrip from its body chunk within the leg's length (jointDist) toward where the body aims its legs, and grips after limbGripDelay ticks in a row with terrain in reach; a leg under half health, swimming or a stunned lizard grips nothing. The simulation never reads graphics state, and a lizard moves, falls and lunges (Lounge needs more than two legs gripping) the same whether a camera looks at it or not. Vanilla's off-screen lizards never lunge; these do.

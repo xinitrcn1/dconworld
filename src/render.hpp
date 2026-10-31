@@ -83,6 +83,19 @@ namespace render {
         };
         std::unordered_map<std::string, decal_texture> decal_textures;
         std::vector<vertex> batch;
+        // the vertex pulling draws (gpu::pipeline::rope and circle) of the
+        // pass being built, each to go in after the batch's first `at`
+        // vertices; their data goes to the storage buffer
+        struct pulled_draw {
+            size_t at = 0;
+            gpu::pipeline p = gpu::pipeline::rope;
+            uint32_t first = 0; // in rope_points or circles
+            uint32_t count = 0; // points (padding included) or circles
+            bool smooth = true; // a rope's Bezier curves
+        };
+        std::vector<gpu::rope_point> rope_points;
+        std::vector<gpu::circle> circles;
+        std::vector<pulled_draw> pulled;
     };
 
     // `hidden` creates an invisible window (headless screenshots)

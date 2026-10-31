@@ -14,6 +14,7 @@
 #include "player.hpp"
 #include "tracker.hpp"
 #include "barnacle.hpp"
+#include "body_parts.hpp"
 
 namespace lizard {
     using rw::ivec2;
@@ -1038,6 +1039,47 @@ namespace lizard {
         void jump_now(ctx& x);
         float act_animation(ctx& x);
         void spit_now(ctx& x, vec2 at, vec2 dir);
+
+        // Lizard.LegsGripping and NoGripCounter without LizardGraphics (the
+        // simulation never reads graphics state, and a lizard behaves the
+        // same whether a camera looks at it or not). Every leg does what
+        // LizardLimb.Update's reach for terrain does, from its body chunk:
+        // Limb.FindGrip within the leg's length (LizardGraphics' jointDist)
+        // toward where the body aims its legs, feet down; a leg that keeps
+        // finding a grip for limbGripDelay ticks grips. A disabled leg
+        // (limb health under a half), swimming or being stunned grips nothing.
+        void update_grip(ctx& x) {
+            auto& z = x.z;
+            int32_t const limbs = x.is(breed::caramel) ? 6 : 4;
+            float const joint = 25.f * ((x.p.body_size_fac + 1.f) / 2.f);
+            bool const climber = is_wall_climber(x.state, x.id);
+            bool const can = x.consious() && z.swim <= 0.5f && x.state.world.creature_get_stun(x.id) <= 0;
+            auto const& health = x.state.world.creature_get_payload(x.id).lizard.limb_health;
+            int32_t gripping = 0;
+            bool any = false;
+            for (int32_t i = 0; i < limbs; ++i) {
+                uint32_t const ci = limbs == 6 ? uint32_t(i / 2) : (i < 2 ? 0u : 2u);
+                bool found = false;
+                if (can && health.v[i] >= 0.5f) {
+                    vec2 const conn = x.pos(ci);
+                    vec2 v = custom::dir_vec(x.pos(ci == 2 ? 0u : 2u), conn);
+                    if (ci == 2)
+                        v *= -1.f;
+                    v = rw::normalized(rw::lerp(v, custom::dir_vec(conn, z.limbs_aim_for), 0.4f));
+                    v.y -= 0.3f * x.p.feet_down;
+                    player::hand_state h{};
+                    h.mode = player::limb_mode::dangle;
+                    body_parts::find_grip(h, x.room, conn, conn, joint - 1.f, conn + v * 50.f, 2, 2, climber);
+                    found = h.mode == player::limb_mode::hunt_absolute_position;
+                }
+                z.limb_grip[i] = found ? uint8_t(std::min(int32_t(z.limb_grip[i]) + 1, 255)) : uint8_t(0);
+                if (z.limb_grip[i] >= x.p.limb_grip_delay)
+                    ++gripping;
+                any = any || z.limb_grip[i] > 0;
+            }
+            z.legs_gripping = gripping;
+            z.no_grip_counter = any ? 0 : z.no_grip_counter + 1;
+        }
 
         // Lizard.Act
         void act(ctx& x) {
@@ -2202,18 +2244,13 @@ namespace lizard {
     }
 
     int32_t legs_gripping(sys::game_state const& state, dcon::creature_id l) noexcept {
-        // Lizard.LegsGripping: the limbs' grip of LizardGraphics, 2 without
-        // a graphicsModule (off screen)
-        if (!state.viewed(room_of(state, l)))
-            return 2;
-        return state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).legs_grabbing;
+        // Lizard.LegsGripping (the body's own count, see update_grip)
+        return state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).legs_gripping;
     }
 
     int32_t no_grip_counter(sys::game_state const& state, dcon::creature_id l) noexcept {
-        // Lizard.NoGripCounter: 0 without a graphicsModule
-        if (!state.viewed(room_of(state, l)))
-            return 0;
-        return state.world.lizard_data_get_graphics(creature::lizard_data(state.world, l)).no_grip_counter;
+        // Lizard.NoGripCounter (the body's own, see update_grip)
+        return state.world.lizard_data_get_core(creature::lizard_data(state.world, l)).no_grip_counter;
     }
 
     void make_sound(sys::game_state& state, dcon::creature_id l, emotion e) {
@@ -2454,6 +2491,7 @@ namespace lizard {
         --z.lounge_delay;
         if (x.p.tongue)
             tongue_update(x);
+        update_grip(x);
         if (x.consious())
             act(x);
         else
