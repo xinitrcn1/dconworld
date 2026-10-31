@@ -61,6 +61,8 @@ namespace render {
         uint32_t palette_texarray = 0;
         std::vector<uint8_t> palette_pixels; // CPU copy, for the sky colour
         uint32_t effects_texture = 0;
+        std::vector<uint8_t> effects_pixels; // CPU copy (RGB, top row first), for the lights' effect colours
+        int effects_width = 0, effects_height = 0;
         uint32_t room_texture = 0; // camera images of room_texture_room
         uint32_t room_texture_layers = 0;
         dcon::room_id room_texture_room;

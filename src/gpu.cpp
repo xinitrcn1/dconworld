@@ -123,6 +123,7 @@ namespace gpu {
         image target;
         VkImageLayout target_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         texture scene = 0;
+        texture sprite_mask = 0; // grab_sprite_mask's copy (another one than the scene's)
         int width = 0, height = 0;
         std::array<frame, frames_in_flight> frames;
         uint32_t current = 0;
@@ -283,24 +284,27 @@ namespace gpu {
             free_image(c, c.target);
             c.target = make_image(c, w, h, 0, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target_format);
             c.target_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            if (c.scene != 0)
-                free_image(c, tex(c, c.scene));
-            // (its alpha as the frame has it: the sprite mask, see the pipelines)
-            image sc = make_image(c, w, h, 0, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, target_format);
-            sc.samp = sampler::linear_clamp;
-            if (c.scene == 0)
-                c.scene = add_texture(c, sc);
-            else
-                tex(c, c.scene) = sc;
-            immediate(c, [&](VkCommandBuffer cmd) {
-                barrier(cmd, sc.img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkClearColorValue const black{};
-                VkImageSubresourceRange const range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
-                barrier(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            });
+            // the frame copies: grab_scene's and grab_sprite_mask's (their
+            // alpha as the frame has it: the sprite mask, see the pipelines)
+            for (texture* slot : {&c.scene, &c.sprite_mask}) {
+                if (*slot != 0)
+                    free_image(c, tex(c, *slot));
+                image sc = make_image(c, w, h, 0, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, target_format);
+                sc.samp = sampler::linear_clamp;
+                if (*slot == 0)
+                    *slot = add_texture(c, sc);
+                else
+                    tex(c, *slot) = sc;
+                immediate(c, [&](VkCommandBuffer cmd) {
+                    barrier(cmd, sc.img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                        VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VkClearColorValue const black{};
+                    VkImageSubresourceRange const range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    vkCmdClearColorImage(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+                    barrier(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                });
+            }
             for (auto& f : c.frames)
                 f.sets.clear();
             c.width = w;
@@ -1051,26 +1055,37 @@ namespace gpu {
         vkCmdDraw(cur(c).cmd, uint32_t(vertices), 1, 0, 0);
     }
 
+    namespace {
+        // the frame so far into `into`, bottom row first
+        texture grab_into(context& c, texture into) {
+            target_to_transfer(c);
+            VkCommandBuffer const cmd = cur(c).cmd;
+            image const& sc = tex(c, into);
+            // (after the draws that sampled the previous copy)
+            barrier(cmd, sc.img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            // turned upside down: bottom row first, like glCopyTexSubImage2D
+            VkImageBlit region{};
+            region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.srcOffsets[0] = VkOffset3D{0, 0, 0};
+            region.srcOffsets[1] = VkOffset3D{c.width, c.height, 1};
+            region.dstSubresource = region.srcSubresource;
+            region.dstOffsets[0] = VkOffset3D{0, c.height, 0};
+            region.dstOffsets[1] = VkOffset3D{c.width, 0, 1};
+            vkCmdBlitImage(cmd, c.target.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+            barrier(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            // (the target goes back to rendering with the next draw)
+            return into;
+        }
+    }
+
     texture grab_scene(context& c) {
-        target_to_transfer(c);
-        VkCommandBuffer const cmd = cur(c).cmd;
-        image const& sc = tex(c, c.scene);
-        // (after the draws that sampled the previous copy)
-        barrier(cmd, sc.img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        // turned upside down: bottom row first, like glCopyTexSubImage2D
-        VkImageBlit region{};
-        region.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.srcOffsets[0] = VkOffset3D{0, 0, 0};
-        region.srcOffsets[1] = VkOffset3D{c.width, c.height, 1};
-        region.dstSubresource = region.srcSubresource;
-        region.dstOffsets[0] = VkOffset3D{0, c.height, 0};
-        region.dstOffsets[1] = VkOffset3D{c.width, 0, 1};
-        vkCmdBlitImage(cmd, c.target.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
-        barrier(cmd, sc.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_BLIT_BIT,
-            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        // (the target goes back to rendering with the next draw)
-        return c.scene;
+        return grab_into(c, c.scene);
+    }
+
+    texture grab_sprite_mask(context& c) {
+        return grab_into(c, c.sprite_mask);
     }
 
     uint8_t const* read_back(context& c) {

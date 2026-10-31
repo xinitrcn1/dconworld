@@ -102,6 +102,9 @@ namespace gpu {
     // like glCopyTexSubImage2D's, linearly filtered; its alpha is the frame's
     // (the sprites' coverage, see `pipeline`)
     texture grab_scene(context& c);
+    // the same into a copy of its own, which grab_scene doesn't overwrite:
+    // the sprite mask the level shaders read for the rest of the frame
+    texture grab_sprite_mask(context& c);
     // the frame drawn so far, RGBA, width * height texels, rows top to bottom
     // (unlike glReadPixels); waits for the GPU. Stays valid until the next draw
     uint8_t const* read_back(context& c);

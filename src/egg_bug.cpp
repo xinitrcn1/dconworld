@@ -906,6 +906,9 @@ namespace egg_bug {
         auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(source.value) ^ spot));
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, e.rad * 0.5f, 0.3f, e.color, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, e.rad * 0.25f, 0.15f, vec3{1.f, 1.f, 1.f}, 1.f);
+        // FireEgg.Explode's ExplosionLights
+        particles::explosion_light(state, room.id, at, 280.f, 1.f, 7, e.color);
+        particles::explosion_light(state, room.id, at, 230.f, 1.f, 3, vec3{1.f, 1.f, 1.f});
         for (int i = 0; i < 20; ++i) {
             vec2 const a = custom::rnv(r);
             particles::spawn(state, room.id, particles::kind::spark, at + a * r.value() * 40.f, a * mathf::lerp(4.f, 30.f, r.value()), 1.8f, 0.4f,

@@ -44,6 +44,7 @@
 #include "dropbug_graphics.hpp"
 #include "lizard.hpp"
 #include "lizard_graphics.hpp"
+#include "lizard_ai.hpp"
 #include "daddy.hpp"
 #include "daddy_graphics.hpp"
 #include "gates.hpp"
@@ -138,21 +139,25 @@ namespace render {
             glm::vec2 screen;
             glm::vec2 view_pos;
             glm::vec2 cam_origin;
-            glm::vec2 center;
+            glm::vec2 env_pos;
             glm::vec4 color;
-            glm::ivec2 effect_colors;
+            glm::vec4 element_rect;
+            glm::vec4 element_trim;
             int32_t index;
             int32_t camera_index;
             float zoom;
             float night_time;
-            int32_t color_type;
-            int32_t flat;
+            int32_t color_mode;
+            int32_t kind;
             glm::vec2 env_origin;
             int32_t env_camera;
             int32_t later_count;
+            float rain;
+            float pad[5];
             glm::vec4 later[max_later_cameras / 2];
         };
-        static_assert(offsetof(light_uniforms, effect_colors) == 112 && offsetof(light_uniforms, env_origin) == 144 && offsetof(light_uniforms, later) == 160);
+        static_assert(offsetof(light_uniforms, element_rect) == 112 && offsetof(light_uniforms, env_origin) == 168 && offsetof(light_uniforms, rain) == 184
+            && offsetof(light_uniforms, later) == 208);
         struct warp_tear_uniforms {
             glm::mat4 proj;
             glm::vec2 screen;
@@ -336,8 +341,12 @@ namespace render {
                 gpu::upload(*r.gpu, r.palette_texarray, pid.index(), im.px, 3);
             });
             image fx;
-            if (load_image(s.fs, dir.get_single_file("effectcolors.png"), 3, fx))
+            if (load_image(s.fs, dir.get_single_file("effectcolors.png"), 3, fx)) {
                 r.effects_texture = make_texture_2d(r, fx, 3);
+                r.effects_pixels.assign(fx.px, fx.px + size_t(fx.w) * size_t(fx.h) * 3);
+                r.effects_width = fx.w;
+                r.effects_height = fx.h;
+            }
             else
                 reports::add_log("missing palettes/effectcolors.png");
         }
@@ -1017,20 +1026,6 @@ namespace render {
             });
         }
 
-        // MouseGraphics' LightSource (vanilla's ForegroundLights container): a
-        // soft disc of the mouse's colour while the room is dark, wherever the
-        // mouse is (hanging, running, or in the slugcat's hands: the light it
-        // carries). The LightSource lighting the level itself (the room
-        // shader's lights) isn't reproduced
-        void build_mouse_lights(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
-            painter p{r.batch};
-            float const darkness = palette_darkness(r, s, room.id);
-            rooms::for_each_creature(s, room.id, creature::type::lantern_mouse, [&](dcon::creature_id c) {
-                lantern_mouse_graphics::light l;
-                if (lantern_mouse_graphics::light_of(s, c, alpha, darkness, l) && l.rad >= 0.5f)
-                    p.glow(l.pos, l.rad, to_rgba(l.color, l.alpha), to_rgba(l.color, 0.f));
-            });
-        }
         void dangle_fruit_cmds(sys::game_state const& s, dcon::item_id it, bool rotted, vec2 pos, float alpha, rw::vec3 black, float darkness,
             std::vector<sprites::draw_cmd>& out);
 
@@ -1597,21 +1592,6 @@ namespace render {
             emit_game_cmds(r, cmds);
         }
 
-        // a centipede's lights: the LightSource of a shock, the aquapede's Glower
-        void centipede_lights(painter& p, sys::game_state const& s, dcon::creature_id c, float alpha) {
-            auto const& w = s.world;
-            auto const d = creature::centipede_data(w, c);
-            auto const k = centipede::chunk(s, c, centipede::head_index(s, c));
-            vec2 const head = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
-            float const flash = w.centipede_data_get_light_flash(d);
-            if (flash > 0.f)
-                p.glow(head, 60.f * flash + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.8f * flash), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
-            // (a LightSource of radius 300 at alpha 0.5: a soft glow here)
-            float const glow = w.centipede_data_get_glow(d);
-            if (glow > 0.f)
-                p.glow(head, 120.f * glow + 20.f, to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.35f * glow), to_rgba(rw::vec3{0.7f, 0.7f, 1.f}, 0.f));
-        }
-
         // Centipedes through CentipedeGraphics and the game's atlases
         void build_centipede_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             static std::vector<sprites::draw_cmd> cmds;
@@ -1622,7 +1602,6 @@ namespace render {
                 cmds.clear();
                 centipede_graphics::build(s, c, alpha, black, darkness, cmds);
                 emit_game_cmds(r, cmds);
-                centipede_lights(p, s, c, alpha);
             });
             // the shells knocked off them (CentipedeShell)
             cmds.clear();
@@ -2361,7 +2340,6 @@ namespace render {
                                 pos + side * (float(l) * rad * (1.6f + 0.5f * std::sin(t * mathf::pi))) - dir * (rad * 0.4f), to_rgba(ridge));
                     }
                 }
-                centipede_lights(p, s, c, alpha);
             });
             // the shells knocked off them, tumbling plates
             for (auto const& pt : s.particles) {
@@ -2995,25 +2973,113 @@ namespace render {
             });
         }
 
-        // The placed LightSources (Room.Loaded's environmental lights) over
-        // the level: vanilla's ForegroundLights container. Their alpha as
-        // LightSource.Alpha and DrawSprites have it (fadeWithSun, the blink;
-        // environmental lights ignore the palette's darkness); the colour
-        // (Environment, White, the effect colours) is worked out by the shader
-        void draw_lights(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f) {
+        // A sprite drawn with light.frag: a LightSource's (its CircularSprite
+        // with the LightSource or FlatLight shader, and in a room with water
+        // its UnderWaterLight sprite), or a CosmeticSprite's own
+        // (ExplosionLight, SlimeMoldLight)
+        struct light_sprite {
+            vec2 pos{0.f, 0.f};
+            vec2 env_pos{0.f, 0.f}; // the LightSource's position (Environment's colour)
+            float rad = 0.f;        // half the sprite's size
+            float alpha = 0.f;      // the sprite's alpha (before colorAlpha)
+            rw::vec3 color{1.f, 1.f, 1.f};
+            uint8_t color_mode = 1; // 0 Environment, 1 LightSource.color (normalised), 2 the sprite's colour as is
+            uint8_t kind = 0;       // 0 LightSource, 1 FlatLight, 2 UnderWaterLight
+            bool water = false;     // the Water container, else ForegroundLights
+            bool mask0 = false;     // RedlightLight's LightMask0 element
+        };
+
+        // the frame's lights of a room
+        struct light_list {
+            world::room_view const& room;
+            bool water_lights = false; // the WaterLights effect: every LightSource submersible
+            std::vector<light_sprite> sprites;
+
+            // a LightSource: `alpha` is its sprite's (Alpha, the palette's
+            // darkness by affectedByPaletteDarkness, the blink), `color` what
+            // its colour was set to
+            void source(vec2 pos, float rad, float alpha, rw::vec3 color, uint8_t mode, bool flat, bool submersible, bool mask0 = false) {
+                if (alpha <= 0.f || rad < 0.5f)
+                    return;
+                submersible = submersible || water_lights;
+                vec2 const at{std::floor(pos.x) + 0.5f, std::floor(pos.y) + 0.5f};
+                sprites.push_back(light_sprite{at, pos, rad, alpha, color, mode, uint8_t(flat ? 1 : 0), submersible, mask0});
+                if (!room.water)
+                    return;
+                // the UnderWaterLight sprite: under the surface, shrinking as the light rises out of it
+                float const surface = room.get_float_water_level(pos);
+                float const out = mathf::inverse_lerp(surface - rad * 0.25f, surface + rad * 0.25f, pos.y);
+                float const half = rad * 0.5f * std::sqrt(1.f - out);
+                if (half < 0.5f)
+                    return;
+                float const y = std::floor(mathf::min(pos.y, mathf::lerp(pos.y, surface - half * 0.5f, 0.5f))) + 0.5f;
+                sprites.push_back(light_sprite{vec2{at.x, y}, pos, half, alpha * std::sqrt(1.f - out), color, mode, 2, true, false});
+            }
+            // a plain sprite with the LightSource (or FlatLight) shader
+            void sprite(vec2 pos, float half, float alpha, rw::vec3 color, bool flat) {
+                if (alpha <= 0.f || half < 0.5f)
+                    return;
+                sprites.push_back(light_sprite{pos, pos, half, alpha, color, 2, uint8_t(flat ? 1 : 0), false, false});
+            }
+        };
+
+        // rolls for the lights' flicker, from the tick (the drawing keeps no state)
+        float light_roll(uint32_t a, uint32_t b, uint32_t c = 0) {
+            uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA77u ^ (c + 0x165667B1u) * 0xC2B2AE3Du;
+            h ^= h >> 15;
+            h *= 0x2C1B3C6Du;
+            h ^= h >> 12;
+            h *= 0x297A2D39u;
+            h ^= h >> 15;
+            return float(h & 0xFFFFFF) / 16777215.f;
+        }
+        vec2 light_rnv(uint32_t a, uint32_t b, uint32_t c) {
+            float const ang = light_roll(a, b, c) * 6.2831853f;
+            return vec2{std::sin(ang), std::cos(ang)};
+        }
+
+        // RoomPalette.texture.GetPixel(x, y) of the palette itself (not its
+        // rain half): y from the bottom of its 8 rows, mixed towards the rain
+        // half by the night toggle like the level
+        rw::vec3 palette_pixel(state const& r, sys::game_state const& s, dcon::room_id room, int x, int y, float night) {
+            return glm::mix(palette_texel(r, s, room, x, y + 8), palette_texel(r, s, room, x, y), night);
+        }
+
+        // the effect colour `e` (0: A, 1: B) as LightSource.ApplyPalette reads
+        // it: palette.texture.GetPixel(30, 5 - effectColor * 2)
+        rw::vec3 effect_light_color(state const& r, sys::game_state const& s, dcon::room_id room, int e, float night) {
+            int const fx = e == 0 ? s.world.room_get_effect_color_a(room) : s.world.room_get_effect_color_b(room);
+            if (fx < 0 || r.effects_pixels.empty() || fx * 2 >= r.effects_width || r.effects_height < 4)
+                return palette_pixel(r, s, room, 30, 5 - e * 2, night);
+            // effectcolors.png, top row first: row 0 the palette's, row 2 the rain's
+            auto const px = [&](int row) {
+                uint8_t const* p = r.effects_pixels.data() + (size_t(row) * size_t(r.effects_width) + size_t(fx * 2)) * 3;
+                return rw::vec3{float(p[0]) / 255.f, float(p[1]) / 255.f, float(p[2]) / 255.f};
+            };
+            return glm::mix(px(0), px(2), night);
+        }
+
+        // The placed LightSources (Room.Loaded's environmental lights: the
+        // palette's darkness doesn't dim them): LightSource.Alpha (fadeWithSun,
+        // nightLight) and DrawSprites' blink
+        void collect_placed_lights(state const& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, light_list& out) {
             auto const& w = s.world;
-            auto const& cams = *f.cams;
-            if (cams.empty())
-                return;
             float const sun = std::pow(mathf::inverse_lerp(-0.5f, 0.f, f.shader_light), 1.2f);
+            // nightFade: 0 until the DayNight effect's night (dayNightCounter past
+            // 6000 * amount * 1.75), then towards 1 by 0.005 a tick
+            float night_fade = 0.f;
+            float const day_night = w.room_get_day_night(room.id);
+            if (auto const* cyc = rain::of_room(s, room.id); cyc && day_night > 0.f) {
+                float const since = float(cyc->day_night_counter) - 6000.f * day_night * 1.75f;
+                if (since >= 0.f)
+                    night_fade = 1.f - std::pow(0.995f, since + 1.f);
+            }
             w.room_for_each_light_location(room.id, [&](dcon::light_location_id ll) {
                 auto const l = w.light_location_get_light(ll);
-                // nightLight: nightFade starts at 0 and only rises with the
-                // DayNight effect late in the cycle (not ported)
-                if (w.light_placed_get_night_light(l))
-                    return;
                 float alpha = w.light_placed_get_strength(l);
-                if (w.light_placed_get_fade_with_sun(l))
+                if (w.light_placed_get_night_light(l))
+                    alpha *= night_fade;
+                else if (w.light_placed_get_fade_with_sun(l))
                     alpha *= sun;
                 // the blink, on the room's syncTicker (the world's tick here)
                 uint8_t const blink = w.light_placed_get_blink_type(l);
@@ -3029,12 +3095,288 @@ namespace render {
                             alpha *= (std::sin(std::fmod(t, period) / period * 3.1415927f * 2.f) + 1.f) / 2.f;
                     }
                 }
-                float const rad = w.light_placed_get_rad(l);
-                if (alpha <= 0.f || rad < 0.5f)
+                uint8_t const type = w.light_placed_get_color_type(l);
+                rw::vec3 color{1.f, 1.f, 1.f};
+                uint8_t mode = 1;
+                if (type == 0)
+                    mode = 0;
+                else if (type >= 2)
+                    color = effect_light_color(r, s, room.id, type - 2, f.night_time);
+                out.source(w.light_placed_get_pos(l), w.light_placed_get_rad(l), alpha, color, mode, w.light_placed_get_flat(l), false);
+            });
+        }
+
+        // The LightFixtures: Redlight (and RedSubmersible), ZapCoilLight,
+        // HolyFire, SlimeMoldLight, DeepProcessingLight, GlowWeedLight. Their
+        // per tick rolls are taken from the tick and the fixture, so the
+        // flicker and the fire's wander look like vanilla's without being its
+        // state; ElectricPower is 1 and a ZapCoilLight's coil is on
+        void collect_fixtures(state const& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, float darkness, light_list& out) {
+            auto const& w = s.world;
+            uint32_t const tick = f.tick;
+            float const t = float(tick);
+            w.room_for_each_fixture_location(room.id, [&](dcon::fixture_location_id fl) {
+                auto const fx = w.fixture_location_get_fixture(fl);
+                vec2 const pos = w.fixture_placed_get_pos(fx);
+                float const seed = float(w.fixture_placed_get_seed(fx)) / 100.f;
+                uint32_t const id = uint32_t(fx.index()) + 1u;
+                switch (w.fixture_placed_get_type(fx)) {
+                case 0:
+                case 1: {
+                    // Redlight: sin += 1 / Lerp(60, 80, rnd) a tick; a flicker of
+                    // 1..15 ticks every 0..700 ticks
+                    float const phase = light_roll(id, 1) + t / 70.f;
+                    float const wave = std::sin(phase * 3.1415927f * 2.f);
+                    float const rad = mathf::lerp(290.f, 310.f, 0.5f + wave * 0.5f) * 0.16f;
+                    float const shifted = t + light_roll(id, 2) * 700.f;
+                    uint32_t const window = uint32_t(shifted / 350.f);
+                    float const in_window = shifted - float(window) * 350.f;
+                    float alpha, flat_alpha, flat_rad;
+                    if (in_window < 1.f + std::floor(light_roll(id, 3, window) * 14.f)) {
+                        // a new strength a third of the ticks
+                        float const v = std::sqrt(light_roll(id, 4, tick / 3u));
+                        alpha = v;
+                        flat_alpha = v * 0.25f;
+                        flat_rad = v * 30.f;
+                    } else {
+                        alpha = mathf::lerp(0.9f, 1.f, 0.5f + wave * 0.5f * light_roll(id, 5, tick));
+                        flat_alpha = 0.25f;
+                        flat_rad = mathf::lerp(28.f, 32.f, light_roll(id, 6, tick));
+                    }
+                    // (not environmental: the palette's darkness dims them)
+                    out.source(pos, rad, alpha * darkness, rw::vec3{1.f, 0.f, 0.f}, 1, false, w.fixture_placed_get_type(fx) == 1, true);
+                    out.source(pos, flat_rad, flat_alpha * darkness, rw::vec3{1.f, 0.05f, 0.05f}, 1, true, false);
+                    break;
+                }
+                case 2:
+                    // ZapCoilLight (affectedByPaletteDarkness 0.5)
+                    out.source(pos, mathf::lerp(100.f, 2000.f, seed), mathf::lerp(1.f, darkness, 0.5f), rw::vec3{0.f, 0.f, 1.f}, 1, false, false);
+                    break;
+                case 3: {
+                    // HolyFire: three lights wandering about it, their targets
+                    // re-rolled now and then (here every 5 ticks, eased between)
+                    uint32_t const k = tick / 5u;
+                    float const e = rw::custom::s_curve(float(tick % 5u) / 5.f, 0.5f);
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        float const fi = float(i) / 2.f;
+                        auto const target = [&](uint32_t kk) { return light_rnv(id, 10 + i, kk) * 50.f * light_roll(id, 20 + i, kk); };
+                        auto const target_rad = [&](uint32_t kk) { return mathf::lerp(50.f, mathf::lerp(400.f, 200.f, fi), std::sqrt(light_roll(id, 30 + i, kk))); };
+                        vec2 const at = pos + rw::lerp(target(k - 1u), target(k), e);
+                        float const rad = mathf::lerp(target_rad(k - 1u), target_rad(k), e);
+                        out.source(at, rad, darkness, rw::custom::hsl2rgb(mathf::lerp(0.01f, 0.07f, fi), 1.f, 0.5f), 1, false, false);
+                    }
+                    out.source(pos, mathf::lerp(24.f, 33.f, light_roll(id, 40, tick)), mathf::lerp(0.2f, 0.4f, light_roll(id, 41, tick)) * darkness,
+                        rw::vec3{1.f, 1.f, 1.f}, 1, true, false);
+                    break;
+                }
+                case 4: {
+                    // SlimeMoldLight: five Futile_White sprites with the LightSource
+                    // shader round it (UnityEngine.Random seeded with pos.x + pos.y:
+                    // a hash here), in the slime mold's colour
+                    rw::vec3 const fog = palette_pixel(r, s, room.id, 1, 7, f.night_time);
+                    float const fog_amount = palette_pixel(r, s, room.id, 9, 7, f.night_time).x;
+                    rw::vec3 c = glm::mix(rw::custom::hsl2rgb(mathf::lerp(0.07f, 0.05f, darkness), 1.f, 0.55f), fog,
+                        mathf::lerp(0.25f, 0.35f, fog_amount) * mathf::lerp(0.1f, 1.f, darkness));
+                    // Custom.Saturate(c, 1)
+                    float const lo = mathf::min(c.x, mathf::min(c.y, c.z)), hi = mathf::max(c.x, mathf::max(c.y, c.z));
+                    if (hi > lo)
+                        c = rw::vec3{mathf::inverse_lerp(lo, hi, c.x), mathf::inverse_lerp(lo, hi, c.y), mathf::inverse_lerp(lo, hi, c.z)};
+                    uint32_t const key = uint32_t(int32_t(pos.x + pos.y));
+                    for (uint32_t i = 0; i < 5; ++i) {
+                        vec2 const off = light_rnv(key, 50 + i, 0) * light_roll(key, 60 + i);
+                        float const size = mathf::lerp(70.f, 200.f, light_roll(key, 70 + i));
+                        float const a = mathf::lerp(0.2f, 0.35f, light_roll(key, 80 + i));
+                        out.sprite(pos + off * float(w.fixture_placed_get_seed(fx)) * 2.f, size * 0.5f, a * std::sqrt(darkness), c, false);
+                    }
+                    break;
+                }
+                case 5:
+                    // DeepProcessingLight (affectedByPaletteDarkness 0)
+                    out.source(pos, mathf::lerp(80.f, 800.f, seed) * mathf::lerp(0.9f, 1.1f, light_roll(id, 90, tick)), 0.5f, rw::vec3{0.f, 0.f, 1.f}, 1, false, false);
+                    break;
+                case 6:
+                    // GlowWeedLight (environmental, submersible)
+                    out.source(pos, seed * 500.f, 0.8f, rw::vec3{0.8f, 1.f, 0.4f}, 1, false, true);
+                    break;
+                default:
+                    break;
+                }
+            });
+        }
+
+        // The creatures', items' and effects' LightSources (and ExplosionLights)
+        void collect_object_lights(state const& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, float alpha, float darkness,
+            light_list& out) {
+            auto const& w = s.world;
+            uint32_t const tick = f.tick;
+            auto const lerp_pos = [&](dcon::body_chunk_id k) { return rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha); };
+
+            // MouseGraphics
+            rooms::for_each_creature(s, room.id, creature::type::lantern_mouse, [&](dcon::creature_id c) {
+                lantern_mouse_graphics::light l;
+                if (lantern_mouse_graphics::light_of(s, c, alpha, darkness, l))
+                    out.source(l.pos, l.rad, l.alpha * darkness, l.color, 1, false, false);
+            });
+            // CentipedeGraphics' shock flash (affectedByPaletteDarkness 0) and
+            // the aquapede's Glower (submersible)
+            rooms::for_each_creature(s, room.id, creature::type::centipede, [&](dcon::creature_id c) {
+                auto const d = creature::centipede_data(w, c);
+                float const flash = w.centipede_data_get_light_flash(d);
+                if (flash > 0.f) {
+                    float const v = flash * light_roll(uint32_t(c.index()), 100, tick);
+                    float const n = mathf::lerp(v, 1.f, 0.5f * (1.f - darkness));
+                    out.source(lerp_pos(creature::chunk(s, c, creature::main_chunk(s, c))),
+                        300.f * std::pow(v, 0.1f) * mathf::lerp(0.5f, 2.f, w.creature_get_payload(c).centipede.size), std::pow(v, 0.1f), rw::vec3{n, n, 1.f}, 1, false, false);
+                }
+                float const glow = w.centipede_data_get_glow(d);
+                if (glow > 0.f) {
+                    // (its radius grows to 300 as its alpha does to 0.5)
+                    out.source(lerp_pos(centipede::chunk(s, c, centipede::head_index(s, c))), 300.f * mathf::min(1.f, glow * 2.f), glow * darkness,
+                        rw::vec3{0.7f, 0.7f, 1.f}, 1, false, true);
+                }
+            });
+            // LizardGraphics: the head's light in the dark (not the salamander's)
+            if (darkness > 0.f) {
+                auto const pal = lizard_palette(r, s, room.id);
+                rooms::for_each_creature(s, room.id, creature::type::lizard, [&](dcon::creature_id c) {
+                    auto const b = lizard::breed_of(s, c);
+                    if (b == lizard::breed::salamander)
+                        return;
+                    auto const& g = w.lizard_data_get_graphics(creature::lizard_data(w, c));
+                    vec2 const head = rw::lerp(g.head.last_pos, g.head.pos, alpha);
+                    rw::vec3 const effect = lizard_graphics::shared::effect_color(s, c, pal);
+                    if (b == lizard::breed::black)
+                        out.source(head, 100.f, 0.35f * g.black_lizard_light_up_head * darkness, rw::vec3{1.f, 1.f, 1.f}, 1, false, false);
+                    else
+                        out.source(head, 100.f, 0.6f * (1.f - g.white_camo_color_amount) * darkness, effect, 1, false, false);
+                });
+                // MirosBirdGraphics: the sparks of its feet
+                rooms::for_each_creature(s, room.id, creature::type::miros, [&](dcon::creature_id c) {
+                    auto const& legs = w.miros_data_get_legs(creature::miros_data(w, c));
+                    for (uint32_t j = 0; j < 2; ++j) {
+                        auto const& l = legs.l[j];
+                        if (l.light_up <= 0)
+                            continue;
+                        float const v = light_roll(uint32_t(c.index()), 110 + j, tick);
+                        out.source(rw::lerp(l.light_up_pos1, l.light_up_pos2, light_roll(uint32_t(c.index()), 120 + j, tick)), mathf::lerp(30.f, 50.f, light_roll(uint32_t(c.index()), 130 + j, tick)),
+                            std::sqrt(v) * 0.7f * darkness, rw::vec3{1.f, 1.f, 0.8f}, 1, false, false);
+                    }
+                });
+            }
+            // Vulture.LaserLight (the miros vulture's)
+            rooms::for_each_creature(s, room.id, creature::type::vulture, [&](dcon::creature_id c) {
+                vec2 at;
+                float counter = 0.f;
+                if (vulture_graphics::laser_light(s, c, alpha, at, counter))
+                    out.source(at, counter, darkness, rw::vec3{(200.f - counter) / 200.f, counter / 200.f, 0.1f}, 1, false, false);
+            });
+            // WarpTear (affectedByPaletteDarkness 0.5)
+            w.room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
+                auto const wp = w.warp_point_location_get_point(l);
+                float const fade = mathf::lerp(w.warp_point_get_last_fade(wp), w.warp_point_get_fade(wp), alpha);
+                float const open = mathf::lerp(w.warp_point_get_last_open(wp), w.warp_point_get_open(wp), alpha);
+                float const a = mathf::inverse_lerp(0.5f, 1.f, open * fade) * 0.5f;
+                out.source(w.warp_placed_get_pos(w.warp_point_get_placed(wp)), 1000.f, a * mathf::lerp(1.f, darkness, 0.5f), rw::vec3{0.f, 0.2f, 0.7f}, 1, false, false);
+            });
+            // FlareBomb (in the dark) and LillyPuck
+            rooms::for_each_item(s, room.id, [&](dcon::item_id it) {
+                auto const type = w.item_get_type(it);
+                if (type == world::item_type::flare_bomb && darkness > 0.f) {
+                    auto const k = items::chunk(s, it);
+                    bool const thrown = w.item_get_mode(it) == world::weapon_mode::thrown;
+                    float const v = light_roll(uint32_t(it.index()), 140, tick);
+                    out.source(lerp_pos(k) + w.body_chunk_get_vel(k), thrown ? mathf::lerp(60.f, 290.f, v) : 60.f, (thrown ? mathf::lerp(0.5f, 1.f, v) : 0.5f) * darkness,
+                        rw::vec3{0.2f, 0.f, 1.f}, 1, false, false);
+                } else if (type == world::item_type::lilly_puck && w.item_get_stalk(it).has_value()) {
+                    // on its stalk (lightFade 1); environmental, alpha Lerp(0, lightFade, darkness) / 4
+                    out.source(lerp_pos(items::chunk(s, it)), mathf::lerp(190.f, 260.f, light_roll(uint32_t(it.index()), 150)), darkness / 4.f,
+                        rw::vec3{120.f / 255.f, 170.f / 255.f, 110.f / 255.f}, 1, false, false);
+                }
+            });
+            // Explosion.ExplosionLight and the FlareBomb's burning
+            for (auto const& pt : s.particles) {
+                if (pt.room != room.id)
+                    continue;
+                if (pt.kind == uint8_t(particles::kind::explosion_light)) {
+                    float const life = mathf::clamp01(1.f - pt.life);
+                    float const grow = std::sqrt(life);
+                    // a FlatLight darkening, then two LightSource shader sprites
+                    out.sprite(pt.pos, grow * pt.size, life * pt.alpha * 0.5f, rw::vec3{0.f, 0.f, 0.f}, true);
+                    out.sprite(pt.pos, grow * pt.size, grow * pt.alpha, pt.color, false);
+                    out.sprite(pt.pos, grow * pt.size, grow * pt.alpha,
+                        glm::mix(pt.color, rw::vec3{1.f, 1.f, 1.f}, light_roll(uint32_t(int32_t(pt.pos.x)), 160, tick) * grow), false);
+                } else if (pt.kind == uint8_t(particles::kind::flare_light) && darkness > 0.f) {
+                    float const intensity = std::pow(std::sin(mathf::clamp01(pt.life) * 3.1415927f), 0.4f);
+                    float const flash_rad = std::pow(light_roll(uint32_t(int32_t(pt.pos.x)), 170, tick), 0.3f) * intensity * 200.f * 16.f;
+                    out.source(pt.pos, mathf::max(flash_rad, 60.f + intensity * 10.f), 0.5f * (1.f - 0.6f * intensity) * darkness, pt.color, 1, false, false);
+                }
+            }
+        }
+
+        // HolyFire.HolyFireSprite: one born every tick at the fire, rising and
+        // shrinking over its 10..40 ticks; each one's rolls come from its
+        // birth tick, its path is stepped from there (the drawing keeps no state)
+        void build_holy_fire(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
+            auto const& w = s.world;
+            static std::vector<sprites::draw_cmd> cmds;
+            cmds.clear();
+            uint32_t const tick = s.tick;
+            w.room_for_each_fixture_location(room.id, [&](dcon::fixture_location_id fl) {
+                auto const fx = w.fixture_location_get_fixture(fl);
+                if (w.fixture_placed_get_type(fx) != 3)
                     return;
-                // CircularSprite at floor(pos) + 0.5
-                vec2 const center = rw::vec2{std::floor(w.light_placed_get_pos(l).x), std::floor(w.light_placed_get_pos(l).y)} + vec2{0.5f, 0.5f};
-                vec2 const lo = center - vec2{rad, rad}, hi = center + vec2{rad, rad};
+                uint32_t const id = uint32_t(fx.index()) + 1u;
+                vec2 const origin = w.fixture_placed_get_pos(fx);
+                for (uint32_t age = 0; age < 40 && age <= tick; ++age) {
+                    uint32_t const born = tick - age;
+                    float const life_time = mathf::lerp(10.f, 40.f, light_roll(id, 200, born));
+                    vec2 pos = origin, last = origin;
+                    vec2 vel = light_rnv(id, 201, born) * 1.5f * light_roll(id, 202, born);
+                    for (uint32_t k = 0; k < age; ++k) {
+                        last = pos;
+                        pos += vel;
+                        vel *= 0.8f;
+                        vel.y += 0.4f;
+                        vel += light_rnv(id, 203 + k, born) * light_roll(id, 250 + k, born) * 0.5f;
+                    }
+                    float const life = 1.f - float(age) / life_time, last_life = 1.f - float(age > 0 ? age - 1 : 0) / life_time;
+                    float const l = mathf::lerp(last_life, life, alpha);
+                    if (l <= 0.f)
+                        continue;
+                    vec2 const at = age > 0 ? rw::lerp(last, pos, alpha) : origin;
+                    sprites::add(cmds, sprites::sprite{"deerEyeB", at, 0.f, vec2{l, l}, vec2{0.5f, 0.5f},
+                        rw::custom::hsl2rgb(mathf::lerp(0.01f, 0.08f, l), 1.f, mathf::lerp(0.5f, 1.f, l * l * l))});
+                }
+            });
+            emit_game_cmds(r, cmds);
+        }
+
+        // every light of the room this frame
+        light_list collect_lights(state const& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, float alpha) {
+            light_list out{room, s.world.room_get_water_lights(room.id) > 0.f, {}};
+            float const darkness = palette_darkness(r, s, room.id);
+            collect_placed_lights(r, s, room, f, out);
+            collect_fixtures(r, s, room, f, darkness, out);
+            collect_object_lights(r, s, room, f, alpha, darkness, out);
+            return out;
+        }
+
+        // the lights of one container (`water`: the Water container's, after
+        // the water; else ForegroundLights', over the level)
+        void draw_lights(state& r, light_list const& lights, level_frame const& f, bool water) {
+            auto const& cams = *f.cams;
+            if (cams.empty())
+                return;
+            // LightMask0 out of the game's atlas
+            glm::vec4 mask_rect{0.f}, mask_trim{0.f, 0.f, 1.f, 1.f};
+            if (game_frame const* m = r.game_texture != 0 ? find_game_frame(r, "LightMask0") : nullptr; m && m->source_w > 0.f && m->source_h > 0.f) {
+                mask_rect = glm::vec4{m->x / float(r.game_width), m->y / float(r.game_height), m->w / float(r.game_width), m->h / float(r.game_height)};
+                mask_trim = glm::vec4{m->trim_x / m->source_w, m->trim_y / m->source_h, m->w / m->source_w, m->h / m->source_h};
+            }
+            for (auto const& l : lights.sprites) {
+                if (l.water != water)
+                    continue;
+                vec2 const lo = l.pos - vec2{l.rad, l.rad}, hi = l.pos + vec2{l.rad, l.rad};
                 vertex const bl{lo.x, lo.y, 0xFFFFFFFFu, 0.f, 0.f};
                 vertex const br{hi.x, lo.y, 0xFFFFFFFFu, 1.f, 0.f};
                 vertex const tr{hi.x, hi.y, 0xFFFFFFFFu, 1.f, 1.f};
@@ -3046,18 +3388,21 @@ namespace render {
                 u.proj = f.proj;
                 u.screen = f.screen;
                 u.view_pos = f.view_pos;
-                u.center = center;
-                u.color = glm::vec4{1.f, 1.f, 1.f, alpha};
-                u.effect_colors = f.effect_colors;
+                u.env_pos = l.env_pos;
+                u.color = glm::vec4{l.color.x, l.color.y, l.color.z, l.alpha};
+                bool const masked = l.mask0 && mask_rect.z > 0.f;
+                u.element_rect = masked ? mask_rect : glm::vec4{0.f};
+                u.element_trim = mask_trim;
                 u.index = f.palette;
                 u.zoom = f.zoom;
                 u.night_time = f.night_time;
-                u.color_type = w.light_placed_get_color_type(l);
-                u.flat = w.light_placed_get_flat(l) ? 1 : 0;
+                u.color_mode = l.color_mode;
+                u.kind = l.kind;
+                u.rain = f.rain;
                 // Environment: the colour of the camera image the level shows at the light
                 u.env_camera = 0;
                 for (size_t c = 0; c < cams.size(); ++c)
-                    if (camera_touches(cams[c], center, center))
+                    if (camera_touches(cams[c], l.env_pos, l.env_pos))
                         u.env_camera = int32_t(c);
                 u.env_origin = cams[size_t(u.env_camera)];
                 for (size_t c = 0; c < cams.size(); ++c) {
@@ -3066,9 +3411,9 @@ namespace render {
                     u.camera_index = int32_t(c);
                     u.cam_origin = cams[c];
                     u.later_count = later_cameras(cams, c, u.later);
-                    gpu::draw(*r.gpu, gpu::pipeline::light, &u, sizeof(u), {r.room_texture, r.palette_texarray, r.effects_texture, f.mask}, 0, 6);
+                    gpu::draw(*r.gpu, gpu::pipeline::light, &u, sizeof(u), {r.room_texture, r.palette_texarray, masked ? r.game_texture : 0u, f.mask}, 0, 6);
                 }
-            });
+            }
         }
 
         // particles.hpp's effects, plain shapes
@@ -3115,6 +3460,10 @@ namespace render {
                     break;
                 case particles::kind::centipede_shell:
                     // (drawn with the creatures, where vanilla's CosmeticSprites go)
+                    break;
+                case particles::kind::explosion_light:
+                case particles::kind::flare_light:
+                    // (the lights: draw_lights)
                     break;
                 }
             }
@@ -3428,7 +3777,7 @@ namespace render {
         if (textured_room) {
             // what the sprites left in the frame's alpha: the sprite mask the
             // level shaders read from here on (vanilla's GrabPass)
-            lf.mask = gpu::grab_scene(*r.gpu);
+            lf.mask = gpu::grab_sprite_mask(*r.gpu);
             // the sprites' shadows on the sunlit level behind them
             draw_cameras(2);
             draw_cameras(1);
@@ -3436,13 +3785,15 @@ namespace render {
             if (r.show_geometry)
                 draw_geometry();
         }
-        // the Foreground container: the pearls' glimmer
+        // the Foreground container: the pearls' glimmer, the holy fires' flames
         draw_flat([&] { build_pearl_lights(r, s, room, alpha); });
-        // the lantern mice's glow
-        draw_flat([&] { build_mouse_lights(r, s, room, alpha); });
-        // the placed LightSources (ForegroundLights)
+        if (atlas)
+            draw_game([&] { build_holy_fire(r, s, room, alpha); });
+        // the LightSources (ForegroundLights; the submersible ones and the
+        // UnderWaterLight sprites go with the water)
+        light_list const lights = collect_lights(r, s, room, lf, alpha);
         if (textured_room)
-            draw_lights(r, s, room, lf);
+            draw_lights(r, lights, lf, false);
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 
@@ -3455,6 +3806,8 @@ namespace render {
             build_shortcut_glow(r, s, room, alpha);
         });
         draw_water(r, s, room, alpha, cam, proj, seconds);
+        if (textured_room)
+            draw_lights(r, lights, lf, true);
 
         draw_flat([&] { build_ripple_rings(r, s, room); });
         draw_warp_screen(r, s, room, alpha, cam, proj, seconds);

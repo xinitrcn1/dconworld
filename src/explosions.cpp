@@ -48,6 +48,9 @@ namespace explosions {
         auto r = rw::random(state.seed, state.tick, rw::ids(uint32_t(room.id.value), uint32_t(source.value) ^ spot));
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, d.rad * 0.45f, 0.35f, rw::vec3{1.f, 0.95f, 0.85f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, d.rad * 0.2f, 0.2f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
+        // ScavengerBomb.Explode's ExplosionLights (its explodeColor)
+        particles::explosion_light(state, room.id, at, 280.f, 1.f, 7, rw::vec3{1.f, 0.4f, 0.3f});
+        particles::explosion_light(state, room.id, at, 230.f, 1.f, 3, rw::vec3{1.f, 1.f, 1.f});
         for (int i = 0; i < 24; ++i) {
             vec2 const dir = custom::deg_to_vec(r.value() * 360.f);
             particles::spawn(state, room.id, particles::kind::spark, at + dir * r.value() * 20.f, dir * mathf::lerp(5.f, 18.f, r.value()), 1.8f, 0.35f, rw::vec3{1.f, 0.85f, 0.55f});
@@ -65,6 +68,8 @@ namespace explosions {
         creature::flash(state, room, at, rad);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.35f, 1.2f, rw::vec3{1.f, 1.f, 0.95f}, 1.f);
         particles::spawn(state, room.id, particles::kind::flash, at, vec2{0.f, 0.f}, rad * 0.12f, 0.6f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
+        // its LightSource while it burns (FlareBomb.burning: 60 ticks), FlareBomb.color
+        particles::spawn(state, room.id, particles::kind::flare_light, at, vec2{0.f, 0.f}, rad, 60.f / float(state.ticks_per_second), rw::vec3{0.2f, 0.f, 1.f}, 1.f);
         state.play_sound(sound::sound_id::fire_spear_explode, room.id, at, 0.4f, 1.6f);
     }
 }

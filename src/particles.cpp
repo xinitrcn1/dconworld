@@ -59,6 +59,10 @@ namespace particles {
         }
     }
 
+    void explosion_light(sys::game_state& state, dcon::room_id room, vec2 pos, float rad, float alpha, int32_t life_time, vec3 color) {
+        spawn(state, room, kind::explosion_light, pos, vec2{0.f, 0.f}, rad, float(life_time) / float(state.ticks_per_second), color, alpha);
+    }
+
     void spawn(sys::game_state& state, dcon::room_id room, kind k, vec2 pos, vec2 vel, float size, float seconds, vec3 color, float alpha) {
         // only where a camera looks
         if (!state.viewed(room))
@@ -316,6 +320,9 @@ namespace particles {
                 break;
             case kind::flash:
                 p.size *= 1.12f;
+                break;
+            case kind::explosion_light:
+            case kind::flare_light:
                 break;
             case kind::centipede_shell: {
                 // CentipedeShell.Update: tumbling, sinking slowly in water,

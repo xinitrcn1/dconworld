@@ -745,6 +745,19 @@ namespace vulture_graphics {
             g.shadow_mode = 0;
     }
 
+    bool laser_light(sys::game_state const& state, dcon::creature_id c, float alpha, vec2& pos, float& counter) {
+        auto const& w = state.world;
+        bird const b{state, c};
+        if (!b.miros() || w.creature_get_dead(c) || b.p.laser_counter <= 0 || creature::grasped(w, c, 0))
+            return false;
+        auto const room = world::get_room_view(state, creature::room_of(state, c));
+        vec2 const hp = b.pos(head, alpha);
+        bool hit = false;
+        pos = detail::beam_end(room, hp, custom::dir_vec(b.tip(alpha), hp), &hit);
+        counter = float(b.p.laser_counter);
+        return hit;
+    }
+
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
         std::vector<sprites::strip_vertex>& strip) {
         auto const& w = state.world;

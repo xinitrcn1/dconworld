@@ -188,6 +188,12 @@ namespace world {
             bool flat = false;
             bool night_light = false;
         };
+        // PlacedObject.LightFixtureData
+        struct parsed_fixture {
+            rw::vec2 pos{0.f, 0.f};
+            uint8_t type = 0;
+            int16_t seed = 0;
+        };
         struct parsed_thing {
             thing_kind kind = thing_kind::dangle_fruit;
             rw::vec2 pos{0.f, 0.f};
@@ -239,6 +245,10 @@ namespace world {
             std::vector<parsed_warp_target> warp_targets;
             std::vector<parsed_decal> decals;
             std::vector<parsed_light> lights;
+            std::vector<parsed_fixture> fixtures;
+            // the Effects line's DayNight and WaterLights
+            float day_night = 0.f;
+            float water_lights = 0.f;
             std::vector<parsed_thing> things;
 
             room_view view() const noexcept {
@@ -772,6 +782,15 @@ namespace world {
                 dc.light_placed_set_night_light(lid, o.night_light);
                 dc.try_create_light_location(lid, rid);
             }
+            for (auto const& o : r.fixtures) {
+                auto const fid = dc.create_fixture_placed();
+                dc.fixture_placed_set_pos(fid, o.pos);
+                dc.fixture_placed_set_type(fid, o.type);
+                dc.fixture_placed_set_seed(fid, o.seed);
+                dc.try_create_fixture_location(fid, rid);
+            }
+            dc.room_set_day_night(rid, r.day_night);
+            dc.room_set_water_lights(rid, r.water_lights);
             for (auto const& o : r.warp_targets) {
                 auto const tid = dc.create_warp_target();
                 dc.warp_target_set_pos(tid, o.pos);
@@ -1128,6 +1147,34 @@ namespace world {
         // (ResizableObjectData "<handle x>~<handle y>", CustomRotData appends
         // its fields) and the Watcher's warps are kept; slugcat filters
         // aren't applied.
+        // The "Effects:" line of a room settings file (RoomSettings.Load):
+        // ", " separated "<type>-<amount>[,<amounts>]-<panel x>-<panel y>".
+        // Only the amounts of the effects the drawing uses are kept
+        void parse_effects(std::string_view text, parsed_room& r) {
+            constexpr std::string_view key = "Effects: ";
+            size_t at = text.find(key);
+            while (at != std::string_view::npos && at != 0 && text[at - 1] != '\n')
+                at = text.find(key, at + 1);
+            if (at == std::string_view::npos)
+                return;
+            std::string_view line = text.substr(at + key.size());
+            line = line.substr(0, line.find('\n'));
+            for (size_t p = 0; p < line.size();) {
+                size_t q = line.find(", ", p);
+                std::string_view e = line.substr(p, q == std::string_view::npos ? std::string_view::npos : q - p);
+                p = q == std::string_view::npos ? line.size() : q + 2;
+                size_t const dash = e.find('-');
+                if (dash == std::string_view::npos)
+                    continue;
+                std::string_view const name = e.substr(0, dash);
+                float const amount = std::strtof(std::string{e.substr(dash + 1)}.c_str(), nullptr);
+                if (name == "DayNight")
+                    r.day_night = amount;
+                else if (name == "WaterLights")
+                    r.water_lights = amount;
+            }
+        }
+
         void parse_placed_objects(std::string_view text, parsed_room& r) {
             auto& out = r.rot;
             constexpr std::string_view key = "PlacedObjects: ";
@@ -1268,6 +1315,24 @@ namespace world {
                     r.decals.push_back(std::move(dc));
                     continue;
                 }
+                if (parts[0] == "LightFixture") {
+                    // LightFixtureData.FromString: type~panel.x~panel.y~randomSeed
+                    auto const d = split(parts[3], "~");
+                    if (d.size() < 4)
+                        continue;
+                    constexpr std::string_view types[] = {"RedLight", "RedSubmersible", "ZapCoilLight", "HolyFire", "SlimeMoldLight", "DeepProcessing", "GlowWeedLight"};
+                    parsed_fixture fx;
+                    fx.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                    fx.type = 255;
+                    for (uint8_t k = 0; k < uint8_t(sizeof(types) / sizeof(types[0])); ++k)
+                        if (d[0] == types[k])
+                            fx.type = k;
+                    if (fx.type == 255)
+                        continue; // (LightRod: SSLightRod, not ported)
+                    fx.seed = int16_t(std::lround(num(d[3])));
+                    r.fixtures.push_back(fx);
+                    continue;
+                }
                 if (parts[0] == "LightSource") {
                     // LightSourceData.FromString: strength~colorType~handle.x~handle.y~
                     // panel.x~panel.y~fadeWithSun~flat[~blinkType~blinkRate[~nightLight]]
@@ -1348,6 +1413,7 @@ namespace world {
             auto const t = parse_template(s, of->to_string_view(), r.err);
             parse_triggers(of->to_string_view(), r.triggers);
             parse_placed_objects(of->to_string_view(), r);
+            parse_effects(of->to_string_view(), r);
             auto const lname = text::to_lowercase_native(t.template_);
             if (lname == "none") {
                 // explicitly no template

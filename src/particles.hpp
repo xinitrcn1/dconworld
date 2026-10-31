@@ -22,9 +22,14 @@ namespace particles {
         bubble, // rising under water
         flash,  // a quick ring where something got hit
         centipede_shell, // a shell knocked off a centipede (CentipedeShell)
+        explosion_light, // Explosion.ExplosionLight: size the radius, alpha, colour, its life its lifeTime
+        flare_light,     // a FlareBomb burning (its LightSource while `burning` runs 0..1): colour
     };
 
     void spawn(sys::game_state& state, dcon::room_id room, kind k, rw::vec2 pos, rw::vec2 vel, float size, float seconds, rw::vec3 color, float alpha = 1.f);
+    // Explosion.ExplosionLight(pos, rad, alpha, lifeTime, color): drawn as
+    // vanilla's three sprites (render.cpp's lights)
+    void explosion_light(sys::game_state& state, dcon::room_id room, rw::vec2 pos, float rad, float alpha, int32_t life_time, rw::vec3 color);
     // droplets thrown up by something hitting the water at `pos`
     void splash(sys::game_state& state, dcon::room_id room, rw::vec2 pos, float strength);
     void bubbles(sys::game_state& state, dcon::room_id room, rw::vec2 pos, int count, float spread);

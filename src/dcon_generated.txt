@@ -172,6 +172,9 @@ object{
 	property{ name{danger_type} type{world::danger_type} }
 	property{ name{grime} type{float} }
 	property{ name{clouds} type{float} }
+	// the room file's Effects: DayNight and WaterLights amounts (0: none)
+	property{ name{day_night} type{float} }
+	property{ name{water_lights} type{float} }
 	property{ name{ceiling_drips} type{float} }
 	property{ name{wave_speed} type{float} }
 	property{ name{wave_length} type{float} }
@@ -514,6 +517,27 @@ relationship{
 	link{ object{light_placed} name{light} type{unique} }
 	link{ object{room} name{room} type{many} index_storage{array} }
 	primary_key{light}
+}
+
+// Placed LightFixtures (PlacedObject.LightFixtureData): only drawn, their
+// flicker and wander worked out from the tick (render.cpp). type: 0
+// RedLight, 1 RedSubmersible, 2 ZapCoilLight, 3 HolyFire, 4 SlimeMoldLight,
+// 5 DeepProcessing, 6 GlowWeedLight; seed: LightFixtureData.randomSeed
+object{
+	name{fixture_placed}
+	storage_type{contiguous}
+	size{16384}
+	tag{scenario}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{type} type{uint8_t} }
+	property{ name{seed} type{int16_t} }
+}
+relationship{
+	name{fixture_location}
+	tag{scenario}
+	link{ object{fixture_placed} name{fixture} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{fixture}
 }
 
 // The other placed objects the simulation uses: food, weapons and pearls

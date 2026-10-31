@@ -28,4 +28,7 @@ namespace vulture_graphics {
     // vertices go to `strip`
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
         std::vector<sprites::strip_vertex>& strip);
+    // Vulture.LaserLight (the miros vulture's): where the beam meets the
+    // terrain and the laser's counter (its radius); false without one
+    bool laser_light(sys::game_state const& state, dcon::creature_id c, float alpha, rw::vec2& pos, float& counter);
 }
