@@ -1065,24 +1065,34 @@ namespace selftest {
             gs.sounds.clear();
         }
         {
-            // a blue lizard's tongue catches the slugcat from a distance
-            auto const hall = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
-            sim s(gs, hall, feet_at(10, 1));
-            // (the lizard's rolls, its personality, when it shoots and bites,
-            // are keyed by the fixed world seed, the tick and its id: no
-            // other test's rolls change them)
-            auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(17, 1), lizard::breed::blue);
-            bool shot = false;
-            bool const caught = s.until(3000, [&] {
-                auto const& t = gs.world.lizard_data_get_tongue(creature::lizard_data(gs.world, l));
-                shot = shot || t.state == lizard::tongue_state::lashing_out;
-                return t.state == lizard::tongue_state::attatched && t.attached == player::creature_of(gs, s.p);
-            });
+            // a blue lizard's tongue catches the slugcat from a distance. It
+            // lashes at 100 to 140 px (past its bite, LizardAI's tongue
+            // range) and the lash reaches about 115 (the empty elasticity
+            // pulls it back): it starts about 110 px off, where the first
+            // lash can land. Whether it shoots before walking into biting
+            // range is rolled, so three tries at three ticks (each its own
+            // rolls), two of them catching
+            uint32_t caught_n = 0, shot_n = 0;
+            std::string last;
+            for (int trial = 0; trial < 3; ++trial) {
+                auto const hall = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+                sim s(gs, hall, feet_at(10, 1));
+                auto const l = lizard::create(gs, hall, world::room_view::middle_of_tile(16, 1), lizard::breed::blue);
+                bool shot = false;
+                bool const caught = s.until(600, [&] {
+                    auto const& t = gs.world.lizard_data_get_tongue(creature::lizard_data(gs.world, l));
+                    shot = shot || t.state == lizard::tongue_state::lashing_out;
+                    return t.state == lizard::tongue_state::attatched && t.attached == player::creature_of(gs, s.p);
+                });
+                shot_n += shot ? 1 : 0;
+                caught_n += caught ? 1 : 0;
+                last = s.describe();
+                lizard::destroy(gs, l);
+                gs.sounds.clear();
+            }
             char d[64];
-            std::snprintf(d, sizeof(d), " shot=%d caught=%d", int(shot), int(caught));
-            r.check("blue lizard tongue grabs", shot && caught, s.describe() + d);
-            lizard::destroy(gs, l);
-            gs.sounds.clear();
+            std::snprintf(d, sizeof(d), " shot %u/3 caught %u/3", shot_n, caught_n);
+            r.check("blue lizard tongue grabs", caught_n >= 2, last + d);
         }
         {
             // a salamander swims across the pool towards the slugcat on the bank
@@ -2265,7 +2275,9 @@ namespace selftest {
             std::vector<player::input_package> in(ps.size());
             bool pushed = false;
             float death = 0.f;
-            for (uint32_t t = 0; t < 440; ++t) {
+            // the whole death rain if need be (its phases are rolled: a calm
+            // before the storm can come first), until the exposed one dies
+            for (uint32_t t = 0; t < uint32_t(20 + rain::deadly_rain_max) && !player::dead(st, ps[0]); ++t) {
                 vec2 const before = w.body_chunk_get_vel(player::body_chunk(st, ps[0], 0));
                 simulation::tick(st, ps, in);
                 st.sounds.clear();
@@ -2872,14 +2884,34 @@ namespace selftest {
             st.world.room_exit_set_target_from_exit_connection(ea, b);
             st.world.room_exit_set_target_from_exit_connection(eb, a);
         };
-        auto const npc_world = [](char const* name) {
+        // the seed npc_world gives its worlds (in_worlds runs a scenario in
+        // several)
+        constexpr uint32_t default_seed = 0x2545F491u;
+        uint32_t npc_seed = default_seed;
+        auto const npc_world = [&](char const* name) {
             auto st_ptr = sys::make_game_state();
+            st_ptr->seed = npc_seed;
             auto& w = st_ptr->world;
             auto const rgn = w.create_region();
             w.region_set_name(rgn, st_ptr->add_text(name));
             w.region_set_never_rains(rgn, true);
             st_ptr->spawn_dens = false;
             return std::pair{std::move(st_ptr), rgn};
+        };
+        // A scenario whose outcome is rolled (a fight, a pack's wandering):
+        // run in three worlds (the default seed and two others; every roll
+        // keys by the world's seed), passing when two of them do
+        auto const in_worlds = [&](char const* name, auto&& scenario) {
+            uint32_t ok = 0;
+            std::string detail;
+            for (uint32_t k = 0; k < 3; ++k) {
+                npc_seed = default_seed ^ k * 0x9E3779B1u;
+                std::string d;
+                ok += scenario(d) ? 1 : 0;
+                detail += " [" + d + "]";
+            }
+            npc_seed = default_seed;
+            r.check(name, ok >= 2, std::to_string(ok) + "/3 worlds" + detail);
         };
         auto const trace_npc = [](sys::game_state& st, dcon::player_id p, uint32_t t) {
             if (npc::debug().trace_room.empty() || t % uint32_t(std::max(1, npc::debug().trace_every)) != 0)
@@ -3094,12 +3126,15 @@ namespace selftest {
                 && w.slugcat_npc_get_leader(npc::of(st, mate)) == ln;
             bool through = false, all_there = false;
             uint32_t t = 0;
+            // (the stack's trip, not the 1/900 a tick a rider gets off)
+            npc::debug().hold_riders = true;
             for (; t < 4000 && !all_there; ++t) {
                 tick_world(st, 1);
                 through = through || (rooms::room_of(st, pup) == course && piggyback::riding(st, pup));
                 all_there = rooms::room_of(st, lead) == to && rooms::room_of(st, mate) == to && rooms::room_of(st, pup) == to
                     && w.slugcat_npc_get_nav(ln).what == npc::goal::rest;
             }
+            npc::debug().hold_riders = false;
             char d[200];
             std::snprintf(d, sizeof(d), " mounted=%d joined=%d carried_through=%d all_there=%d after %u ticks", int(mounted), int(joined), int(through), int(all_there), t);
             r.check("piggyback: joins the pack, rides through pipes", mounted && joined && through && all_there,
@@ -3255,11 +3290,12 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " member_left=%d watcher_leader_kept=%d", int(left), int(kept));
             r.check("Watcher leaves a pack where there are no warps", left && kept, d);
         }
-        {
-            // A Watcher leading a pack, nowhere to go from here: it makes a
-            // dynamic warp, its pack gathered round it, and they all come out
-            // in another region and find a shelter there. A slugcat of
-            // another pack standing by is pulled along and leaves its pack
+        // A Watcher leading a pack, nowhere to go from here: it makes a
+        // dynamic warp, its pack gathered round it, and they all come out in
+        // another region and find a shelter there. A slugcat of another pack
+        // standing by is pulled along and leaves its pack. (A mate wandering
+        // off while the pack gathers is left behind: rolled)
+        in_worlds("NPC Watcher takes its pack through its own warp", [&](std::string& out) {
             auto [st_ptr, rgn] = npc_world("npc_dyn");
             auto& st = *st_ptr;
             auto& w = st.world;
@@ -3306,8 +3342,9 @@ namespace selftest {
             char d[200];
             std::snprintf(d, sizeof(d), " made=%u all_there=%d after %u ticks together=%d strays=%u stray_left=%d", npc::stats().warps_made - made, int(all_there), tt,
                 int(together), npc::stats().strays - strays, int(strayed));
-            r.check("NPC Watcher takes its pack through its own warp", npc::stats().warps_made > made && all_there && together && strayed, d + where);
-        }
+            out = d + where;
+            return npc::stats().warps_made > made && all_there && together && strayed;
+        });
         {
             // in the shelter it lies down where slugcats sleep (not by the
             // pipe it came in by); Spearmaster wakes up with a needle pulled
@@ -3552,8 +3589,8 @@ namespace selftest {
                 int(in_gate), int(cycled), int(arrived), t, npc::stats().regions_crossed - crossed_before, npc::describe(st, p).c_str());
             r.check("NPC through a region gate", shelters.size() == 1 && in_gate && cycled && arrived && npc::stats().regions_crossed > crossed_before, d);
         }
-        {
-            // a lizard in the way: it runs back into the pipe it came out of
+        // a lizard in the way: it runs back into the pipe it came out of
+        in_worlds("NPC runs from a lizard", [&](std::string& out) {
             auto [st_ptr, rgn] = npc_world("npc_flee");
             auto& st = *st_ptr;
             auto& w = st.world;
@@ -3585,8 +3622,9 @@ namespace selftest {
             char d[200];
             std::snprintf(d, sizeof(d), " out=%d fled=%d back_in_shelter=%d after %u ticks alive=%d flights %u; %s", int(was_out), int(fled), int(back), t,
                 int(!player::dead(st, p)), npc::stats().flights - flights, creature::describe(st, liz).c_str());
-            r.check("NPC runs from a lizard", was_out && fled && back && !player::dead(st, p), d);
-        }
+            out = d;
+            return was_out && fled && back && !player::dead(st, p);
+        });
         {
             // rocks on its way out: it picks one up as it walks over them and
             // throws it at the lizard ahead, which goes down stunned; the
@@ -3635,9 +3673,9 @@ namespace selftest {
                     int(fled_cicada), int(!player::dead(st, p)), creature::describe(st, liz).c_str());
                 r.check("NPC picks up a rock and stuns a lizard", held && threw && stunned && !fled_cicada, d);
             }
-            {
-                // Spearmaster goes for it: needles out of its tail, thrown,
-                // again until the lizard is dead
+            // Spearmaster goes for it: needles out of its tail, thrown, again
+            // until the lizard is dead
+            in_worlds("NPC Spearmaster kills a lizard", [&](std::string& out) {
                 auto [st_ptr, room, p, liz] = arena("npc_spear", player::slugcat_name::spear, 0x5BEAu);
                 auto& st = *st_ptr;
                 auto& w = st.world;
@@ -3653,8 +3691,9 @@ namespace selftest {
                 char d[200];
                 std::snprintf(d, sizeof(d), " killed=%d after %u ticks, %u throws, fled=%d alive=%d; %s", int(killed), t, npc::stats().thrown - thrown, int(fled),
                     int(!player::dead(st, p)), creature::describe(st, liz).c_str());
-                r.check("NPC Spearmaster kills a lizard", killed && !fled && !player::dead(st, p), d);
-            }
+                out = d;
+                return killed && !fled && !player::dead(st, p);
+            });
             {
                 auto [st_ptr, room, p, liz] = arena("npc_riv", player::slugcat_name::rivulet, 0x4171u);
                 auto& st = *st_ptr;

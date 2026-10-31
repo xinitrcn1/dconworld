@@ -143,6 +143,9 @@ namespace npc {
         // wall and off it, 3 off, back to the wall behind and off it, 4 from
         // the tip into a wall and back, 5 off the side into a wall and back)
         std::string experiment;
+        // (selftest) riders don't get off on their own: a scenario about
+        // a stack going somewhere isn't left to the dismount rolls
+        bool hold_riders = false;
     };
     debug_options& debug() noexcept;
     std::string debug_routes(sys::game_state& state, dcon::player_id p);

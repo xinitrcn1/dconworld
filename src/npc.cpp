@@ -2667,7 +2667,7 @@ namespace npc {
         constexpr float pup_off = 1.f / 3000.f, off = 1.f / 900.f;
         constexpr float piggy_reach = 60.f;
 
-        void piggybacks(sys::game_state& state) {
+        void piggybacks(sys::game_state& state, std::vector<uint8_t> const& warped_region) {
             auto& w = state.world;
             std::vector<dcon::slugcat_npc_id> all;
             w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) { all.push_back(n); });
@@ -2686,7 +2686,7 @@ namespace npc {
                 if (piggyback::riding(state, p)) {
                     // (not in a pipe, nor with a threat about: Spearmaster fights from up there)
                     bool const threat = nav.threat && nav.threat_timer < forget_threat;
-                    if (!threat && rng.value() < (pup ? pup_off : off) && !player::in_shortcut(state, piggyback::bottom(state, p))) {
+                    if (!threat && !debug().hold_riders && rng.value() < (pup ? pup_off : off) && !player::in_shortcut(state, piggyback::bottom(state, p))) {
                         piggyback::drop(state, piggyback::carrier(state, p));
                         nav.goal_tile = ivec2{-1, -1};
                         migrate::cancel(state, c);
@@ -2696,6 +2696,11 @@ namespace npc {
                 }
                 if (nav.what != goal::travel)
                     continue;
+                // (a Watcher where there are no warps goes its own way: on
+                // another's back it would be in that one's pack)
+                if (warps::is_watcher(state, p))
+                    if (auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p)); g && !warped_region[size_t(g.index())])
+                        continue;
                 float const r = rng.value();
                 bool const climb = r < (pup ? pup_climb : ask);
                 bool const take = !pup && !climb && r < ask + take_pup;
@@ -2787,7 +2792,16 @@ namespace npc {
                 ++crowd[size_t(r.index())];
         });
         // who rides on whom, and the riders' packs
-        piggybacks(state);
+        // the regions with a warp open (none placed, no dynamic one open: a
+        // Watcher there makes its own way)
+        std::vector<uint8_t> warped_region(w.region_size(), 0);
+        w.for_each_warp_point([&](dcon::warp_point_id wp) {
+            auto const r = w.warp_point_get_room_from_warp_point_location(wp);
+            if (r && w.warp_point_get_state(wp) != world::warp_state::closed)
+                if (auto const g = w.room_get_region_from_region_membership(r))
+                    warped_region[size_t(g.index())] = 1;
+        });
+        piggybacks(state, warped_region);
         // A room with more than 5 slugcats in it is crowded: every 400 ticks
         // each NPC of a pack there (not resting) may leave it (5%, 2.5% more
         // for each slugcat past 6) and make for another shelter, alone
@@ -2842,13 +2856,6 @@ namespace npc {
         }
         // a Watcher in a pack another leads, in a region without warps (none
         // placed, no dynamic one open): on its own (it makes its own way)
-        std::vector<uint8_t> warped_region(w.region_size(), 0);
-        w.for_each_warp_point([&](dcon::warp_point_id wp) {
-            auto const r = w.warp_point_get_room_from_warp_point_location(wp);
-            if (r && w.warp_point_get_state(wp) != world::warp_state::closed)
-                if (auto const g = w.room_get_region_from_region_membership(r))
-                    warped_region[size_t(g.index())] = 1;
-        });
         w.for_each_slugcat_npc([&](dcon::slugcat_npc_id n) {
             auto const l = w.slugcat_npc_get_leader(n);
             auto const p = w.slugcat_npc_get_player(n);
@@ -2857,6 +2864,10 @@ namespace npc {
             auto const g = w.room_get_region_from_region_membership(rooms::room_of(state, p));
             if (!g || warped_region[size_t(g.index())])
                 return;
+            // (off the back it rides, too: a rider is in its carrier's pack,
+            // which would take it back the next tick)
+            if (piggyback::riding(state, p) && !player::in_shortcut(state, piggyback::bottom(state, p)))
+                piggyback::drop(state, piggyback::carrier(state, p));
             w.slugcat_npc_set_leader(n, dcon::slugcat_npc_id{});
             w.slugcat_npc_set_target(n, dcon::room_id{});
             migrate::cancel(state, player::creature_of(state, p));
