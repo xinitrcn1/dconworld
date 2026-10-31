@@ -83,6 +83,28 @@ namespace render {
             uint32_t texture = 0; // 0: missing
         };
         std::unordered_map<std::string, decal_texture> decal_textures;
+        // terrain palettes (terrainpalettes/<name>.png, its _rain variant
+        // stacked under it), loaded on first use
+        struct terrain_palette {
+            uint32_t texture = 0; // 0: missing
+            int rows = 0;
+            // the bottom row (Unity's GetPixels order): glitter, light tint,
+            // dark dust, light dust, sandstorm colour; and the rain variant's
+            rw::vec3 misc[5] = {};
+            rw::vec3 misc_rain[5] = {};
+        };
+        std::unordered_map<std::string, terrain_palette> terrain_palettes;
+        // a room's Sandstorm as it is drawn: the wind (Sandstorm.DoSandstorm,
+        // cosmetic, stepped by the ticks drawn) and the surface mask
+        struct sandstorm_view {
+            rw::vec2 scroll{0.f, 0.f}, last_scroll{0.f, 0.f};
+            rw::vec2 vel{50.f, 0.f}, target{50.f, 0.f};
+            int32_t switch_counter = 0;
+            uint32_t tick = 0;
+            uint32_t surface_mask = 0; // gpu texture, the room's tiles
+            int mask_w = 0, mask_h = 0;
+        };
+        std::unordered_map<uint32_t, sandstorm_view> sandstorms;
         std::vector<vertex> batch;
         // the vertex pulling draws (gpu::pipeline::rope and circle) of the
         // pass being built, each to go in after the batch's first `at`

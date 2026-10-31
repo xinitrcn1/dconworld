@@ -64,6 +64,7 @@ set(SHADERS
     room.vert room.frag
     decal.vert decal.frag
     light.vert light.frag
+    sand.vert sand.frag sandstorm.frag spores.frag
     warp.vert warp_tear.frag warp_screen.frag water.frag
     rope.vert rope.frag
     circle.vert circle.frag

@@ -176,7 +176,7 @@ namespace render {
             glm::vec3 deep;
             float zoom;
             glm::vec3 shine;
-            float pad;
+            float lit;
             glm::vec2 screen;
         };
         static_assert(offsetof(water_uniforms, time) == 76 && offsetof(water_uniforms, screen) == 112);
@@ -190,6 +190,64 @@ namespace render {
             glm::mat4 proj;
             uint32_t first; // the draw's first circle in the storage buffer
         };
+        struct sand_uniforms {
+            glm::mat4 proj;
+            glm::vec2 screen;
+            glm::vec2 view_pos;
+            glm::vec2 cam_origin;
+            glm::vec2 light_dir;
+            float zoom;
+            float night_time;
+            float rain;
+            float light;
+            float clouds_speed;
+            int32_t index;
+            int32_t camera_index;
+            int32_t later_count;
+            float terrain_light;
+            float terrain_grain;
+            float edge_radius;
+            float sky_fade;
+            int32_t light_count;
+            int32_t terrain_rows;
+            float water_level;
+            float pad;
+            glm::vec4 later[max_later_cameras / 2];
+            glm::vec4 light_color[16];
+            glm::vec4 light_params[16];
+        };
+        static_assert(offsetof(sand_uniforms, later) == 160 && sizeof(sand_uniforms) == 160 + 16 * 16 * 3 && sizeof(sand_uniforms) <= 1024);
+        struct sandstorm_uniforms {
+            glm::mat4 proj;
+            glm::vec2 screen;
+            glm::vec2 view_pos;
+            glm::vec2 cam_origin;
+            glm::vec2 scroll;
+            glm::vec4 dust;
+            glm::vec2 mask_size;
+            float zoom;
+            float night_time;
+            float rain;
+            float intensity;
+            float surface;
+            int32_t index;
+            int32_t camera_index;
+            int32_t later_count;
+            float pad[2];
+            glm::vec4 later[max_later_cameras / 2];
+        };
+        static_assert(offsetof(sandstorm_uniforms, dust) == 96 && offsetof(sandstorm_uniforms, mask_size) == 112 && offsetof(sandstorm_uniforms, later) == 160);
+        struct spores_uniforms {
+            glm::mat4 proj;
+            glm::vec4 light_dust;
+            glm::vec4 dark_dust;
+            float rain;
+            int32_t cam_count;
+            int32_t sky_lit;
+            float pad;
+            glm::vec4 cams[max_later_cameras / 2];
+        };
+        static_assert(offsetof(spores_uniforms, cams) == 112);
         // quads per rope segment along a Bezier (a straight one is one quad)
         constexpr uint32_t rope_steps = 4;
 
@@ -3416,6 +3474,319 @@ namespace render {
             }
         }
 
+        // A terrain palette (terrainpalettes/<name>.png, 32 wide; the rows
+        // from the bottom: the misc colours, the ambient ones by depth, the
+        // sunlit ones by depth) with its _rain variant (or itself) stacked
+        // under it in one texture
+        state::terrain_palette const& terrain_palette(state& r, sys::game_state const& s, std::string const& name) {
+            if (auto it = r.terrain_palettes.find(name); it != r.terrain_palettes.end())
+                return it->second;
+            state::terrain_palette tp;
+            auto const dir = s.fs.get_root().get_single_subdir("terrainpalettes");
+            image im, rain;
+            if (load_image(s.fs, dir.get_single_file(name + ".png"), 3, im) && im.w == 32 && im.h >= 3) {
+                bool const has_rain = load_image(s.fs, dir.get_single_file(name + "_rain.png"), 3, rain) && rain.w == im.w && rain.h == im.h;
+                size_t const half = size_t(im.w) * size_t(im.h) * 3;
+                std::vector<uint8_t> px(half * 2);
+                std::memcpy(px.data(), im.px, half);
+                std::memcpy(px.data() + half, has_rain ? rain.px : im.px, half);
+                tp.rows = im.h;
+                tp.texture = gpu::create_texture(*r.gpu, im.w, im.h * 2, 0, gpu::sampler::linear_clamp);
+                gpu::upload(*r.gpu, tp.texture, 0, px.data(), 3);
+                // (Unity's GetPixels: the bottom row first)
+                for (int k = 0; k < 5; ++k) {
+                    uint8_t const* a = px.data() + (size_t(im.h - 1) * 32 + size_t(k)) * 3;
+                    uint8_t const* b = a + half;
+                    tp.misc[k] = rw::vec3{float(a[0]), float(a[1]), float(a[2])} / 255.f;
+                    tp.misc_rain[k] = rw::vec3{float(b[0]), float(b[1]), float(b[2])} / 255.f;
+                }
+            } else {
+                reports::add_log("missing terrain palette \"" + name + "\"");
+            }
+            return r.terrain_palettes.emplace(name, tp).first->second;
+        }
+        state::terrain_palette const* room_terrain_palette(state& r, sys::game_state const& s, dcon::room_id room) {
+            auto const key = s.world.room_get_terrain_palette(room);
+            std::string const name{s.to_string_view(key)};
+            if (name.empty())
+                return nullptr;
+            auto const& tp = terrain_palette(r, s, name);
+            return tp.texture != 0 ? &tp : nullptr;
+        }
+
+        // The Watcher's sand (rwcpp's 2D dunes) with the sand shader: the
+        // front face from the crest down and the top going back, each
+        // vertex its surface normal (v_color.rg), clr.r (the pixels down the
+        // front, 0..1 across the top) and depth (uv), drawn once per camera
+        // image under it, after the sprites (they stay in front of it)
+        void draw_sand(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, light_list const& lights) {
+            auto const* sand = ::terrain::sand_if_built(s, room.id);
+            auto const& cams = *f.cams;
+            if (sand == nullptr || cams.empty())
+                return;
+            auto const& w = s.world;
+            float const view_w = f.screen.x / f.zoom, view_h = f.screen.y / f.zoom;
+            float const x0 = mathf::max(f.view_pos.x - 20.f, sand->left), x1 = mathf::min(f.view_pos.x + view_w + 20.f, sand->right);
+            float const bottom = f.view_pos.y - 40.f;
+            if (x1 <= x0)
+                return;
+            constexpr float step = 4.f;
+            constexpr float front_depth = 6.f / 30.f;
+            auto const enc = [](float v) { return uint8_t(mathf::clamp01(v * 0.5f + 0.5f) * 255.f + 0.5f); };
+            r.batch.clear();
+            float top = bottom;
+            for (float x = x0; x < x1; x += step) {
+                float const xb = mathf::min(x + step, x1);
+                float const ha = ::terrain::sand_height(*sand, x), hb = ::terrain::sand_height(*sand, xb);
+                auto const normal_at = [&](float xx) {
+                    float const slope = (::terrain::sand_height(*sand, xx + 4.f) - ::terrain::sand_height(*sand, xx - 4.f)) / 8.f;
+                    vec2 const n = rw::normalized(vec2{-slope, 1.f});
+                    return rgba(enc(n.x), enc(n.y), 128, 255);
+                };
+                uint32_t const na = normal_at(x), nb = normal_at(xb);
+                // the front face
+                vertex const fa{x, ha, na, 0.f, front_depth}, fb{xb, hb, nb, 0.f, front_depth};
+                vertex const ba{x, bottom, na, -(ha - bottom), front_depth}, bb{xb, bottom, nb, -(hb - bottom), front_depth};
+                r.batch.insert(r.batch.end(), {fa, fb, bb, fa, bb, ba});
+                // the top going back
+                float const da = mathf::min(::terrain::sand_back(*sand, x), 40.f), db = mathf::min(::terrain::sand_back(*sand, xb), 40.f);
+                float const ta = ha + da * 0.5f + 4.f, tb = hb + db * 0.5f + 4.f;
+                vertex const ka{x, ta, na, 1.f, front_depth + 0.4f * da / 40.f}, kb{xb, tb, nb, 1.f, front_depth + 0.4f * db / 40.f};
+                r.batch.insert(r.batch.end(), {fa, fb, kb, fa, kb, ka});
+                top = mathf::max(top, mathf::max(ta, tb));
+            }
+            upload(r);
+            sand_uniforms u{};
+            u.proj = f.proj;
+            u.screen = f.screen;
+            u.view_pos = f.view_pos;
+            u.light_dir = f.light_dir;
+            u.zoom = f.zoom;
+            u.night_time = f.night_time;
+            u.rain = f.rain;
+            u.light = f.light;
+            u.clouds_speed = 1.f;
+            u.index = f.palette;
+            u.terrain_light = w.room_get_terrain_light(room.id);
+            u.terrain_grain = w.room_get_terrain_grain(room.id);
+            u.edge_radius = w.room_get_terrain_edge_radius(room.id);
+            u.sky_fade = w.room_get_terrain_sky_fade(room.id);
+            u.water_level = room.water ? room.float_water_level : -1.0e9f;
+            auto const* tp = room_terrain_palette(r, s, room.id);
+            u.terrain_rows = tp ? tp->rows : 0;
+            // TerrainCurve.UpdateLightInfo: the non-flat lights near the sand,
+            // the closest to it first (Environment's colour taken as white)
+            std::vector<light_sprite const*> near;
+            for (auto const& l : lights.sprites) {
+                if (l.kind != 0 || l.water || l.env_pos.x < x0 - l.rad || l.env_pos.x > x1 + l.rad)
+                    continue;
+                if (l.env_pos.y - ::terrain::sand_height(*sand, l.env_pos.x) < l.rad * 2.f)
+                    near.push_back(&l);
+            }
+            std::sort(near.begin(), near.end(), [&](light_sprite const* a, light_sprite const* b) {
+                return std::fabs(a->env_pos.y - ::terrain::sand_height(*sand, a->env_pos.x)) < std::fabs(b->env_pos.y - ::terrain::sand_height(*sand, b->env_pos.x));
+            });
+            for (auto const* l : near) {
+                if (u.light_count >= 16)
+                    break;
+                rw::vec3 c = l->color_mode == 0 ? rw::vec3{1.f, 1.f, 1.f} : l->color;
+                float const m = mathf::max(c.x, mathf::max(c.y, c.z));
+                if (m <= 0.f)
+                    continue;
+                if (l->color_mode != 2)
+                    c /= m;
+                u.light_color[u.light_count] = glm::vec4{c.x, c.y, c.z, l->alpha};
+                u.light_params[u.light_count] = glm::vec4{l->env_pos.x, l->env_pos.y, l->rad, 0.f};
+                ++u.light_count;
+            }
+            vec2 const lo{x0, bottom}, hi{x1, mathf::min(top, f.view_pos.y + view_h + 40.f)};
+            for (size_t c = 0; c < cams.size(); ++c) {
+                if (!camera_touches(cams[c], lo, hi))
+                    continue;
+                u.camera_index = int32_t(c);
+                u.cam_origin = cams[c];
+                u.later_count = later_cameras(cams, c, u.later);
+                gpu::draw(*r.gpu, gpu::pipeline::sand, &u, sizeof(u), {r.room_texture, r.palette_texarray, tp ? tp->texture : 0u, f.mask}, 0, r.batch.size());
+            }
+        }
+
+        // SandPuffSpawner.SandPuff: the Spores shader in the terrain palette's
+        // light or dark dust colour (the palette's fog without one)
+        void draw_sand_puffs(state& r, sys::game_state const& s, world::room_view const& room, glm::mat4 const& proj, level_frame const& f, bool textured) {
+            r.batch.clear();
+            for (auto const& pt : s.particles) {
+                if (pt.room != room.id || pt.kind != uint8_t(particles::kind::sand_puff))
+                    continue;
+                float const life = mathf::clamp01(1.f - pt.life);
+                float const half = 8.f * 10.f * std::pow(1.f - life, 0.35f) * mathf::lerp(0.5f, 1.5f, pt.size);
+                uint32_t const col = to_rgba(rw::vec3{1.f, 1.f, 1.f}, life);
+                vec2 const lo = pt.pos - vec2{half, half}, hi = pt.pos + vec2{half, half};
+                vertex const bl{lo.x, lo.y, col, 0.f, 0.f}, br{hi.x, lo.y, col, 1.f, 0.f}, tr{hi.x, hi.y, col, 1.f, 1.f}, tl{lo.x, hi.y, col, 0.f, 1.f};
+                r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+            }
+            if (r.batch.empty())
+                return;
+            upload(r);
+            spores_uniforms u{};
+            u.proj = proj;
+            u.rain = f.rain;
+            rw::vec3 light = palette_pixel(r, s, room.id, 1, 7, f.night_time), dark = light;
+            if (auto const* tp = room_terrain_palette(r, s, room.id)) {
+                light = glm::mix(tp->misc[3], tp->misc_rain[3], f.night_time);
+                dark = glm::mix(tp->misc[2], tp->misc_rain[2], f.night_time);
+            }
+            u.light_dust = glm::vec4{light.x, light.y, light.z, 1.f};
+            u.dark_dust = glm::vec4{dark.x, dark.y, dark.z, 1.f};
+            u.sky_lit = palette_darkness(r, s, room.id) < 0.5f ? 1 : 0;
+            if (textured && f.cams != nullptr) {
+                auto const& cams = *f.cams;
+                u.cam_count = int32_t(std::min(cams.size(), max_later_cameras));
+                for (int32_t i = 0; i < u.cam_count; ++i) {
+                    glm::vec4& v = u.cams[i / 2];
+                    if (i % 2 == 0) {
+                        v.x = cams[size_t(i)].x;
+                        v.y = cams[size_t(i)].y;
+                    } else {
+                        v.z = cams[size_t(i)].x;
+                        v.w = cams[size_t(i)].y;
+                    }
+                }
+            }
+            gpu::draw(*r.gpu, gpu::pipeline::spores, &u, sizeof(u), {textured ? r.room_texture : 0u}, 0, r.batch.size());
+        }
+
+        // Sandstorm.GenerateSurfaceMask: how open each tile is to the wind
+        // blowing from the left, carried along the open tiles and blurred
+        void make_surface_mask(state& r, world::room_view const& room, state::sandstorm_view& sv) {
+            int const tw = room.width, th = room.height;
+            if (tw <= 0 || th <= 0)
+                return;
+            auto const solid = [&](int x, int y) {
+                auto const t = room.get_tile(x, y).t;
+                return t == world::terrain::solid || t == world::terrain::slope;
+            };
+            std::vector<float> a(size_t(tw) * size_t(th), 0.f), b(a.size(), 0.f);
+            for (int y = 0; y < th; ++y)
+                a[size_t(y) * size_t(tw)] = solid(0, y) ? 0.f : 1.f;
+            constexpr float kernel[3] = {0.15f, 1.f, 0.15f};
+            for (int x = 1; x < tw; ++x)
+                for (int y = 0; y < th; ++y) {
+                    float v = 0.f;
+                    if (!solid(x, y))
+                        for (int k = 0; k < 3; ++k)
+                            v += kernel[k] * a[size_t(std::clamp(y + k - 1, 0, th - 1)) * size_t(tw) + size_t(x - 1)];
+                    a[size_t(y) * size_t(tw) + size_t(x)] = mathf::min(v, 1.f);
+                }
+            for (int pass = 0; pass < 2; ++pass) {
+                for (int y = 0; y < th; ++y)
+                    for (int x = 0; x < tw; ++x) {
+                        float v = 0.f;
+                        for (int dy = -1; dy <= 1; ++dy)
+                            for (int dx = -1; dx <= 1; ++dx)
+                                v += a[size_t(std::clamp(y + dy, 0, th - 1)) * size_t(tw) + size_t(std::clamp(x + dx, 0, tw - 1))];
+                        b[size_t(y) * size_t(tw) + size_t(x)] = v / 9.f;
+                    }
+                std::swap(a, b);
+            }
+            // (the tile row y is the texture's row y: v = y / height)
+            std::vector<uint8_t> px(a.size() * 4);
+            for (size_t i = 0; i < a.size(); ++i)
+                px[i * 4 + 0] = px[i * 4 + 1] = px[i * 4 + 2] = px[i * 4 + 3] = uint8_t(mathf::clamp01(a[i]) * 255.f);
+            sv.surface_mask = gpu::create_texture(*r.gpu, tw, th, 0, gpu::sampler::linear_clamp);
+            gpu::upload(*r.gpu, sv.surface_mask, 0, px.data(), 4);
+            sv.mask_w = tw;
+            sv.mask_h = th;
+        }
+
+        // The Watcher's Sandstorm (DangerType Sandstorm or the SurfaceSandstorm
+        // effect): its intensities from the region's cycle (the storm comes
+        // with the cycle's end; F6's storm brings it too), the wind stepped
+        // like DoSandstorm, drawn with the sandstorm shader over the view
+        void draw_sandstorm(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, float alpha) {
+            auto const& w = s.world;
+            auto const& cams = *f.cams;
+            float const surface_amount = w.room_get_surface_sandstorm(room.id);
+            if (cams.empty() || (w.room_get_danger_type(room.id) != world::danger_type::sandstorm && surface_amount <= 0.f))
+                return;
+            float global = 0.f, surface = surface_amount;
+            if (!w.room_get_is_shelter(room.id)) {
+                float const rain_intensity = w.room_get_rain_intensity(room.id);
+                float since = -1.0e9f;
+                if (auto const* cyc = rain::of_room(s, room.id))
+                    since = float(cyc->timer - cyc->cycle_length);
+                global = std::pow(mathf::inverse_lerp(0.f, 2400.f, since), 2.2f) * rain_intensity;
+                if (s.storm)
+                    global = mathf::max(global, rain_intensity);
+                surface = mathf::max(surface - mathf::inverse_lerp(-400.f, 0.f, since), 0.f);
+            } else {
+                global = 0.f;
+            }
+            surface = mathf::max(surface, global);
+            auto& sv = r.sandstorms[uint32_t(room.id.index())];
+            if (surface > 0.f && sv.surface_mask == 0)
+                make_surface_mask(r, room, sv);
+            // the wind, a tick at a time since it was last drawn
+            uint32_t const ticks = std::min<uint32_t>(s.tick - sv.tick, 200u);
+            if (sv.tick == 0 || s.tick < sv.tick)
+                sv.last_scroll = sv.scroll;
+            for (uint32_t k = 0; k < ticks; ++k) {
+                uint32_t const t = sv.tick + k + 1;
+                if (surface > 0.f || global > 0.f) {
+                    if (sv.switch_counter-- < 0) {
+                        sv.switch_counter = 20 + int32_t(light_roll(uint32_t(room.id.index()), 300, t) * 40.f);
+                        float const ang = (light_roll(uint32_t(room.id.index()), 301, t) * 20.f - 10.f) * mathf::deg2rad;
+                        float const speed = mathf::lerp(50.f, 100.f, light_roll(uint32_t(room.id.index()), 302, t)) * mathf::lerp(0.65f, 1.f, surface);
+                        sv.target = vec2{std::cos(ang), std::sin(ang)} * speed;
+                    }
+                    sv.last_scroll = sv.scroll;
+                    sv.scroll += sv.vel;
+                    sv.vel = rw::lerp(sv.vel, sv.target, 0.05f);
+                } else {
+                    sv.scroll = sv.last_scroll = vec2{0.f, 0.f};
+                    sv.vel = vec2{50.f, 0.f};
+                }
+            }
+            sv.tick = s.tick;
+            if (surface <= 0.f && global <= 0.f)
+                return;
+            // (wrapped: the shader's noise tiles every 4096 units)
+            vec2 const scroll = rw::lerp(sv.last_scroll, sv.scroll, alpha);
+            auto const* tp = room_terrain_palette(r, s, room.id);
+            rw::vec3 dust = palette_pixel(r, s, room.id, 0, 7, f.night_time);
+            if (tp && (tp->misc[4].x > 0.f || tp->misc[4].y > 0.f || tp->misc[4].z > 0.f))
+                dust = glm::mix(tp->misc[4], tp->misc_rain[4], f.night_time);
+            float const view_w = f.screen.x / f.zoom, view_h = f.screen.y / f.zoom;
+            vec2 const vlo = f.view_pos, vhi = f.view_pos + vec2{view_w, view_h};
+            sandstorm_uniforms u{};
+            u.proj = f.proj;
+            u.screen = f.screen;
+            u.view_pos = f.view_pos;
+            u.scroll = glm::vec2{std::fmod(scroll.x, 256.f * 4096.f / 0.05f), std::fmod(scroll.y, 256.f * 4096.f / 0.3f)};
+            u.dust = glm::vec4{dust.x, dust.y, dust.z, 1.f};
+            u.mask_size = glm::vec2{float(mathf::max(sv.mask_w, 1)), float(mathf::max(sv.mask_h, 1))};
+            u.zoom = f.zoom;
+            u.night_time = f.night_time;
+            u.rain = f.rain;
+            u.intensity = global;
+            u.surface = surface;
+            u.index = f.palette;
+            for (size_t c = 0; c < cams.size(); ++c) {
+                vec2 const o = cams[c];
+                vec2 const lo = glm::max(vlo, o), hi = glm::min(vhi, o + vec2{float(camera_width), float(camera_height)});
+                if (hi.x <= lo.x || hi.y <= lo.y)
+                    continue;
+                vertex const bl{lo.x, lo.y, 0xFFFFFFFFu, 0.f, 0.f}, br{hi.x, lo.y, 0xFFFFFFFFu, 1.f, 0.f};
+                vertex const tr{hi.x, hi.y, 0xFFFFFFFFu, 1.f, 1.f}, tl{lo.x, hi.y, 0xFFFFFFFFu, 0.f, 1.f};
+                r.batch.clear();
+                r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+                upload(r);
+                u.camera_index = int32_t(c);
+                u.cam_origin = o;
+                u.later_count = later_cameras(cams, c, u.later);
+                gpu::draw(*r.gpu, gpu::pipeline::sandstorm, &u, sizeof(u), {r.room_texture, r.palette_texarray, sv.surface_mask, f.mask}, 0, 6);
+            }
+        }
+
         // particles.hpp's effects, plain shapes
         void build_particles(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             painter p{r.batch};
@@ -3465,6 +3836,9 @@ namespace render {
                 case particles::kind::flare_light:
                     // (the lights: draw_lights)
                     break;
+                case particles::kind::sand_puff:
+                    // (the Spores shader: draw_sand_puffs)
+                    break;
                 }
             }
         }
@@ -3472,7 +3846,8 @@ namespace render {
         // the water: its body (the scene behind refracted and tinted, see
         // water.frag) from the front edge down, then the top of the surface
         // as a band of rows going back, shaded by their slope
-        void draw_water(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
+        // `sun`: vanilla's _light (1 full sun, -1 none)
+        void draw_water(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds, float sun) {
             if (!room.water)
                 return;
             auto const* surf = water::surface(s, room.id);
@@ -3493,11 +3868,17 @@ namespace render {
             if (level + 40.f < cam.pos.y)
                 return;
             float const top_clip = cam.pos.y + view_h + 40.f;
-            rw::vec3 const shallow = palette_texel(r, s, room.id, 4, 7);
-            rw::vec3 const deep = palette_texel(r, s, room.id, 5, 7);
-            rw::vec3 const top1 = palette_texel(r, s, room.id, 6, 7);
-            rw::vec3 const top2 = palette_texel(r, s, room.id, 7, 7);
-            rw::vec3 const shine = palette_texel(r, s, room.id, 8, 7);
+            // the palette's water colours (its rain variant with the night
+            // toggle, like the level), and how much of the room's light
+            // reaches it: the palette's darkness, the clouds and the coming
+            // rain dim the shine and the caustics
+            float const night = r.night_time;
+            rw::vec3 const shallow = palette_pixel(r, s, room.id, 4, 7, night);
+            rw::vec3 const deep = palette_pixel(r, s, room.id, 5, 7, night);
+            rw::vec3 const top1 = palette_pixel(r, s, room.id, 6, 7, night);
+            rw::vec3 const top2 = palette_pixel(r, s, room.id, 7, 7, night);
+            rw::vec3 const shine = palette_pixel(r, s, room.id, 8, 7, night);
+            float const lit = (1.f - palette_darkness(r, s, room.id)) * mathf::inverse_lerp(-1.f, 1.f, sun);
             constexpr float step = 4.f;
             int const n = int((x1 - x0) / step) + 1;
             auto const hgt = [&](float x, float z) { return water::height(s, *surf, x, z, alpha); };
@@ -3523,6 +3904,7 @@ namespace render {
             u.shallow = shallow;
             u.deep = deep;
             u.shine = shine;
+            u.lit = lit;
             gpu::draw(*r.gpu, gpu::pipeline::water, &u, sizeof(u), {scene}, 0, r.batch.size());
 
             if (level - 60.f > top_clip)
@@ -3542,9 +3924,9 @@ namespace render {
                 float const spec = std::pow(mathf::max(0.f, glm::dot(nrm, half)), 48.f);
                 float const t = z / float(water::rows - 1);
                 rw::vec3 const base = top1 + (top2 - top1) * t;
-                rw::vec3 const c = base * (0.55f + 0.45f * diffuse) + shine * spec * 1.4f;
+                rw::vec3 const c = base * mathf::lerp(0.55f, 0.55f + 0.45f * diffuse, lit) + shine * spec * 1.4f * lit;
                 // see-through enough for whatever swims at the surface
-                return to_rgba(c, mathf::lerp(0.62f, 0.4f, t) + spec * 0.3f);
+                return to_rgba(c, mathf::lerp(0.62f, 0.4f, t) + spec * 0.3f * lit);
             };
             auto const ypos = [&](float x, float z) { return level + hgt(x, z) + z / float(water::rows - 1) * water::depth_px; };
             for (uint32_t zr = 0; zr + 1 < water::rows; ++zr) {
@@ -3741,12 +4123,16 @@ namespace render {
         // the ground that isn't tiles, the plants on it and the dangle fruits'
         // stalks (the Background container)
         draw_game([&] {
-            build_sand(r, s, room, cam);
+            // (the lit sand needs the camera images: draw_sand)
+            if (!textured_room)
+                build_sand(r, s, room, cam);
             if (atlas)
                 build_fruit_stalks(r, s, room, alpha);
             else
                 build_plants(r, s, room, seconds);
         });
+        // the sand puffs (vanilla's Background container)
+        draw_sand_puffs(r, s, room, proj, lf, textured_room);
 
         // the sprite layers: rot tubes, back spears, creatures (midground), items, gate doors
         draw_flat([&] { build_rot(r, s, room, alpha, false); });
@@ -3780,6 +4166,12 @@ namespace render {
             lf.mask = gpu::grab_sprite_mask(*r.gpu);
             // the sprites' shadows on the sunlit level behind them
             draw_cameras(2);
+        }
+        // the frame's lights (the sand reads them too)
+        light_list const lights = collect_lights(r, s, room, lf, alpha);
+        if (textured_room) {
+            // the sand, behind the sprites but lit with the level
+            draw_sand(r, s, room, lf, lights);
             draw_cameras(1);
             draw_decals(r, s, room, lf);
             if (r.show_geometry)
@@ -3791,7 +4183,6 @@ namespace render {
             draw_game([&] { build_holy_fire(r, s, room, alpha); });
         // the LightSources (ForegroundLights; the submersible ones and the
         // UnderWaterLight sprites go with the water)
-        light_list const lights = collect_lights(r, s, room, lf, alpha);
         if (textured_room)
             draw_lights(r, lights, lf, false);
         // most of the rot sits over the level's foreground (vanilla's Water container)
@@ -3805,9 +4196,12 @@ namespace render {
             build_particles(r, s, room, alpha);
             build_shortcut_glow(r, s, room, alpha);
         });
-        draw_water(r, s, room, alpha, cam, proj, seconds);
-        if (textured_room)
+        draw_water(r, s, room, alpha, cam, proj, seconds, lf.light);
+        if (textured_room) {
             draw_lights(r, lights, lf, true);
+            // the sandstorm (vanilla's Water container)
+            draw_sandstorm(r, s, room, lf, alpha);
+        }
 
         draw_flat([&] { build_ripple_rings(r, s, room); });
         draw_warp_screen(r, s, room, alpha, cam, proj, seconds);

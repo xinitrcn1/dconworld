@@ -324,6 +324,9 @@ namespace particles {
             case kind::explosion_light:
             case kind::flare_light:
                 break;
+            case kind::sand_puff:
+                p.pos += p.vel;
+                break;
             case kind::centipede_shell: {
                 // CentipedeShell.Update: tumbling, sinking slowly in water,
                 // bouncing off the terrain, then lying still until it fades

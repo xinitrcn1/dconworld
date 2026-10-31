@@ -249,6 +249,7 @@ namespace world {
             // the Effects line's DayNight and WaterLights
             float day_night = 0.f;
             float water_lights = 0.f;
+            float surface_sandstorm = 0.f;
             std::vector<parsed_thing> things;
 
             room_view view() const noexcept {
@@ -791,6 +792,7 @@ namespace world {
             }
             dc.room_set_day_night(rid, r.day_night);
             dc.room_set_water_lights(rid, r.water_lights);
+            dc.room_set_surface_sandstorm(rid, r.surface_sandstorm);
             for (auto const& o : r.warp_targets) {
                 auto const tid = dc.create_warp_target();
                 dc.warp_target_set_pos(tid, o.pos);
@@ -872,6 +874,12 @@ namespace world {
             dc.room_set_random_item_spear_chance(rid, t.random_item_spear_chance.value_or(0.2f));
             dc.room_set_rumble_intensity(rid, t.rumble_intensity.value_or(1.f));
             dc.room_set_rain_intensity(rid, t.rain_intensity.value_or(1.f));
+            if (t.terrain_palette.has_value() && !t.terrain_palette->empty())
+                dc.room_set_terrain_palette(rid, s.add_text(text::to_lowercase_native(*t.terrain_palette)));
+            dc.room_set_terrain_light(rid, t.terrain_light.value_or(0.f));
+            dc.room_set_terrain_grain(rid, t.terrain_grain.value_or(0.f));
+            dc.room_set_terrain_edge_radius(rid, t.terrain_edge_radius.value_or(200.f));
+            dc.room_set_terrain_sky_fade(rid, t.terrain_sky_fade.value_or(0.f));
             dc.room_set_room_specific_script_active(rid, t.room_specific_script_active.value_or(false));
             dc.room_set_wet_terrain(rid, t.wet_terrain.value_or(false));
 
@@ -1172,6 +1180,8 @@ namespace world {
                     r.day_night = amount;
                 else if (name == "WaterLights")
                     r.water_lights = amount;
+                else if (name == "SurfaceSandstorm")
+                    r.surface_sandstorm = amount;
             }
         }
 

@@ -188,6 +188,14 @@ object{
 	property{ name{random_item_spear_chance} type{float} }
 	property{ name{rumble_intensity} type{float} }
 	property{ name{rain_intensity} type{float} }
+	// the Watcher's sand: TerrainPalette (empty: none) and _terrainParams
+	property{ name{terrain_palette} type{text_key} }
+	property{ name{terrain_light} type{float} }
+	property{ name{terrain_grain} type{float} }
+	property{ name{terrain_edge_radius} type{float} }
+	property{ name{terrain_sky_fade} type{float} }
+	// the SurfaceSandstorm effect's amount (the Effects line)
+	property{ name{surface_sandstorm} type{float} }
 	property{ name{room_specific_script_active} type{bitfield} }
 	property{ name{wet_terrain} type{bitfield} }
 	// room gravity multiplier (Room.gravity)

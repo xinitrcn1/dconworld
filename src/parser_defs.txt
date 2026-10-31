@@ -91,17 +91,17 @@ room_template
     PlacedObjects                                   skip        string_list     ""
     Triggers                                        skip        string_list     ""
 // downpour terrain / mods
-    TerrainPalette                                  skip        string          ""
+    TerrainPalette                                  member        string          ""
     TerrainStainAmount                              skip        float           0.0
     TerrainStainHeight                              skip        float           0.0
     TerrainStainBrightness                          skip        float           0.0
     TerrainWaves                                    skip        float           0.0
     TerrainGooHeight                                skip        float           0.0
     TerrainDepth                                    skip        float           0.0
-    TerrainLight                                    skip        float           0.0
-    TerrainGrain                                    skip        float           0.0
-    TerrainEdgeRadius                               skip        float           0.0
-    TerrainSkyFade                                  skip        float           0.0
+    TerrainLight                                    member        float           0.0
+    TerrainGrain                                    member        float           0.0
+    TerrainEdgeRadius                               member        float           0.0
+    TerrainSkyFade                                  member        float           0.0
     TerrainFadePalette                              skip        string_list     ""
     MorePalette0                                    skip        string_list     0,0,0
     MorePalette1                                    skip        string_list     0,0,0

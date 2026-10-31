@@ -24,6 +24,7 @@ namespace particles {
         centipede_shell, // a shell knocked off a centipede (CentipedeShell)
         explosion_light, // Explosion.ExplosionLight: size the radius, alpha, colour, its life its lifeTime
         flare_light,     // a FlareBomb burning (its LightSource while `burning` runs 0..1): colour
+        sand_puff,       // SandPuffSpawner.SandPuff: size its size (0..1); the colour is the terrain palette's dust (render.cpp)
     };
 
     void spawn(sys::game_state& state, dcon::room_id room, kind k, rw::vec2 pos, rw::vec2 vel, float size, float seconds, rw::vec3 color, float alpha = 1.f);

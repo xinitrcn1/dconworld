@@ -132,6 +132,12 @@ namespace parsers {
         std::optional<float> rain_intensity;
         std::optional<bool> room_specific_script_active;
         std::optional<bool> wet_terrain;
+        // the Watcher's sand (TerrainCurve's _terrainParams, its TerrainPalette)
+        std::optional<std::string> terrain_palette;
+        std::optional<float> terrain_light;
+        std::optional<float> terrain_grain;
+        std::optional<float> terrain_edge_radius;
+        std::optional<float> terrain_sky_fade;
         // "AmbientSounds:", read by world.cpp (not the generated parser)
         std::vector<world::ambient_sound_desc> ambient_sounds;
 

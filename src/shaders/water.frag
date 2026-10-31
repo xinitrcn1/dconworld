@@ -21,6 +21,7 @@ layout(set = 0, binding = 0, std140) uniform water_uniforms {
     vec3 u_deep;      // RoomPalette.waterColor2
     float u_zoom;
     vec3 u_shine;     // RoomPalette.waterShineColor
+    float u_lit;      // the room's sunlight here (its darkness, the clouds, the coming rain): the caustics' strength
     vec2 u_screen;
 };
 layout(set = 0, binding = 1) uniform sampler2D u_scene;
@@ -95,7 +96,7 @@ void main() {
     float c = fbm(vec3(p * 4.5, t * 0.5));
     float crease = 1.0 - abs(c * 2.0 - 1.0);
     float caustic = pow(crease, 9.0) * mix(0.45, 1.0, near);
-    col += u_shine * caustic * 0.35 * light;
+    col += u_shine * caustic * 0.35 * light * u_lit;
 
     float alpha = mix(0.62, 0.86, murk);
     frag_color = vec4(col, alpha);

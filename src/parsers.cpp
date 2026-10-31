@@ -206,6 +206,11 @@ namespace parsers {
         set(rain_intensity, o.rain_intensity);
         set(room_specific_script_active, o.room_specific_script_active);
         set(wet_terrain, o.wet_terrain);
+        set(terrain_palette, o.terrain_palette);
+        set(terrain_light, o.terrain_light);
+        set(terrain_grain, o.terrain_grain);
+        set(terrain_edge_radius, o.terrain_edge_radius);
+        set(terrain_sky_fade, o.terrain_sky_fade);
         // RoomSettings.InheritAmbientSounds: the overlay's own sounds, then
         // the ones of this (its parent) it doesn't overwrite (same sample
         // and type)

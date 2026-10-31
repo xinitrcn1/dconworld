@@ -68,6 +68,9 @@ namespace gpu {
         water,       // warp.vert + water.frag (1: the scene)
         rope,        // rope.vert/frag: ribbons along rope_points (no vertex input: draw_pulled)
         circle,      // circle.vert/frag: discs, a quad each (no vertex input: draw_pulled)
+        sand,        // sand.vert/frag: the Watcher's sand (1: cameras, 2: palettes, 3: terrain palette, 4: the sprite mask)
+        sandstorm,   // sand.vert + sandstorm.frag, premultiplied alpha (1: cameras, 2: palettes, 3: surface mask, 4: the sprite mask)
+        spores,      // sand.vert + spores.frag: the Spores shader's specks (1: cameras)
         count,
     };
 

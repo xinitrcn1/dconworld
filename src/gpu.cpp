@@ -18,6 +18,10 @@
 #include "shaders/decal_vert.h"
 #include "shaders/light_frag.h"
 #include "shaders/light_vert.h"
+#include "shaders/sand_vert.h"
+#include "shaders/sand_frag.h"
+#include "shaders/sandstorm_frag.h"
+#include "shaders/spores_frag.h"
 #include "shaders/flat_frag.h"
 #include "shaders/flat_vert.h"
 #include "shaders/circle_frag.h"
@@ -462,6 +466,10 @@ namespace gpu {
             blend_rgb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
             VkPipelineColorBlendStateCreateInfo cb_rgb = cb;
             cb_rgb.pAttachments = &blend_rgb;
+            VkPipelineColorBlendAttachmentState blend_premul = blend_rgb;
+            blend_premul.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            VkPipelineColorBlendStateCreateInfo cb_premul = cb;
+            cb_premul.pAttachments = &blend_premul;
             VkDynamicState const dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
             ds.dynamicStateCount = 2;
@@ -483,6 +491,9 @@ namespace gpu {
                 {warp_vert, spirv{water_frag_spv, water_frag_spv_size}},
                 {spirv{rope_vert_spv, rope_vert_spv_size}, spirv{rope_frag_spv, rope_frag_spv_size}},
                 {spirv{circle_vert_spv, circle_vert_spv_size}, spirv{circle_frag_spv, circle_frag_spv_size}},
+                {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{sand_frag_spv, sand_frag_spv_size}},
+                {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{sandstorm_frag_spv, sandstorm_frag_spv_size}},
+                {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{spores_frag_spv, spores_frag_spv_size}},
             }};
             for (size_t i = 0; i < sources.size(); ++i) {
                 VkShaderModule const vs = make_module(c, sources[i][0]);
@@ -510,8 +521,9 @@ namespace gpu {
                 // their coverage, the sprite mask render.cpp grabs for the
                 // level shaders (vanilla's GrabPass of the sprites)
                 bool const keeps_alpha = i == size_t(pipeline::room) || i == size_t(pipeline::decal) || i == size_t(pipeline::light)
-                    || i == size_t(pipeline::warp_tear);
-                pi.pColorBlendState = keeps_alpha ? &cb_rgb : &cb;
+                    || i == size_t(pipeline::warp_tear) || i == size_t(pipeline::sand) || i == size_t(pipeline::sandstorm);
+                // (the sandstorm's colours come premultiplied: Blend One OneMinusSrcAlpha)
+                pi.pColorBlendState = i == size_t(pipeline::sandstorm) ? &cb_premul : keeps_alpha ? &cb_rgb : &cb;
                 pi.pDynamicState = &ds;
                 pi.layout = c.layout;
                 check(vkCreateGraphicsPipelines(c.device, VK_NULL_HANDLE, 1, &pi, nullptr, &c.pipelines[i]), "vkCreateGraphicsPipelines");

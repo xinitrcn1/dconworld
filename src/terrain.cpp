@@ -5,6 +5,8 @@
 #include "terrain.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
+#include "rooms.hpp"
+#include "creature.hpp"
 
 namespace terrain {
     using rw::vec2;
@@ -232,6 +234,33 @@ namespace terrain {
                         rw::vec3{0.82f, 0.7f, 0.5f}, 0.25f);
                 }
             }
+            // SandPuffSpawner: the slugcats' chunks on the sand kick up puffs,
+            // landing hard or (now and then) walking along it
+            auto r = rw::random(state.seed, state.tick, uint32_t(room.id.value) ^ 0x5A4D5u);
+            rooms::for_each_creature(state, room.id, creature::type::slugcat, [&](dcon::creature_id c) {
+                uint32_t const n = creature::chunk_count(state, c);
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto const k = creature::chunk(state, c, i);
+                    vec2 const pos = w.body_chunk_get_pos(k), last = w.body_chunk_get_last_pos(k);
+                    float const rad = w.body_chunk_get_rad(k);
+                    if (w.body_chunk_get_contact_point(k).y >= 0 || pos.x < s.left || pos.x > s.right)
+                        continue;
+                    // (on the sand, not on a tile)
+                    if (pos.y - rad > sand_height(s, pos.x) + 2.f)
+                        continue;
+                    float size = -1.f;
+                    if (w.body_chunk_get_last_contact_point(k).y >= 0 && last.y - pos.y > 5.f)
+                        size = rw::custom::lerp_map(last.y - pos.y, 5.f, 10.f, 0.5f, 1.f);
+                    else if (r.value() < 0.1f && std::fabs(last.x - pos.x) > 3.f)
+                        size = 0.25f * r.value();
+                    if (size < 0.f)
+                        continue;
+                    // SandPuff: 40..120 ticks by its size, drifting left (its motion's x and y swapped)
+                    float const life_time = mathf::lerp(40.f, 120.f, r.value()) * mathf::lerp(0.5f, 1.5f, size);
+                    particles::spawn(state, room.id, particles::kind::sand_puff, pos - vec2{0.f, rad}, vec2{-0.25f, 0.f}, size,
+                        life_time / float(state.ticks_per_second), rw::vec3{1.f, 1.f, 1.f}, 1.f);
+                }
+            });
         }
         // mud pits: bodies in them sink slowly and drag
         w.room_for_each_thing_location(room.id, [&](dcon::thing_location_id l) {
