@@ -796,7 +796,7 @@ namespace daddy::detail {
             for (auto const& o : x.tents)
                 if (o.t.grab == t)
                     ++num;
-            return float(num) >= creature::body_size(creature::template_of(x.state, t)) * (x.size_class ? 1.5f : 2.5f);
+            return float(num) >= creature::body_size(creature::template_of(x.state, t)) * (x.size_class() ? 1.5f : 2.5f);
         }
 
         // DaddyTentacle.CollideWithCreature
@@ -839,8 +839,8 @@ namespace daddy::detail {
                                 daddy_graphics::feel_something(x.state, x.d, ref, tw.c[j].pos);
                         }
                         collide_with_creature(x, tw, j, pc);
-                        if (!t.needed_for_locomotion && !t.grab && j == tw.c.size() - 1 && (x.size_class || x.z.digesting_counter <= 0)
-                        && (x.z.eyes_closed < 1 || x.rng.value() < (x.size_class ? 0.5f : 0.15f))
+                        if (!t.needed_for_locomotion && !t.grab && j == tw.c.size() - 1 && (x.size_class() || x.z.digesting_counter <= 0)
+                        && (x.z.eyes_closed < 1 || x.rng.value() < (x.size_class() ? 0.5f : 0.15f))
                         && (t.current == task::hunt || !is_creature_caught_enough(x, ref))) {
                             flag = true;
                             if (rw::distance(tw.c[j].vel, w.body_chunk_get_vel(pc)) >= mathf::lerp(1.f, 8.f, t.sticky))
@@ -915,7 +915,7 @@ namespace daddy::detail {
         // DaddyTentacle.LookForSoundsToExamine
         void look_for_sounds_to_examine(ctx& x, tentacle_work& tw) {
             auto& nt = x.a.noise;
-            if (!x.size_class || tw.t.needed_for_locomotion || nt.count == 0)
+            if (!x.size_class() || tw.t.needed_for_locomotion || nt.count == 0)
                 return;
             int32_t num = std::numeric_limits<int32_t>::max();
             int32_t num2 = -1;
@@ -1508,7 +1508,7 @@ namespace daddy::detail {
                 auto const pc = target_chunk(x, t.grab, t.grab_chunk);
                 vec2 const tp2 = tw.c.size() >= 2 ? tw.c[tw.c.size() - 2].pos : float_base(x, tw);
                 vec2 const pull = rw::slerp(custom::dir_vec(gpos, p), custom::dir_vec(tip(tw).pos, tp2), 0.5f)
-                    * custom::lerp_map(float(tw.grab_path.size()), 3.f, 18.f, 0.65f, 0.25f) * (x.size_class ? 1.f : 0.45f);
+                    * custom::lerp_map(float(tw.grab_path.size()), 3.f, 18.f, 0.65f, 0.25f) * (x.size_class() ? 1.f : 0.45f);
                 w.body_chunk_get_vel(pc) += pull / w.body_chunk_get_mass(pc);
             }
         }

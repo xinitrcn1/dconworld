@@ -31,8 +31,9 @@ namespace daddy_graphics {
     // DaddyGraphics.Update, once per tick after the daddy's update
     void update(sys::game_state& state, dcon::creature_id d, world::room_view const& room);
     // DaddyGraphics.DrawSprites (+ ApplyPalette); `alpha` interpolates
-    // between ticks
-    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out);
+    // between ticks. The long meshes (the tubes, the eye slits) are strip
+    // commands with their vertices in `strip`
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip);
 
     // DaddyGraphics.TentOwnerFeelSomethingWithTentacle: what a tentacle felt
     void feel_something(sys::game_state& state, dcon::creature_id d, dcon::creature_id felt, rw::vec2 feel_pos);

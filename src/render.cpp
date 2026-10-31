@@ -753,9 +753,31 @@ void main() {
         // The sprites and TriangleMesh pieces of a ported DrawSprites through an
         // atlas (textured batch): `frame` finds an element's game_frame, or
         // nullptr to skip it, `white_uv` is a white texel for the triangles
+        // (`strip`: the strip commands' vertices)
         template<typename Find>
-        void emit_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, Find&& frame, float tw, float th, vec2 white_uv, float vis = 1.f) {
+        void emit_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, Find&& frame, float tw, float th, vec2 white_uv, float vis = 1.f,
+            std::vector<sprites::strip_vertex> const* strip = nullptr) {
+            static thread_local std::vector<vertex> sv;
             for (auto const& c : cmds) {
+                if (c.is_strip) {
+                    if (strip == nullptr || c.strip_count < 3)
+                        continue;
+                    // each vertex converted once, then the strip's triangles
+                    sv.resize(c.strip_count);
+                    for (uint32_t k = 0; k < c.strip_count; ++k) {
+                        auto const& s = (*strip)[c.strip_first + k];
+                        sv[k] = vertex{s.pos.x, s.pos.y, to_rgba(rw::vec3{s.col.x, s.col.y, s.col.z}, s.col.w * vis), white_uv.x, white_uv.y};
+                    }
+                    size_t const base = r.batch.size();
+                    r.batch.resize(base + size_t(c.strip_count - 2) * 3);
+                    vertex* o = r.batch.data() + base;
+                    for (uint32_t k = 0; k + 2 < c.strip_count; ++k) {
+                        *o++ = sv[k];
+                        *o++ = sv[k + 1];
+                        *o++ = sv[k + 2];
+                    }
+                    continue;
+                }
                 if (c.is_triangle) {
                     uint32_t const col = to_rgba(c.color, vis);
                     for (int k = 0; k < 3; ++k) {
@@ -804,9 +826,9 @@ void main() {
         }
 
         // through the game's own atlases (game_texture)
-        void emit_game_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds) {
+        void emit_game_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, std::vector<sprites::strip_vertex> const* strip = nullptr) {
             emit_cmds(r, cmds, [&](std::string_view e) { return find_game_frame(r, e); }, float(r.game_width), float(r.game_height),
-                vec2{1.f / float(r.game_width), 1.f / float(r.game_height)});
+                vec2{1.f / float(r.game_width), 1.f / float(r.game_height)}, 1.f, strip);
         }
 
         // PlayerGraphics sprites through the slugcat atlas (textured batch)
@@ -1763,11 +1785,13 @@ void main() {
         // Daddy long legs through DaddyGraphics and the game's atlases
         void build_daddy_sprites(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             static std::vector<sprites::draw_cmd> cmds;
+            static std::vector<sprites::strip_vertex> strip;
             auto const pal = daddy_palette(r, s, room.id);
             rooms::for_each_creature(s, room.id, creature::type::daddy, [&](dcon::creature_id d) {
                 cmds.clear();
-                daddy_graphics::build(s, d, alpha, pal, cmds);
-                emit_game_cmds(r, cmds);
+                strip.clear();
+                daddy_graphics::build(s, d, alpha, pal, cmds, strip);
+                emit_game_cmds(r, cmds, &strip);
             });
         }
 
@@ -1784,7 +1808,7 @@ void main() {
             rooms::for_each_creature(s, room.id, creature::type::daddy, [&](dcon::creature_id d) {
                 rw::vec3 const body = daddy_graphics::body_color(s, d, pal);
                 rw::vec3 const effect = w.creature_get_payload(d).daddy.effect_color;
-                float const width = w.creature_get_payload(d).daddy.size_class ? 4.f : 3.4f;
+                float const width = daddy::size_class(s, d) ? 4.f : 3.4f;
                 for (uint32_t i = 0; i < daddy::tube_count(s, d); ++i) {
                     auto const t = daddy::tube_of(s, d, i);
                     uint32_t const n = w.daddy_tube_get_segments(daddy::tube_data(w, t)).size();
@@ -1811,7 +1835,7 @@ void main() {
                     vec2 const c = rw::lerp(w.body_chunk_get_last_pos(k), w.body_chunk_get_pos(k), alpha);
                     float const rad = w.body_chunk_get_rad(k);
                     p.circle(c, rad * 1.1f + 2.f, to_rgba(body));
-                    if (w.creature_get_payload(d).daddy.hd && j < 2)
+                    if (daddy::hunter(s, d) && j < 2)
                         continue;
                     auto const& e = g.eyes[j];
                     float const open = 1.f - mathf::lerp(e.last_closed, e.closed, alpha);
@@ -1822,7 +1846,7 @@ void main() {
                     p.line(look - dir * rad * 0.8f, look + dir * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
                     p.line(look - side * rad * 0.8f, look + side * rad * 0.8f, mathf::max(0.8f, 2.4f * open), to_rgba(open > 0.05f ? eye : body));
                 }
-                if (w.creature_get_payload(d).daddy.hd) {
+                if (daddy::hunter(s, d)) {
                     auto const& m = g.dummy;
                     rw::vec3 const hunter = daddy_graphics::body_color(s, d, pal);
                     vec2 const head = rw::lerp(m.head.last_pos, m.head.pos, alpha);

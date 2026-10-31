@@ -34,6 +34,9 @@ namespace daddy {
     using creature::hit_part;
 
     char const* to_string(variant v) noexcept;
+    inline variant variant_of(sys::game_state const& state, dcon::creature_id d) noexcept { return state.world.creature_get_payload(d).daddy.variant; }
+    inline bool size_class(sys::game_state const& state, dcon::creature_id d) noexcept { return size_class(variant_of(state, d)); }
+    inline bool hunter(sys::game_state const& state, dcon::creature_id d) noexcept { return hunter(variant_of(state, d)); }
     // "daddy", "brother", "mother" (or "terror"), "hunter"
     bool parse_variant(char const* name, variant& out) noexcept;
 

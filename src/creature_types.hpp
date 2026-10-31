@@ -281,10 +281,8 @@ namespace creature {
         rw::vec3 effect_color;
         rw::vec3 eye_color;
         daddy::variant variant;
-        // SizeClass, colorClass, HDmode
-        uint8_t size_class;
+        // colorClass (SizeClass and HDmode follow from the variant)
         uint8_t color_class;
-        uint8_t hd;
         // its parts (creature_part, in vanilla order): the tentacles, then
         // the tubes (the leg graphics, then the dead legs, then the danglers)
         uint8_t tentacle_count;

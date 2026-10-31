@@ -2,11 +2,13 @@
 
 // What daddy.cpp (DaddyLongLegs, DaddyAI) and daddy_tentacle.cpp (Tentacle,
 // DaddyTentacle) share: a daddy's update context with working copies of its
-// tentacles (their tile lists grow and shrink every tick, so they live in
+// tentacles' tile lists (they grow and shrink every tick, so they live in
 // std::vectors while the daddy updates and go back into the vector pools
-// after), and the Room/SharedPhysics tile helpers both use.
+// after; the chunks are edited in place), and the Room/SharedPhysics tile
+// helpers both use.
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "daddy.hpp"
@@ -20,7 +22,8 @@ namespace daddy::detail {
         dcon::creature_part_id part;
         dcon::daddy_tentacle_id id;
         tentacle t;
-        std::vector<tentacle_chunk> c;
+        // its chunks, in place in the pool (their count never changes)
+        std::span<tentacle_chunk> c;
         std::vector<rw::ivec2> segments;
         std::vector<rw::ivec2> grab_path;
     };
@@ -53,9 +56,6 @@ namespace daddy::detail {
         dcon::body_chunk_id chunks[max_chunks];
         uint32_t n = 0;
         variant v = variant::daddy;
-        bool size_class = false;
-        bool hd = false;
-        bool mother = false;
         // AImap.getTerrainProximity of the room (pathing's map)
         std::vector<uint16_t> const* prox = nullptr;
 
@@ -65,6 +65,9 @@ namespace daddy::detail {
         rw::vec2& vel(uint32_t i) { return state.world.body_chunk_get_vel(chunks[i]); }
         float mass(uint32_t i) const { return state.world.body_chunk_get_mass(chunks[i]); }
         float rad(uint32_t i) const { return state.world.body_chunk_get_rad(chunks[i]); }
+        bool size_class() const { return daddy::size_class(v); }
+        bool hd() const { return hunter(v); }
+        bool mother() const { return v == variant::mother; }
         bool dead() const { return state.world.creature_get_dead(d) != 0; }
         bool consious() const { return !dead() && state.world.creature_get_stun(d) <= 0; }
         // DaddyAI.behavior

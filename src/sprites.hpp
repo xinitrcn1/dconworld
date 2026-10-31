@@ -35,6 +35,17 @@ namespace sprites {
         // corners in the same order (spr's position, rotation and scale unused)
         bool is_quad = false;
         rw::vec2 quad[4];
+        // a whole TriangleMesh.MakeLongMesh: triangles (k, k + 1, k + 2) over
+        // the strip vertices [strip_first, strip_first + strip_count) kept
+        // beside the commands (one command instead of one per triangle)
+        bool is_strip = false;
+        uint32_t strip_first = 0;
+        uint32_t strip_count = 0;
+    };
+    // a strip's vertex: its position and colour with alpha
+    struct strip_vertex {
+        rw::vec2 pos;
+        rw::vec4 col;
     };
 
     inline void add(std::vector<draw_cmd>& out, sprite const& s) {
@@ -74,6 +85,31 @@ namespace sprites {
             c.color = color;
             out.push_back(c);
         }
+    }
+    // a long mesh as one strip command, its vertices appended to `strip`
+    // (the renderer then needs `strip` with the commands)
+    inline void long_mesh(std::vector<draw_cmd>& out, std::vector<strip_vertex>& strip, rw::vec2 const* v, rw::vec4 const* colors, size_t n) {
+        if (n < 3)
+            return;
+        draw_cmd c;
+        c.is_strip = true;
+        c.strip_first = uint32_t(strip.size());
+        c.strip_count = uint32_t(n);
+        for (size_t i = 0; i < n; ++i)
+            strip.push_back(strip_vertex{v[i], colors[i]});
+        out.push_back(c);
+    }
+    inline void long_mesh(std::vector<draw_cmd>& out, std::vector<strip_vertex>& strip, rw::vec2 const* v, size_t n, rw::vec3 color) {
+        if (n < 3)
+            return;
+        draw_cmd c;
+        c.is_strip = true;
+        c.strip_first = uint32_t(strip.size());
+        c.strip_count = uint32_t(n);
+        rw::vec4 const col{color.x, color.y, color.z, 1.f};
+        for (size_t i = 0; i < n; ++i)
+            strip.push_back(strip_vertex{v[i], col});
+        out.push_back(c);
     }
     // the same with TriangleMesh.verticeColors
     inline void long_mesh(std::vector<draw_cmd>& out, rw::vec2 const* v, rw::vec4 const* colors, size_t n) {

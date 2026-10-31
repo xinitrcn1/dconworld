@@ -57,7 +57,7 @@ ceiling above the cursor (Ctrl+V removes them all), Q spawns a white squidcada a
 the cursor (Shift+Q a dark one, Ctrl+Q removes them all), Y spawns a lizard at the
 cursor, the next breed each time (Shift+Y the same breed again, Ctrl+Y removes them
 all), H spawns a daddy long legs at the cursor (Shift+H the next variant: daddy,
-brother, mother, hunter; Ctrl+H removes them all), F spawns a grapple worm at the
+brother, mother, grandmother, hunter; Ctrl+H removes them all), F spawns a grapple worm at the
 cursor (Ctrl+F removes them all), R respawn, left click teleports
 the slugcat, PageUp/PageDown change room, Home/End change region, C toggles
 between the vanilla camera positions and a follow camera, F1 HUD, F2 camera

@@ -32,10 +32,12 @@ namespace daddy {
 
     namespace detail {
         template_params const& params(variant v) noexcept {
-            // StaticWorld: DaddyLongLegs, BrotherLongLegs, TerrorLongLegs, HunterDaddy
+            // StaticWorld: DaddyLongLegs, BrotherLongLegs, TerrorLongLegs,
+            // (the grandmother: the Mother's), HunterDaddy
             static constexpr template_params p[variant_count] = {
                 {200.f, 200.f, 5.5f},
                 {100.f, 2.f, 2.5f},
+                {400.f, 4.f, 3.f},
                 {400.f, 4.f, 3.f},
                 {50.f, 2.f, 2.f},
             };
@@ -52,9 +54,6 @@ namespace daddy {
             for (uint32_t i = 0; i < n; ++i)
                 chunks[i] = chunk(s, id, i);
             v = s.world.creature_get_payload(id).daddy.variant;
-            size_class = s.world.creature_get_payload(id).daddy.size_class != 0;
-            hd = s.world.creature_get_payload(id).daddy.hd != 0;
-            mother = v == variant::mother;
             prox = &pathing::ai_terrain_proximity_map(s, r.id);
         }
 
@@ -87,7 +86,7 @@ namespace daddy {
                 auto const gp = w.daddy_tentacle_get_grab_path(tw.id);
                 tw.grab_path.assign(gp.begin(), gp.end());
                 auto const cs = w.daddy_tentacle_get_chunks(tw.id);
-                tw.c.assign(cs.begin(), cs.end());
+                tw.c = std::span<tentacle_chunk>{cs.begin(), cs.size()};
             }
         }
 
@@ -97,9 +96,6 @@ namespace daddy {
                 w.daddy_tentacle_set_t(tw.id, tw.t);
                 w.daddy_tentacle_get_segments(tw.id).load_range(tw.segments.data(), tw.segments.data() + tw.segments.size());
                 w.daddy_tentacle_get_grab_path(tw.id).load_range(tw.grab_path.data(), tw.grab_path.data() + tw.grab_path.size());
-                auto cs = w.daddy_tentacle_get_chunks(tw.id);
-                for (uint32_t i = 0; i < cs.size() && i < tw.c.size(); ++i)
-                    cs.at(i) = tw.c[i];
             }
         }
 
@@ -123,7 +119,7 @@ namespace daddy {
         // big plain Daddy ignores the Brothers)
         creature::relationship relationship_to(ctx const& x, dcon::creature_id t) {
             auto const tt = creature::template_of(x.state, t);
-            if (x.size_class && x.v == variant::daddy && tt == creature::tmpl::brother_long_legs)
+            if (x.size_class() && x.v == variant::daddy && tt == creature::tmpl::brother_long_legs)
                 return creature::relationship{};
             return creature::static_relationship(creature::template_of(x.state, x.d), tt);
         }
@@ -339,7 +335,7 @@ namespace daddy {
             // DaddyAI.ReactToNoise (graphicsModule != null)
             if (x.state.viewed(x.room.id))
                 daddy_graphics::react_to_noise(x.state, x.d, id, noise.pos, noise.strength);
-            if (x.hd) {
+            if (x.hd()) {
                 x.a.react_target = room_view::get_tile_position(noise.pos);
                 x.a.react_noise_time = 60;
                 x.a.new_idle_pos_counter = 300;
@@ -405,7 +401,7 @@ namespace daddy {
             if (!p || !target_here(x.state, p, x.room.id))
                 return 0.f;
             float const dist = mathf::max(1.f, float_dist(x.here(), best_guess(x)));
-            float const sure_lose = x.hd ? 600.f : 800.f;
+            float const sure_lose = x.hd() ? 600.f : 800.f;
             float const num = mathf::lerp(1.f - mathf::inverse_lerp(60.f, sure_lose, dist), mathf::lerp(60.f, sure_lose, 0.25f) / dist, 0.5f);
             return mathf::min(num, chance_of_finding(x) * mathf::inverse_lerp(50.f, 25.f, generation(x)));
         }
@@ -413,8 +409,8 @@ namespace daddy {
         // DaddyAI.Update
         void ai_update(ctx& x) {
             auto& a = x.a;
-            bool const listens = x.size_class || x.hd;
-            float const hearing = x.hd ? 5.f : (x.z.eyes_closed < 1 ? 2.f : 0.f);
+            bool const listens = x.size_class() || x.hd();
+            float const hearing = x.hd() ? 5.f : (x.z.eyes_closed < 1 ? 2.f : 0.f);
             if (listens)
                 for (auto const& n : x.state.noises(x.room.id))
                     if (n.source != body(x.state, x.d))
@@ -427,7 +423,7 @@ namespace daddy {
             float const noise = listens ? noise_utility(x) * 0.1f : 0.f;
             if (mathf::max(prey, mathf::max(rain, noise)) > 0.01f)
                 x.set_current(rain > prey && rain >= noise ? behavior::escape_rain : prey >= noise ? behavior::hunt : behavior::examine_sound);
-            if (x.hd && x.current() == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
+            if (x.hd() && x.current() == behavior::idle && (a.react_noise_time > 0 || (listens && noise_utility(x) > 0.f)))
                 x.set_current(behavior::examine_sound);
             ivec2& dest = x.destination;
             // (AbstractBehavior: now and then a trip to another room)
@@ -443,14 +439,14 @@ namespace daddy {
                     int32_t const ty = x.rng.range(0, x.room.height);
                     if (reachable_and_getbackable(x, ivec2{tx, ty})) {
                         dest = ivec2{tx, ty};
-                        a.new_idle_pos_counter = x.hd ? x.rng.range(30, 500) : x.rng.range(300, 2000);
+                        a.new_idle_pos_counter = x.hd() ? x.rng.range(30, 500) : x.rng.range(300, 2000);
                     }
                 } else if (x.proximity(dest) < 6) {
                     ivec2 const c = dest + custom::four_directions[x.rng.range(0, 4)];
                     if (reachable_and_getbackable(x, c) && x.proximity(c) > x.proximity(dest))
                         dest = c;
                 }
-                if (!x.size_class && float_dist(dest, x.here()) < 7.f && x.room.visual_contact(room_view::middle_of_tile(x.here()), room_view::middle_of_tile(dest))) {
+                if (!x.size_class() && float_dist(dest, x.here()) < 7.f && x.room.visual_contact(room_view::middle_of_tile(x.here()), room_view::middle_of_tile(dest))) {
                     int32_t const dx = x.rng.range(-20, 21);
                     int32_t const dy = x.rng.range(-20, 21);
                     ivec2 const c = dest + ivec2{dx, dy};
@@ -519,13 +515,13 @@ namespace daddy {
         // DaddyLongLegs.Stun
         void stun(ctx& x, int32_t st) {
             for (auto& tw : x.tents) {
-                if (x.rng.value() < 0.5f || !x.size_class) {
+                if (x.rng.value() < 0.5f || !x.size_class()) {
                     tw.t.needed_for_locomotion = 1;
                     switch_task(x, tw, task::locomotion);
                 }
             }
-            if (!x.hd)
-                st = x.size_class ? 0 : st / 3;
+            if (!x.hd())
+                st = x.size_class() ? 0 : st / 3;
             int32_t& s = x.state.world.creature_get_stun(x.d);
             s = std::max(s, st);
         }
@@ -557,7 +553,7 @@ namespace daddy {
             int32_t const num2 = 3;
             float num3 = 1.2f;
             float d = 0.2f;
-            if (x.hd) {
+            if (x.hd()) {
                 num = 0.5f;
                 num3 = 1.1f;
                 d = 1.f;
@@ -762,7 +758,7 @@ namespace daddy {
                 }
                 if (e.progression > 1.f) {
                     // digestion by what it ate (the slugcat's 1)
-                    if (!x.size_class)
+                    if (!x.size_class())
                         z.digesting_counter = int32_t(custom::lerp_map(creature::is_slugcat(x.state.world, p) ? 1.f : creature::mass_of(x.state, p), 0.2f, 5.f, 50.f, 1100.f));
                     z.eats[i] = z.eats[--z.eat_count];
                     finish(x, p);
@@ -841,9 +837,9 @@ namespace daddy {
                 // (Downpour) tentacles heal
                 float& h = w.creature_part_get_health(tw.part);
                 if (h < 1.f) {
-                    if (x.mother || x.hd)
+                    if (x.mother() || x.hd())
                         h += 0.0012f;
-                    else if (x.size_class)
+                    else if (x.size_class())
                         h += 0.0003f;
                 }
                 if (h > 1.f)
@@ -867,7 +863,7 @@ namespace daddy {
                 act(x, num);
                 // (Room.BackgroundNoise is 0 here)
             } else {
-                if (x.hd && !x.dead())
+                if (x.hd() && !x.dead())
                     x.seen = dcon::creature_id{};
                 z.eyes_closed = std::max(z.eyes_closed, 15);
             }
@@ -892,7 +888,7 @@ namespace daddy {
             // weight limit, is Remix's)
             if (w.daddy_data_get_ai(creature::daddy_data(w, d)).seen != ref)
                 return;
-            if (!w.creature_get_payload(d).daddy.size_class && z.digesting_counter > 0)
+            if (!size_class(state, d) && z.digesting_counter > 0)
                 return;
             bool flag = false;
             for (uint32_t k = 0; k < tentacle_count(state, d) && !flag; ++k)
@@ -905,7 +901,7 @@ namespace daddy {
             vec2 const middle = middle_of_body(state, d);
             vec2 const cp = w.body_chunk_get_pos(creature::chunk_of(state, ref, j));
             z.eats[z.eat_count++] = eat_object{ref, uint8_t(j), rw::distance(middle, cp), 0.f};
-            state.play_sound(w.creature_get_payload(d).daddy.size_class ? sound::sound_id::daddy_digestion_init : sound::sound_id::bro_digestion_init,
+            state.play_sound(size_class(state, d) ? sound::sound_id::daddy_digestion_init : sound::sound_id::bro_digestion_init,
                 room_of(state, d), w.body_chunk_get_pos(chunk(state, d, i)));
         }
 
@@ -1016,11 +1012,11 @@ namespace daddy {
         // everywhere but Garbage Wastes and Silent Construct
         auto const region = w.room_get_region_from_region_membership(room);
         std::string_view const rname = region ? state.to_string_view(w.region_get_name(region)) : std::string_view{};
-        bool const size_class = v == variant::grandmother || v == variant::mother || v == variant::daddy;
+        bool const size_class = daddy::size_class(v);
         bool color_class = size_class && (!region || (rname != "GW" && rname != "CL"));
         if (rname == "RM" || v == variant::mother || v == variant::grandmother)
             color_class = true;
-        bool const hd = v == variant::hunter;
+        bool const hd = hunter(v);
         vec3 effect, eye;
         if (hd) {
             effect = eye = vec3{0.57255f, 0.11373f, 0.22745f};
@@ -1036,9 +1032,7 @@ namespace daddy {
             eye = vec3{0.5f, 0.3f, 0.f};
         }
         w.creature_get_payload(d).daddy.variant = v;
-        w.creature_get_payload(d).daddy.size_class = size_class;
         w.creature_get_payload(d).daddy.color_class = color_class;
-        w.creature_get_payload(d).daddy.hd = hd;
         w.creature_get_payload(d).daddy.effect_color = effect;
         w.creature_get_payload(d).daddy.eye_color = eye;
         w.creature_set_stun(d, 0);
@@ -1248,8 +1242,8 @@ namespace daddy {
         load(x);
         if (part.tentacle >= 0 && part.tentacle < int32_t(tents.size())) {
             // DaddyLongLegs.Violence on a tentacle: it takes the hit, not the body
-            damage /= x.size_class ? 2.2f : 1.7f;
-            stun_bonus /= x.size_class ? 2.f : 0.9f;
+            damage /= x.size_class() ? 2.2f : 1.7f;
+            stun_bonus /= x.size_class() ? 2.f : 0.9f;
             auto& tw = tents[size_t(part.tentacle)];
             w.creature_part_get_health(tw.part) -= damage;
             int32_t& st = w.creature_part_get_stun(tw.part);
@@ -1272,10 +1266,10 @@ namespace daddy {
                 tw.c[size_t(ps)].pos += momentum / 0.04f * k;
                 tw.c[size_t(ps)].vel += momentum / 0.04f * k;
             }
-        } else if (x.hd) {
+        } else if (x.hd()) {
             stun(x, 200);
         }
-        if (x.mother)
+        if (x.mother())
             damage /= 4.f;
         // Creature.Violence
         if (part.chunk >= 0 && part.chunk < int32_t(x.n))

@@ -87,7 +87,7 @@ namespace daddy_graphics {
                 body_parts::push_out_of_terrain(bp, room, surface_friction);
         }
 
-        float bump_size(sys::game_state const& state, dcon::creature_id d) { return state.world.creature_get_payload(d).daddy.size_class ? 1.f : 0.8f; }
+        float bump_size(sys::game_state const& state, dcon::creature_id d) { return daddy::size_class(state, d) ? 1.f : 0.8f; }
 
         //
         // RopeGraphic (AlignAndConnect, Segment.Update) with
@@ -324,7 +324,7 @@ namespace daddy_graphics {
                     e.light = mathf::max(0.75f, e.light);
                 }
             }
-            if (w.creature_get_payload(d).daddy.size_class && !flag && ai.noise.count > 0) {
+            if (daddy::size_class(state, d) && !flag && ai.noise.count > 0) {
                 flag = true;
                 auto const& s = ai.noise.sources[r.range(0, ai.noise.count)];
                 for (uint32_t k = 0; k < n && flag; ++k)
@@ -550,7 +550,7 @@ namespace daddy_graphics {
     }
 
     vec3 body_color(sys::game_state const& state, dcon::creature_id d, palette const& pal) {
-        return state.world.creature_get_payload(d).daddy.hd ? hunter_color() : pal.black;
+        return daddy::hunter(state, d) ? hunter_color() : pal.black;
     }
 
     vec3 tube_color(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float float_pos, palette const& pal) {
@@ -580,8 +580,8 @@ namespace daddy_graphics {
     void create(sys::game_state& state, dcon::creature_id d) {
         auto& w = state.world;
         rw::unity_random r{w.creature_get_payload(d).daddy.graphics_seed};
-        bool const sc = w.creature_get_payload(d).daddy.size_class != 0;
-        bool const hd = w.creature_get_payload(d).daddy.hd != 0;
+        bool const sc = daddy::size_class(state, d);
+        bool const hd = daddy::hunter(state, d);
         int32_t const n = int32_t(daddy::chunk_count(state, d));
         int32_t const nt = w.creature_get_payload(d).daddy.tentacle_count;
         float const bs = bump_size(state, d);
@@ -717,7 +717,7 @@ namespace daddy_graphics {
                 bp.vel = vec2{0.f, 0.f};
             }
         }
-        if (w.creature_get_payload(d).daddy.hd) {
+        if (daddy::hunter(state, d)) {
             // HunterDummy.Reset
             auto& m = w.daddy_data_get_graphics(creature::daddy_data(w, d)).dummy;
             vec2 const c1 = w.body_chunk_get_pos(chunk(state, d, 1));
@@ -763,12 +763,12 @@ namespace daddy_graphics {
         uint32_t const n = std::min(daddy::chunk_count(state, d), daddy::max_chunks);
         for (uint32_t l = 0; l < n; ++l)
             eye_update(state, d, l, r);
-        if (w.creature_get_payload(d).daddy.hd)
+        if (daddy::hunter(state, d))
             dummy_update(state, d, room);
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         // digestLoop: Daddy_Digestion_LOOP for the big ones, Bro_ for the brother
         state.play_loop(sound::loop_key(sound::loop_owner::creature, uint32_t(d.index())),
-            w.creature_get_payload(d).daddy.size_class ? sound::sound_id::daddy_digestion_loop : sound::sound_id::bro_digestion_loop,
+            daddy::size_class(state, d) ? sound::sound_id::daddy_digestion_loop : sound::sound_id::bro_digestion_loop,
             room.id, middle, g.digest_loop_volume);
         g.digest_loop_volume = mathf::lerp(g.digest_loop_volume, mathf::pow(g.digesting, 0.8f), 0.2f);
         if (g.reaction_sound_delay > 0)
@@ -814,7 +814,7 @@ namespace daddy_graphics {
         g.feel_something_reaction_delay = w.creature_get_graphics_random(d).range(10, 40);
         // (Bro_React_To_Tentacle_Touch and Daddy_React_To_Tentacle_Touch have
         // no sound in sounds.txt)
-        if (!w.creature_get_payload(d).daddy.size_class)
+        if (!daddy::size_class(state, d))
             return;
         auto& e = g.eyes[pick_eye(state, d, feel_pos)];
         // Eye.ReactToCreature
@@ -825,7 +825,7 @@ namespace daddy_graphics {
 
     void react_to_noise(sys::game_state& state, dcon::creature_id d, uint16_t source, vec2 noise_pos, float strength) {
         auto& w = state.world;
-        if (!w.creature_get_payload(d).daddy.size_class)
+        if (!daddy::size_class(state, d))
             return;
         auto& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
         auto const& ai = w.daddy_data_get_ai(creature::daddy_data(w, d));
@@ -855,57 +855,77 @@ namespace daddy_graphics {
     }
 
     namespace {
-        // DaddyTubeGraphic.DrawSprite + ApplyPalette
-        void tube_cmds(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+        // DaddyTubeGraphic.DrawSprite + ApplyPalette: the tube's long mesh as
+        // one strip, then its bumps and their eyes
+        void tube_cmds(sys::game_state const& state, dcon::creature_id d, dcon::creature_part_id t, float alpha, palette const& pal,
+            std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip) {
             auto const& w = state.world;
             auto const segs = w.daddy_tube_get_segments(daddy::tube_data(w, t));
             uint32_t const ns = segs.size();
             if (ns < 2)
                 return;
-            bool const sc = w.creature_get_payload(d).daddy.size_class != 0;
-            bool const color_class = w.creature_get_payload(d).daddy.color_class != 0;
-            auto const kind = w.creature_part_get_payload(t).daddy_tube.kind;
+            auto const& tp = w.creature_part_get_payload(t).daddy_tube;
             vec3 const body = body_color(state, d, pal);
             vec3 const effect = w.creature_get_payload(d).daddy.effect_color;
-            float const rad = sc ? 2.f : 1.7f;
+            float const rad = daddy::size_class(state, d) ? 2.f : 1.7f;
+            // OnTubeEffectColorFac with the kind's constants taken once:
+            // pow(f, 1.5) * k along a leg, lerp(a, b, f) along a dangler
+            float k = 0.4f, fa = 0.f, fb = 0.f;
+            if (tp.kind == tube_kind::dead_leg)
+                k = 0.4f * (1.f - tp.deadness);
+            bool const dangler = tp.kind == tube_kind::dangler;
+            if (dangler) {
+                fa = tp.a_con.chunk < 0 ? mathf::pow(tp.a_con.leg_pos, 1.5f) * 0.4f : 0.f;
+                fb = tp.b_con.chunk < 0 ? mathf::pow(tp.b_con.leg_pos, 1.5f) * 0.4f : 0.f;
+            }
+            auto const color = [&](float f) { return mix(body, effect, dangler ? mathf::lerp(fa, fb, f) : mathf::pow(f, 1.5f) * k); };
             auto const at = [&](uint32_t i) { return rw::lerp(segs.at(i).last_pos, segs.at(i).pos, alpha); };
-            static thread_local std::vector<vec2> verts;
-            static thread_local std::vector<rw::vec4> cols;
-            verts.resize(size_t(ns) * 4);
-            cols.resize(size_t(ns) * 4);
+            // TriangleMesh.MakeLongMesh: four vertices per segment
+            uint32_t const nv = ns * 4;
+            sprites::draw_cmd c;
+            c.is_strip = true;
+            c.strip_first = uint32_t(strip.size());
+            c.strip_count = nv;
+            strip.resize(strip.size() + nv);
+            sprites::strip_vertex* sv = strip.data() + c.strip_first;
+            float const step = 1.f / float(nv - 1);
+            auto const put = [&](uint32_t i, vec2 p) {
+                vec3 const col = color(mathf::inverse_lerp(0.3f, 1.f, float(i) * step));
+                sv[i] = sprites::strip_vertex{p, rw::vec4{col.x, col.y, col.z, 1.f}};
+            };
             vec2 v = at(0);
             v += custom::dir_vec(at(1), v) * 1.f;
             for (uint32_t i = 0; i < ns; ++i) {
                 vec2 const v2 = at(i);
-                vec2 const a = custom::perpendicular_vector(rw::normalized(v - v2));
-                verts[i * 4] = v - a * rad;
-                verts[i * 4 + 1] = v + a * rad;
-                verts[i * 4 + 2] = v2 - a * rad;
-                verts[i * 4 + 3] = v2 + a * rad;
+                vec2 const a = custom::perpendicular_vector(rw::normalized(v - v2)) * rad;
+                put(i * 4, v - a);
+                put(i * 4 + 1, v + a);
+                put(i * 4 + 2, v2 - a);
+                put(i * 4 + 3, v2 + a);
                 v = v2;
             }
-            for (size_t i = 0; i < verts.size(); ++i) {
-                float const f = mathf::inverse_lerp(0.3f, 1.f, float(i) / float(verts.size() - 1));
-                vec3 const c = mix(body, effect, tube_effect_fac(state, d, t, f));
-                cols[i] = rw::vec4{c.x, c.y, c.z, 1.f};
-            }
-            sprites::long_mesh(out, verts.data(), cols.data(), verts.size());
+            out.push_back(c);
+            // the bumps' places along the tube, worked out once for both passes
             auto const bumps = w.daddy_tube_get_bumps(daddy::tube_data(w, t));
-            for (auto const& b : bumps) {
-                vec2 const p = on_tube_pos(state, t, b.pos, alpha);
+            static thread_local std::vector<vec2> places;
+            places.resize(bumps.size());
+            for (uint32_t i = 0; i < bumps.size(); ++i)
+                places[i] = on_tube_pos(state, t, bumps.at(i).pos, alpha);
+            for (uint32_t i = 0; i < bumps.size(); ++i) {
+                auto const& b = bumps.at(i);
                 float const s = mathf::lerp(2.f, 6.f, b.size) / 10.f;
-                sprites::add(out, sprites::sprite{"Circle20", p, 0.f, vec2{s, s}, vec2{0.5f, 0.5f}, mix(body, effect, tube_effect_fac(state, d, t, b.pos.y))});
+                sprites::add(out, sprites::sprite{"Circle20", places[i], 0.f, vec2{s, s}, vec2{0.5f, 0.5f}, color(b.pos.y)});
             }
             // the bumps' eyes: DaddyGraphics.TubeBumpColor
             vec3 eye = body;
-            if (color_class)
-                eye = kind == tube_kind::dead_leg ? effect * mathf::lerp(0.5f, 0.2f, w.creature_part_get_payload(t).daddy_tube.deadness) : effect;
-            for (auto const& b : bumps) {
+            if (w.creature_get_payload(d).daddy.color_class != 0)
+                eye = tp.kind == tube_kind::dead_leg ? effect * mathf::lerp(0.5f, 0.2f, tp.deadness) : effect;
+            for (uint32_t i = 0; i < bumps.size(); ++i) {
+                auto const& b = bumps.at(i);
                 if (b.eye_size <= 0.f)
                     continue;
-                vec2 const p = on_tube_pos(state, t, b.pos, alpha);
                 float const s = mathf::lerp(2.f, 6.f, b.size) * b.eye_size / 10.f;
-                sprites::add(out, sprites::sprite{"Circle20", p, 0.f, vec2{s, s}, vec2{0.5f, 0.5f}, eye});
+                sprites::add(out, sprites::sprite{"Circle20", places[i], 0.f, vec2{s, s}, vec2{0.5f, 0.5f}, eye});
             }
         }
 
@@ -970,17 +990,17 @@ namespace daddy_graphics {
         }
     }
 
-    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out) {
+    void build(sys::game_state const& state, dcon::creature_id d, float alpha, palette const& pal, std::vector<sprites::draw_cmd>& out, std::vector<sprites::strip_vertex>& strip) {
         auto const& w = state.world;
         auto const& g = w.daddy_data_get_graphics(creature::daddy_data(w, d));
-        bool const hd = w.creature_get_payload(d).daddy.hd != 0;
+        bool const hd = daddy::hunter(state, d);
         uint32_t const n = std::min(daddy::chunk_count(state, d), daddy::max_chunks);
         vec3 const body = body_color(state, d, pal);
         vec3 const eye_color = w.creature_get_payload(d).daddy.eye_color;
         float const bump = bump_size(state, d);
         // InitiateSprites' order: the legs, dead legs and danglers, then the eyes
         for (uint32_t i = 0; i < daddy::tube_count(state, d); ++i)
-            tube_cmds(state, d, daddy::tube_of(state, d, i), alpha, pal, out);
+            tube_cmds(state, d, daddy::tube_of(state, d, i), alpha, pal, out, strip);
         // EyePushOutFromPos: the body's centre of mass between ticks
         vec2 middle{0.f, 0.f};
         float total = 0.f;
@@ -1028,15 +1048,7 @@ namespace daddy_graphics {
                         float const d2 = num2 * (jj < 3 ? 0.5f : 1.f) * (num5 % 2 == 0 ? 1.f : -1.f) * mathf::lerp(1.f, 2.5f, num3);
                         verts[num5] = pos + bulge(v * dd + a2 * d2, a, e.rad);
                     }
-                for (int t = 0; t < 8; ++t) {
-                    sprites::draw_cmd c;
-                    c.is_triangle = true;
-                    c.tri[0] = verts[t];
-                    c.tri[1] = verts[t + 1];
-                    c.tri[2] = verts[t + 2];
-                    c.color = render;
-                    out.push_back(c);
-                }
+                sprites::long_mesh(out, strip, verts, 10, render);
             }
             if (hd) {
                 float const s = 0.0625f * e.rad * 2.f;

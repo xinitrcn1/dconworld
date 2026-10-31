@@ -25,7 +25,11 @@ namespace daddy {
         grandmother,
         hunter,
     };
-    inline constexpr uint32_t variant_count = 4;
+    inline constexpr uint32_t variant_count = 5;
+    // what the constructor sets from the template: SizeClass (the Daddy and
+    // the Mothers) and HDmode
+    constexpr bool size_class(variant v) noexcept { return v != variant::brother && v != variant::hunter; }
+    constexpr bool hunter(variant v) noexcept { return v == variant::hunter; }
 
     // DaddyAI.Behavior
     enum class behavior : uint8_t {
