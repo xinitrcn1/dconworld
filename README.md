@@ -6,9 +6,17 @@ Heavily based off https://codeberg.org/Esther1024/anthiel
 
 ## Building
 
-Requires CMake >= 3.28, a C++20 compiler, OpenGL and SDL3 (system packages:
-`SDL3-devel`, the Mesa GL headers and `libX11-devel`). DataContainer, TBB, glm,
-GLEW and stb are fetched by CMake on the first configure (`deps/`, like anthiel).
+Requires CMake >= 3.28, a C++20 compiler, SDL3, a Vulkan 1.3 driver and the
+Vulkan SDK bits (system packages: `SDL3-devel`, `vulkan-loader-devel` or
+`libvulkan-dev`, and `glslang`, whose `glslangValidator` compiles the shaders).
+DataContainer, TBB, glm and stb are fetched by CMake on the first configure
+(`deps/`, like anthiel).
+
+The GLSL shaders (`src/shaders/`) are compiled to SPIR-V at build time and
+wrapped into C sources with their headers (`build/generated/shaders/`, by
+`cmake/spirv_to_c.cmake`), so the bytecode is linked in but never committed.
+Set `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation` to run under the
+validation layer.
 
 ```sh
 cmake -S . -B build -G Ninja
@@ -405,7 +413,7 @@ come.
 | --- | --- |
 | `src/gamestate.hpp` | `sys::game_state`: the `dcon::data_container world` plus non-SoA globals (constants, strings, lookup maps, filesystem) |
 | `src/dcon_generated.txt` | DataContainer definitions for every object (regions, rooms, tiles, cameras, exits, shortcuts, nodes, physical objects, body chunks, connections, players) with their size bounds |
-| `deps/` | FetchContent scripts for DataContainer, TBB, glm, GLEW, stb (images, stb_vorbis), dr_libs (dr_mp3, for mod songs) and vgmstream's FMOD Vorbis setup header table (one pinned, hash checked file) |
+| `deps/` | FetchContent scripts for DataContainer, TBB, glm, stb (images, stb_vorbis), dr_libs (dr_mp3, for mod songs) and vgmstream's FMOD Vorbis setup header table (one pinned, hash checked file) |
 | `assets/` | our own assets, copied next to the binary: anthiel's VGA font, the room shaders (`shaders/`, from anthiel) and the slugcat sprite atlas (`slugcat.png` + `slugcat.txt`) |
 | `tools/pack_dms.py` | packs DressMySlugcat template atlases into `assets/slugcat.*` (strips the guide markers, transcribes the frames to plain text) |
 | `src/player_graphics.*` | simplified `PlayerGraphics` port: head/legs/tail body parts and vanilla sprite selection |
@@ -451,7 +459,9 @@ come.
 | `src/daddy_graphics.*` | `DaddyGraphics`: leg graphics (`RopeGraphic`), dead legs, danglers, bumps, the eyes, the Hunter's dummy, `DrawSprites` with the game's elements |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
 | `src/pathing.*` | on demand distance fields, cached per room |
-| `src/render.*` | OpenGL 3.3 (GLEW, glm) renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
+| `src/render.*` | renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
+| `src/gpu.*` | the Vulkan 1.3 layer under it: textures, the pipelines of `src/shaders/`, a frame drawn offscreen (read back, copied for the effects, blitted to the swapchain) |
+| `src/shaders/` | GLSL, compiled to SPIR-V C sources at build time |
 | `src/selftest.*` | scripted movement scenarios, the thread count determinism check, the fuzzer and the bench |
 | `og/` | decompiled game source used as the reference (not tracked) |
 
@@ -808,7 +818,7 @@ its trip). Holding the ability key toggles the
 camouflage after a moment (drawn as a plain fade, not vanilla's mask), with
 a charge that runs out, and from ripple level 3 lifts the Watcher off the
 ground. The tears and the screen wide transition are GLSL shaders of our own
-(`assets/shaders/warp_*`) going for the vanilla look; the HUD shows a karma
+(`src/shaders/warp_*`) going for the vanilla look; the HUD shows a karma
 meter, or for the Watcher a ripple meter with the camouflage charge. Not
 ported: warp sounds, the Void Weaver sealing, warp fatigue, bad warps,
 player made dynamic warps, ripple spawn and the ripple layer's other effects.
@@ -818,7 +828,7 @@ player made dynamic warps, ripple spawn and the ripple layer's other effects.
 CustomDecals (`decals/<name>.png`) are stretched over their quads as grid
 meshes and painted onto the level only where its depth lies within the
 decal's range (never on open sky), split between the passes behind and in
-front of the sprites like the level (`assets/shaders/decal.*`), with the
+front of the sprites like the level (`src/shaders/decal.*`), with the
 opacity of their corners blended across them and broken up by the decal's
 noise. Their per corner smudge isn't used yet.
 
@@ -838,7 +848,7 @@ with three swells of different lengths and directions (from the room's wave
 settings) crossing over it. It is drawn smooth (Catmull-Rom between nodes) as
 a 3D band going back from the front edge, shaded by the slopes with the
 palette's surface and shine colours, over a body that refracts and tints the
-scene behind it (`assets/shaders/water.frag`): the light fades with depth,
+scene behind it (`src/shaders/water.frag`): the light fades with depth,
 and the current's shimmer and caustics are domain warped hashed noise, so
 they never repeat and still play down at the floor of the deepest pools.
 Bodies entering or leaving the water push the surface and splash; moving

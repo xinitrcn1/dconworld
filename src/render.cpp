@@ -4,10 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
-#include <GL/glew.h>
 #include <SDL3/SDL.h>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #include "stb_image.h"
@@ -78,42 +76,68 @@ namespace render {
         constexpr uint32_t col_gate_door = rgba(22, 20, 26);
         constexpr uint32_t col_gate_door_edge = rgba(48, 44, 52);
 
-        char const* const vertex_src = R"(#version 330 core
-layout(location = 0) in vec2 a_pos;
-layout(location = 1) in vec4 a_color;
-layout(location = 2) in vec2 a_uv;
-uniform mat4 u_proj;
-out vec4 v_color;
-out vec2 v_uv;
-void main() {
-    v_color = a_color;
-    v_uv = a_uv;
-    gl_Position = u_proj * vec4(a_pos, 0.0, 1.0);
-}
-)";
-        char const* const fragment_src = R"(#version 330 core
-in vec4 v_color;
-in vec2 v_uv;
-uniform sampler2D u_texture;
-uniform int u_textured;
-out vec4 frag_color;
-void main() {
-    frag_color = u_textured != 0 ? v_color * texture(u_texture, v_uv) : v_color;
-}
-)";
+        // The uniform blocks (std140) of src/shaders, see their declarations there
+        struct flat_uniforms {
+            glm::mat4 proj;
+            int32_t textured;
+        };
+        struct room_uniforms {
+            glm::mat4 proj;
+            glm::vec4 lighting_data[max_lights];
+            glm::vec4 lighting_pos[max_lights]; // vec2 u_lighting_pos[]: a 16 byte stride
+            glm::vec4 replace_effect_color_a;
+            glm::vec4 replace_effect_color_b;
+            glm::ivec2 effect_colors;
+            glm::ivec2 camera_view;
+            int32_t index;
+            int32_t camera_index;
+            float night_time;
+            float fog_factor;
+            float grime_factor;
+            float rooftop_blend;
+            float timer;
+            int32_t pass;
+        };
+        static_assert(offsetof(room_uniforms, replace_effect_color_a) == 576 && offsetof(room_uniforms, pass) == 652);
+        struct decal_uniforms {
+            glm::mat4 proj;
+            glm::vec2 cam_origin;
+            float from, to;
+            int32_t index;
+            int32_t camera_index;
+            int32_t pass;
+        };
+        struct warp_tear_uniforms {
+            glm::mat4 proj;
+            glm::vec2 screen;
+            float radius_px, open, fade, time, seed, variant, ghost;
+        };
+        struct warp_screen_uniforms {
+            glm::mat4 proj;
+            glm::vec2 screen, center;
+            float progress, time, variant;
+            float vignette, darkness, spiral_gap, swirl, lensing, noise, twist, agitation;
+        };
+        struct water_uniforms {
+            glm::mat4 proj;
+            glm::vec3 shallow;
+            float time;
+            glm::vec3 deep;
+            float zoom;
+            glm::vec3 shine;
+            float pad;
+            glm::vec2 screen;
+        };
+        static_assert(offsetof(water_uniforms, time) == 76 && offsetof(water_uniforms, screen) == 112);
 
-        GLuint compile(GLenum type, char const* src) {
-            GLuint const sh = glCreateShader(type);
-            glShaderSource(sh, 1, &src, nullptr);
-            glCompileShader(sh);
-            GLint ok = 0;
-            glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-            if (!ok) {
-                char log[512];
-                glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
-                reports::add_log(std::string{"shader: "} + log);
-            }
-            return sh;
+        // the batch as the vertices of the next draws
+        void upload(state& r) {
+            gpu::upload_vertices(*r.gpu, r.batch.data(), r.batch.size());
+        }
+        // a range of the uploaded batch with the flat shader, textured with `tex` (0: plain colours)
+        void draw_flat_range(state& r, glm::mat4 const& proj, uint32_t tex, size_t first, size_t count) {
+            flat_uniforms const u{proj, tex != 0 ? 1 : 0};
+            gpu::draw(*r.gpu, gpu::pipeline::flat, &u, sizeof(u), {tex}, first, count);
         }
 
         // Batch helpers, all in room pixel coordinates
@@ -171,65 +195,20 @@ void main() {
             reports::add_log(std::string{"SDL_Init: "} + SDL_GetError());
             return false;
         }
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-        SDL_WindowFlags flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+        // a hidden window (headless screenshots) needs no surface: frames are only read back
+        SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
         if (hidden)
             flags |= SDL_WINDOW_HIDDEN;
+        else
+            flags |= SDL_WINDOW_VULKAN;
         r.window = SDL_CreateWindow(title, width, height, flags);
         if (r.window == nullptr) {
             reports::add_log(std::string{"SDL_CreateWindow: "} + SDL_GetError());
             return false;
         }
-        r.context = SDL_GL_CreateContext(r.window);
-        if (r.context == nullptr) {
-            reports::add_log(std::string{"SDL_GL_CreateContext: "} + SDL_GetError());
+        r.gpu = gpu::create(r.window, !hidden);
+        if (r.gpu == nullptr)
             return false;
-        }
-        SDL_GL_MakeCurrent(r.window, r.context);
-        SDL_GL_SetSwapInterval(1);
-
-        glewExperimental = GL_TRUE;
-        GLenum const err = glewInit();
-        // a GLX build of GLEW reports "no GLX display" under EGL (Wayland,
-        // offscreen) even though every GL entry point was loaded
-        if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
-            reports::add_log(std::string{"glewInit: "} + reinterpret_cast<char const*>(glewGetErrorString(err)));
-            return false;
-        }
-        if (glCreateShader == nullptr) {
-            reports::add_log("OpenGL 3.3 entry points missing");
-            return false;
-        }
-
-        GLuint const vs = compile(GL_VERTEX_SHADER, vertex_src);
-        GLuint const fs = compile(GL_FRAGMENT_SHADER, fragment_src);
-        r.program = glCreateProgram();
-        glAttachShader(r.program, vs);
-        glAttachShader(r.program, fs);
-        glLinkProgram(r.program);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        r.u_proj = glGetUniformLocation(r.program, "u_proj");
-        r.u_textured = glGetUniformLocation(r.program, "u_textured");
-        glUseProgram(r.program);
-        glUniform1i(glGetUniformLocation(r.program, "u_texture"), 0);
-
-        glGenVertexArrays(1, &r.vao);
-        glGenBuffers(1, &r.vbo);
-        glBindVertexArray(r.vao);
-        glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(vertex), reinterpret_cast<void*>(offsetof(vertex, x)));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(vertex), reinterpret_cast<void*>(offsetof(vertex, rgba)));
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(vertex), reinterpret_cast<void*>(offsetof(vertex, u)));
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         r.width = width;
         r.height = height;
         return true;
@@ -254,39 +233,16 @@ void main() {
                 reports::add_log("can't decode \"" + f.path + "\": " + stbi_failure_reason());
             return out.px != nullptr;
         }
-        GLuint make_texture_2d(image const& im, GLenum format, GLenum internal_format) {
-            GLuint tex = 0;
-            glGenTextures(1, &tex);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GLint(internal_format), im.w, im.h, 0, format, GL_UNSIGNED_BYTE, im.px);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // `channels`: what `im` was loaded with (3: RGB, 4: RGBA)
+        uint32_t make_texture_2d(state& r, image const& im, int channels, gpu::sampler samp = gpu::sampler::nearest_clamp) {
+            uint32_t const tex = gpu::create_texture(*r.gpu, im.w, im.h, 0, samp);
+            gpu::upload(*r.gpu, tex, 0, im.px, channels);
             return tex;
         }
         std::string read_text(layered_fs::filesystem const& fs, layered_fs::file const& f) {
             auto const of = f.open_file(fs);
             return of ? std::string{of->to_string_view()} : std::string{};
         }
-        GLuint link(GLuint vs, GLuint fs) {
-            GLuint const prog = glCreateProgram();
-            glAttachShader(prog, vs);
-            glAttachShader(prog, fs);
-            glLinkProgram(prog);
-            GLint ok = 0;
-            glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-            if (!ok) {
-                char log[512];
-                glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-                reports::add_log(std::string{"link: "} + log);
-            }
-            glDeleteShader(vs);
-            glDeleteShader(fs);
-            return prog;
-        }
-
         // anthiel's VGA font: 9x16 cells, 32 per row, starting at '!'
         void load_font(state& r, layered_fs::filesystem const& fs) {
             image im;
@@ -294,79 +250,9 @@ void main() {
                 reports::add_log("can't find vgafont.png, the HUD is disabled");
                 return;
             }
-            r.font_texture = make_texture_2d(im, GL_RGBA, GL_RGBA8);
+            r.font_texture = make_texture_2d(r, im, 4);
             r.font_width = im.w;
             r.font_height = im.h;
-        }
-
-        // room shader (assets/shaders/room.vert/frag, from anthiel)
-        void load_room_shader(state& r, layered_fs::filesystem const& fs) {
-            auto const dir = fs.get_root().get_single_subdir("shaders");
-            auto const vs_src = read_text(fs, dir.get_single_file("room.vert"));
-            auto const fs_src = read_text(fs, dir.get_single_file("room.frag"));
-            if (vs_src.empty() || fs_src.empty()) {
-                reports::add_log("missing shaders/room.vert or room.frag, rooms are drawn as geometry only");
-                return;
-            }
-            std::string const prelude = "#version 330 core\n#define MAX_LIGHTS " + std::to_string(max_lights) + "\n";
-            r.room_program = link(compile(GL_VERTEX_SHADER, (prelude + vs_src).c_str()), compile(GL_FRAGMENT_SHADER, (prelude + fs_src).c_str()));
-            auto& u = r.room_uniforms;
-            auto const loc = [&](char const* n) { return glGetUniformLocation(r.room_program, n); };
-            u.proj = loc("u_proj");
-            u.palette = loc("u_index");
-            u.camera_index = loc("u_camera_index");
-            u.night_time = loc("u_night_time");
-            u.fog_factor = loc("u_fog_factor");
-            u.effect_colors = loc("u_effect_colors");
-            u.grime = loc("u_grime_factor");
-            u.rooftop_blend = loc("u_rooftop_blend");
-            u.timer = loc("u_timer");
-            u.lighting_data = loc("u_lighting_data");
-            u.lighting_pos = loc("u_lighting_pos");
-            u.replace_a = loc("u_replace_effect_color_a");
-            u.replace_b = loc("u_replace_effect_color_b");
-            u.pass = loc("u_pass");
-            glUseProgram(r.room_program);
-            glUniform1i(loc("u_texture0"), 0);
-            glUniform1i(loc("u_texture1"), 1);
-            glUniform1i(loc("u_texture2"), 2);
-        }
-
-        // the warp shaders (assets/shaders/warp.vert, warp_common.glsl, warp_tear.frag, warp_screen.frag)
-        void load_warp_shaders(state& r, layered_fs::filesystem const& fs) {
-            auto const dir = fs.get_root().get_single_subdir("shaders");
-            auto const vs_src = read_text(fs, dir.get_single_file("warp.vert"));
-            auto const common = read_text(fs, dir.get_single_file("warp_common.glsl"));
-            auto const tear = read_text(fs, dir.get_single_file("warp_tear.frag"));
-            auto const screen = read_text(fs, dir.get_single_file("warp_screen.frag"));
-            if (vs_src.empty() || common.empty() || tear.empty() || screen.empty()) {
-                reports::add_log("missing warp shaders, warps are drawn without their effects");
-                return;
-            }
-            std::string const prelude = "#version 330 core\n";
-            auto const make = [&](std::string const& frag) {
-                GLuint const prog = link(compile(GL_VERTEX_SHADER, (prelude + vs_src).c_str()), compile(GL_FRAGMENT_SHADER, (prelude + common + frag).c_str()));
-                glUseProgram(prog);
-                glUniform1i(glGetUniformLocation(prog, "u_scene"), 0);
-                return prog;
-            };
-            r.warp_tear_program = make(tear);
-            r.warp_screen_program = make(screen);
-            // the water body reuses the warp vertex shader (a_uv: room x, depth)
-            auto const water_src = read_text(fs, dir.get_single_file("water.frag"));
-            if (!water_src.empty())
-                r.water_program = make(water_src);
-            auto const dvs = read_text(fs, dir.get_single_file("decal.vert"));
-            auto const dfs = read_text(fs, dir.get_single_file("decal.frag"));
-            if (!dvs.empty() && !dfs.empty()) {
-                r.decal_program = link(compile(GL_VERTEX_SHADER, (prelude + dvs).c_str()), compile(GL_FRAGMENT_SHADER, (prelude + dfs).c_str()));
-                glUseProgram(r.decal_program);
-                glUniform1i(glGetUniformLocation(r.decal_program, "u_level"), 0);
-                glUniform1i(glGetUniformLocation(r.decal_program, "u_palette"), 1);
-                glUniform1i(glGetUniformLocation(r.decal_program, "u_decal"), 2);
-            } else {
-                reports::add_log("missing shaders/decal.vert or decal.frag, decals are not drawn");
-            }
         }
 
         // every palette object becomes one layer of a texture array (like
@@ -376,14 +262,7 @@ void main() {
             auto const dir = s.fs.get_root().get_single_subdir("palettes");
             uint32_t const count = std::max<uint32_t>(1, w.palette_size());
             r.palette_pixels.assign(size_t(count) * palette_width * palette_height * 3, 0);
-            glGenTextures(1, &r.palette_texarray);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, r.palette_texarray);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, palette_width, palette_height, GLsizei(count), 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+            r.palette_texarray = gpu::create_texture(*r.gpu, palette_width, palette_height, int(count), gpu::sampler::nearest_repeat);
             w.for_each_palette([&](dcon::palette_id pid) {
                 auto const number = w.palette_get_number(pid);
                 image im;
@@ -396,11 +275,11 @@ void main() {
                     return;
                 }
                 std::memcpy(r.palette_pixels.data() + size_t(pid.index()) * palette_width * palette_height * 3, im.px, size_t(palette_width) * palette_height * 3);
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, pid.index(), palette_width, palette_height, 1, GL_RGB, GL_UNSIGNED_BYTE, im.px);
+                gpu::upload(*r.gpu, r.palette_texarray, pid.index(), im.px, 3);
             });
             image fx;
             if (load_image(s.fs, dir.get_single_file("effectcolors.png"), 3, fx))
-                r.effects_texture = make_texture_2d(fx, GL_RGB, GL_RGB8);
+                r.effects_texture = make_texture_2d(r, fx, 3);
             else
                 reports::add_log("missing palettes/effectcolors.png");
         }
@@ -413,7 +292,7 @@ void main() {
                 reports::add_log("missing slugcat.png, slugcats are drawn as circles");
                 return;
             }
-            r.slugcat_texture = make_texture_2d(im, GL_RGBA, GL_RGBA8);
+            r.slugcat_texture = make_texture_2d(r, im, 4);
             r.slugcat_width = im.w;
             r.slugcat_height = im.h;
             std::string const txt = read_text(fs, root.get_single_file("slugcat.txt"));
@@ -571,14 +450,12 @@ void main() {
                 parse_texturepacker(sheets[i], 0.f, float(oy), r.game_frames);
                 oy += im.height;
             }
-            glGenTextures(1, &r.game_texture);
-            glBindTexture(GL_TEXTURE_2D, r.game_texture);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            r.game_texture = gpu::create_texture(*r.gpu, width, height, 0, gpu::sampler::nearest_clamp);
+            if (r.game_texture == 0) {
+                r.game_frames.clear();
+                return;
+            }
+            gpu::upload(*r.gpu, r.game_texture, 0, px.data(), 4);
             r.game_width = width;
             r.game_height = height;
             reports::add_log("Unity data: " + std::to_string(images.size()) + " atlases, " + std::to_string(r.game_frames.size()) + " sprites from " + r.unity_dir);
@@ -592,10 +469,8 @@ void main() {
 
     void load_assets(state& r, sys::game_state const& s) {
         load_font(r, s.fs);
-        load_room_shader(r, s.fs);
         load_palettes(r, s);
         load_slugcat_atlas(r, s.fs);
-        load_warp_shaders(r, s.fs);
         load_game_atlases(r, s.fs);
     }
 
@@ -605,13 +480,11 @@ void main() {
             return;
         auto const& w = s.world;
         if (r.room_texture != 0) {
-            glDeleteTextures(1, &r.room_texture);
+            gpu::destroy_texture(*r.gpu, r.room_texture);
             r.room_texture = 0;
         }
         r.room_texture_room = rid;
         r.room_texture_layers = 0;
-        if (r.room_program == 0)
-            return;
         std::string const name{s.to_string_view(w.room_get_name(rid))};
         auto const region = w.room_get_region_from_region_membership(rid);
         std::string const region_name{s.to_string_view(w.region_get_name(region))};
@@ -621,14 +494,9 @@ void main() {
         uint32_t const cams = uint32_t(range.second - range.first);
         if (cams == 0)
             return;
-        glGenTextures(1, &r.room_texture);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, r.room_texture);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, camera_width, camera_height, GLsizei(cams), 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        r.room_texture = gpu::create_texture(*r.gpu, camera_width, camera_height, int(cams), gpu::sampler::nearest_clamp);
+        if (r.room_texture == 0)
+            return;
         uint32_t loaded = 0;
         for (uint32_t i = 0; i < cams; ++i) {
             image im;
@@ -641,25 +509,15 @@ void main() {
                 reports::add_log("unexpected camera image size for \"" + f.path + "\"");
                 continue;
             }
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, GLint(i), camera_width, camera_height, 1, GL_RGB, GL_UNSIGNED_BYTE, im.px);
+            gpu::upload(*r.gpu, r.room_texture, int(i), im.px, 3);
             ++loaded;
         }
         r.room_texture_layers = loaded == cams ? cams : 0;
     }
 
     void shutdown(state& r) {
-        if (r.context != nullptr) {
-            glDeleteBuffers(1, &r.vbo);
-            glDeleteVertexArrays(1, &r.vao);
-            glDeleteProgram(r.program);
-            glDeleteTextures(1, &r.font_texture);
-            glDeleteTextures(1, &r.palette_texarray);
-            glDeleteTextures(1, &r.effects_texture);
-            glDeleteTextures(1, &r.slugcat_texture);
-            glDeleteTextures(1, &r.room_texture);
-            glDeleteProgram(r.room_program);
-            SDL_GL_DestroyContext(r.context);
-        }
+        // (the textures go with the device)
+        gpu::destroy(r.gpu);
         if (r.window != nullptr)
             SDL_DestroyWindow(r.window);
         SDL_Quit();
@@ -671,11 +529,6 @@ void main() {
     }
 
     namespace {
-        void upload_and_draw(state& r, size_t first, size_t count) {
-            if (count > 0)
-                glDrawArrays(GL_TRIANGLES, GLint(first), GLsizei(count));
-        }
-
         // Debug view of the collision geometry
         void build_geometry(state& r, sys::game_state const& s, world::room_view const& room, camera const& cam, float view_w, float view_h, uint8_t alpha) {
             auto const& world = s.world;
@@ -1985,12 +1838,16 @@ void main() {
         // three chunks (LizardGraphics.DrawSprites): two alike win, else the
         // average. The frame so far (the level, the background) is read back
         void white_pick_up(state const& r, sys::game_state const& s, dcon::creature_id l, camera const& cam, lizard_graphics::palette& pal) {
+            // (one read back serves every white lizard: nothing is drawn in between)
+            uint8_t const* frame = gpu::read_back(*r.gpu);
+            if (frame == nullptr)
+                return;
             rw::vec3 c[3];
             for (uint32_t i = 0; i < 3; ++i) {
                 vec2 const p = (s.world.body_chunk_get_pos(lizard::chunk(s, l, i)) - cam.pos) * cam.zoom;
-                uint8_t px[4] = {0, 0, 0, 0};
+                // p is from the bottom left, the rows from the top
                 int const x = std::clamp(int(p.x), 0, r.width - 1), y = std::clamp(int(p.y), 0, r.height - 1);
-                glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+                uint8_t const* px = frame + (size_t(r.height - 1 - y) * size_t(r.width) + size_t(x)) * 4;
                 c[i] = rw::vec3{float(px[0]) / 255.f, float(px[1]) / 255.f, float(px[2]) / 255.f};
             }
             if (c[0] == c[1])
@@ -2593,24 +2450,6 @@ void main() {
             }
         }
 
-        // copies the frame drawn so far into scene_texture (Unity's GrabPass)
-        void grab_scene(state& r) {
-            if (r.scene_texture == 0)
-                glGenTextures(1, &r.scene_texture);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
-            if (r.scene_width != r.width || r.scene_height != r.height) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, r.width, r.height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                r.scene_width = r.width;
-                r.scene_height = r.height;
-            }
-            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, r.width, r.height);
-        }
-
         // the far side palette of a warp: ripple warps, limited use (bad) warps, the Outer Rim's
         float warp_variant(sys::game_state const& s, dcon::warp_placed_id placed, dcon::room_id room) {
             auto const& w = s.world;
@@ -2627,9 +2466,7 @@ void main() {
         // WarpTear for every warp point of the room
         void draw_warp_tears(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
             auto const& w = s.world;
-            if (r.warp_tear_program == 0)
-                return;
-            bool grabbed = false;
+            uint32_t scene = 0;
             w.room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
                 auto const wp = w.warp_point_location_get_point(l);
                 dcon::warp_placed_id const placed = w.warp_point_get_placed(wp);
@@ -2642,10 +2479,8 @@ void main() {
                 float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
                 if (c.x + rad * 0.5f < cam.pos.x || c.x - rad * 0.5f > cam.pos.x + view_w || c.y + rad * 0.5f < cam.pos.y || c.y - rad * 0.5f > cam.pos.y + view_h)
                     return;
-                if (!grabbed) {
-                    grab_scene(r);
-                    grabbed = true;
-                }
+                if (scene == 0)
+                    scene = gpu::grab_scene(*r.gpu);
                 float const open = mathf::lerp(w.warp_point_get_last_open(wp), w.warp_point_get_open(wp), alpha);
                 r.batch.clear();
                 vertex const bl{c.x - rad, c.y - rad, 0xFFFFFFFFu, -1.f, -1.f};
@@ -2653,22 +2488,18 @@ void main() {
                 vertex const tr{c.x + rad, c.y + rad, 0xFFFFFFFFu, 1.f, 1.f};
                 vertex const tl{c.x - rad, c.y + rad, 0xFFFFFFFFu, -1.f, 1.f};
                 r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
-                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-                GLuint const prog = r.warp_tear_program;
-                glUseProgram(prog);
-                auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
-                glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
-                glUniform2f(loc("u_screen"), float(r.width), float(r.height));
-                glUniform1f(loc("u_radius_px"), rad * cam.zoom);
-                glUniform1f(loc("u_open"), open);
-                glUniform1f(loc("u_fade"), fade);
-                glUniform1f(loc("u_time"), seconds);
-                glUniform1f(loc("u_seed"), float(placed.index() % 97) * 0.173f);
-                glUniform1f(loc("u_variant"), warp_variant(s, placed, room.id));
-                glUniform1f(loc("u_ghost"), warps::other_layer(s, wp) ? 1.f : 0.f);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, r.scene_texture);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
+                upload(r);
+                warp_tear_uniforms u{};
+                u.proj = proj;
+                u.screen = glm::vec2{float(r.width), float(r.height)};
+                u.radius_px = rad * cam.zoom;
+                u.open = open;
+                u.fade = fade;
+                u.time = seconds;
+                u.seed = float(placed.index() % 97) * 0.173f;
+                u.variant = warp_variant(s, placed, room.id);
+                u.ghost = warps::other_layer(s, wp) ? 1.f : 0.f;
+                gpu::draw(*r.gpu, gpu::pipeline::warp_tear, &u, sizeof(u), {scene}, 0, 6);
             });
         }
 
@@ -2676,14 +2507,14 @@ void main() {
         // then out of the destination's
         void draw_warp_screen(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds) {
             auto const& seq = s.warp;
-            if (!seq.active || r.warp_screen_program == 0)
+            if (!seq.active)
                 return;
             bool const second_half = seq.transferred;
             if ((second_half ? seq.to_room : seq.from_room) != room.id)
                 return;
             float const progress = mathf::lerp(seq.last_progress, seq.progress, alpha) / seq.duration;
             vec2 const at = second_half ? seq.to_pos : seq.from_pos;
-            grab_scene(r);
+            uint32_t const scene = gpu::grab_scene(*r.gpu);
             float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
             r.batch.clear();
             vertex const bl{cam.pos.x, cam.pos.y, 0xFFFFFFFFu, 0.f, 0.f};
@@ -2691,28 +2522,24 @@ void main() {
             vertex const tr{cam.pos.x + view_w, cam.pos.y + view_h, 0xFFFFFFFFu, 1.f, 1.f};
             vertex const tl{cam.pos.x, cam.pos.y + view_h, 0xFFFFFFFFu, 0.f, 1.f};
             r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            GLuint const prog = r.warp_screen_program;
-            glUseProgram(prog);
-            auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
-            glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform2f(loc("u_screen"), float(r.width), float(r.height));
-            glUniform2f(loc("u_center"), (at.x - cam.pos.x) * cam.zoom, (at.y - cam.pos.y) * cam.zoom);
-            glUniform1f(loc("u_progress"), progress);
-            glUniform1f(loc("u_time"), seconds);
-            glUniform1f(loc("u_variant"), seq.ripple ? 1.f : 0.f);
-            auto const knob = [&](char const* n, uint8_t v) { glUniform1f(loc(n), float(v) / 15.f); };
-            knob("u_vignette", seq.effect.vignette);
-            knob("u_darkness", seq.effect.darkness);
-            knob("u_spiral_gap", seq.effect.spiral_gap);
-            knob("u_swirl", seq.effect.swirl);
-            knob("u_lensing", seq.effect.lensing);
-            knob("u_noise", seq.effect.noise);
-            knob("u_twist", seq.effect.twist);
-            knob("u_agitation", seq.effect.agitation);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            upload(r);
+            auto const knob = [](uint8_t v) { return float(v) / 15.f; };
+            warp_screen_uniforms u{};
+            u.proj = proj;
+            u.screen = glm::vec2{float(r.width), float(r.height)};
+            u.center = glm::vec2{(at.x - cam.pos.x) * cam.zoom, (at.y - cam.pos.y) * cam.zoom};
+            u.progress = progress;
+            u.time = seconds;
+            u.variant = seq.ripple ? 1.f : 0.f;
+            u.vignette = knob(seq.effect.vignette);
+            u.darkness = knob(seq.effect.darkness);
+            u.spiral_gap = knob(seq.effect.spiral_gap);
+            u.swirl = knob(seq.effect.swirl);
+            u.lensing = knob(seq.effect.lensing);
+            u.noise = knob(seq.effect.noise);
+            u.twist = knob(seq.effect.twist);
+            u.agitation = knob(seq.effect.agitation);
+            gpu::draw(*r.gpu, gpu::pipeline::warp_screen, &u, sizeof(u), {scene}, 0, 6);
         }
 
         // ring of `n` arc pieces from angle a0 to a1 (radians, clockwise from the top in screen space)
@@ -2781,11 +2608,8 @@ void main() {
                 p.circle(c, 2.5f, rgba(240, 236, 220));
             }
             glm::mat4 const proj = glm::ortho(0.f, float(r.width), float(r.height), 0.f);
-            glUseProgram(r.program);
-            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform1i(r.u_textured, 0);
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
+            upload(r);
+            draw_flat_range(r, proj, 0, 0, r.batch.size());
         }
 
         uint32_t decal_texture(state& r, sys::game_state const& s, std::string const& name) {
@@ -2795,10 +2619,7 @@ void main() {
             state::decal_texture t;
             image im;
             if (load_image(s.fs, s.fs.get_root().get_single_subdir("decals").get_single_file(name + ".png"), 4, im)) {
-                t.texture = make_texture_2d(im, GL_RGBA, GL_RGBA8);
-                glBindTexture(GL_TEXTURE_2D, t.texture);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                t.texture = make_texture_2d(r, im, 4, gpu::sampler::linear_clamp);
             } else {
                 reports::add_log("missing decal \"" + name + "\"");
             }
@@ -2812,12 +2633,9 @@ void main() {
         // camera image under it
         void draw_decals(state& r, sys::game_state const& s, world::room_view const& room, glm::mat4 const& proj, int pass, std::vector<vec2> const& cams) {
             auto const& w = s.world;
-            if (r.decal_program == 0 || cams.empty())
+            if (cams.empty())
                 return;
             auto const palette = w.room_get_palette(room.id).id;
-            GLuint const prog = r.decal_program;
-            auto const loc = [&](char const* n) { return glGetUniformLocation(prog, n); };
-            bool set_up = false;
             w.room_for_each_decal_location(room.id, [&](dcon::decal_location_id l) {
                 auto const d = w.decal_location_get_decal(l);
                 uint32_t const tex = decal_texture(r, s, std::string{s.to_string_view(w.decal_placed_get_image(d))});
@@ -2882,32 +2700,22 @@ void main() {
                     lo = glm::min(lo, p);
                     hi = glm::max(hi, p);
                 }
-                if (!set_up) {
-                    set_up = true;
-                    glUseProgram(prog);
-                    glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
-                    glUniform1i(loc("u_index"), palette ? palette.index() : 0);
-                    glUniform1i(loc("u_pass"), pass);
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D_ARRAY, r.room_texture);
-                    glActiveTexture(GL_TEXTURE1);
-                    glBindTexture(GL_TEXTURE_2D_ARRAY, r.palette_texarray);
-                }
-                glUniform1f(loc("u_from"), w.decal_placed_get_from_depth(d));
-                glUniform1f(loc("u_to"), w.decal_placed_get_to_depth(d));
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
+                decal_uniforms u{};
+                u.proj = proj;
+                u.index = palette ? int32_t(palette.index()) : 0;
+                u.pass = pass;
+                u.from = w.decal_placed_get_from_depth(d);
+                u.to = w.decal_placed_get_to_depth(d);
+                upload(r);
                 for (size_t c = 0; c < cams.size(); ++c) {
                     vec2 const o = cams[c];
                     if (hi.x < o.x || lo.x > o.x + float(camera_width) || hi.y < o.y || lo.y > o.y + float(camera_height))
                         continue;
-                    glUniform1i(loc("u_camera_index"), GLint(c));
-                    glUniform2f(loc("u_cam_origin"), o.x, o.y);
-                    glDrawArrays(GL_TRIANGLES, 0, GLsizei(r.batch.size()));
+                    u.camera_index = int32_t(c);
+                    u.cam_origin = o;
+                    gpu::draw(*r.gpu, gpu::pipeline::decal, &u, sizeof(u), {r.room_texture, r.palette_texarray, tex}, 0, r.batch.size());
                 }
             });
-            glActiveTexture(GL_TEXTURE0);
         }
 
         // particles.hpp's effects, plain shapes
@@ -2969,14 +2777,12 @@ void main() {
             float const view_w = float(r.width) / cam.zoom, view_h = float(r.height) / cam.zoom;
             float const x0 = cam.pos.x - 20.f, x1 = cam.pos.x + view_w + 20.f;
             float const bottom = cam.pos.y - 40.f;
-            if (surf == nullptr || r.water_program == 0) {
+            if (surf == nullptr) {
                 r.batch.clear();
                 painter p{r.batch};
                 p.rect(-200.f, -200.f, room.pixel_width() + 400.f, room.float_water_level + 200.f, col_water);
-                glUseProgram(r.program);
-                glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-                glUniform1i(r.u_textured, 0);
-                upload_and_draw(r, 0, r.batch.size());
+                upload(r);
+                draw_flat_range(r, proj, 0, 0, r.batch.size());
                 return;
             }
             float const level = surf->level;
@@ -2995,7 +2801,7 @@ void main() {
             auto const hgt = [&](float x, float z) { return water::height(s, *surf, x, z, alpha); };
 
             // the body
-            grab_scene(r);
+            uint32_t const scene = gpu::grab_scene(*r.gpu);
             r.batch.clear();
             for (int i = 0; i + 1 < n; ++i) {
                 float const xa = x0 + float(i) * step, xb = xa + step;
@@ -3006,20 +2812,16 @@ void main() {
                 vertex const ba{xa, bottom, 0xFFFFFFFFu, xa, ya - bottom}, bb{xb, bottom, 0xFFFFFFFFu, xb, yb - bottom};
                 r.batch.insert(r.batch.end(), {ta, tb, bb, ta, bb, ba});
             }
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            GLuint const prog = r.water_program;
-            glUseProgram(prog);
-            auto const loc = [&](char const* nm) { return glGetUniformLocation(prog, nm); };
-            glUniformMatrix4fv(loc("u_proj"), 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform2f(loc("u_screen"), float(r.width), float(r.height));
-            glUniform1f(loc("u_time"), seconds);
-            glUniform1f(loc("u_zoom"), cam.zoom);
-            glUniform3f(loc("u_shallow"), shallow.x, shallow.y, shallow.z);
-            glUniform3f(loc("u_deep"), deep.x, deep.y, deep.z);
-            glUniform3f(loc("u_shine"), shine.x, shine.y, shine.z);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, r.scene_texture);
-            upload_and_draw(r, 0, r.batch.size());
+            upload(r);
+            water_uniforms u{};
+            u.proj = proj;
+            u.screen = glm::vec2{float(r.width), float(r.height)};
+            u.time = seconds;
+            u.zoom = cam.zoom;
+            u.shallow = shallow;
+            u.deep = deep;
+            u.shine = shine;
+            gpu::draw(*r.gpu, gpu::pipeline::water, &u, sizeof(u), {scene}, 0, r.batch.size());
 
             if (level - 60.f > top_clip)
                 return;
@@ -3060,11 +2862,8 @@ void main() {
                 float const xa = x0 + float(i) * step, xb = xa + step;
                 p.line(vec2{xa, ypos(xa, 0.f)}, vec2{xb, ypos(xb, 0.f)}, 1.5f, to_rgba(shine, 0.55f));
             }
-            glUseProgram(r.program);
-            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform1i(r.u_textured, 0);
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            upload_and_draw(r, 0, r.batch.size());
+            upload(r);
+            draw_flat_range(r, proj, 0, 0, r.batch.size());
         }
 
         // RegionGateGraphics, minimal: each door is a slab sliding down from
@@ -3118,13 +2917,14 @@ void main() {
     void draw_frame(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, std::string const& hud) {
         auto const& world = s.world;
         SDL_GetWindowSizeInPixels(r.window, &r.width, &r.height);
-        glViewport(0, 0, r.width, r.height);
+        r.width = std::max(r.width, 1);
+        r.height = std::max(r.height, 1);
         float const view_w = float(r.width) / cam.zoom;
         float const view_h = float(r.height) / cam.zoom;
         glm::mat4 const proj = glm::ortho(cam.pos.x, cam.pos.x + view_w, cam.pos.y, cam.pos.y + view_h);
 
         auto const palette = world.room_get_palette(room.id).id;
-        bool const textured_room = r.room_program != 0 && r.room_texture != 0 && r.room_texture_layers > 0 && room.id == r.room_texture_room;
+        bool const textured_room = r.room_texture != 0 && r.room_texture_layers > 0 && room.id == r.room_texture_room;
 
         // sky: the palette's first texel, like the vanilla level shader's sky layer
         rw::vec3 sky{18.f / 255.f, 18.f / 255.f, 24.f / 255.f};
@@ -3132,12 +2932,8 @@ void main() {
             uint8_t const* px = r.palette_pixels.data() + size_t(palette.index()) * palette_width * palette_height * 3;
             sky = rw::vec3{float(px[0]) / 255.f, float(px[1]) / 255.f, float(px[2]) / 255.f};
         }
-        glClearColor(sky.x, sky.y, sky.z, 1.f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
+        gpu::begin_frame(*r.gpu, r.width, r.height, sky.x, sky.y, sky.z);
         r.batch.clear();
-        glBindVertexArray(r.vao);
-        glBindBuffer(GL_ARRAY_BUFFER, r.vbo);
 
         // room camera images with the level shader. Pass 0 draws everything
         // behind the creature layers, pass 1 only the foreground depths
@@ -3158,39 +2954,27 @@ void main() {
                 vertex const tl{c.x, c.y + float(camera_height), 0xFFFFFFFFu, 0.f, 0.f};
                 r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
             }
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            auto const& u = r.room_uniforms;
-            glUseProgram(r.room_program);
-            glUniformMatrix4fv(u.proj, 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform1i(u.pass, pass);
-            glUniform1i(u.palette, palette ? palette.index() : 0);
+            upload(r);
+            // (no lights, no RegionKit colour replacements: left zero)
+            room_uniforms u{};
+            u.proj = proj;
+            u.pass = pass;
+            u.index = palette ? int32_t(palette.index()) : 0;
             int16_t const fx_a = world.room_get_effect_color_a(room.id);
             int16_t const fx_b = world.room_get_effect_color_b(room.id);
-            glUniform2i(u.effect_colors, fx_a < 0 ? 0 : fx_a, fx_b < 0 ? 0 : fx_b);
-            glUniform1f(u.grime, world.room_get_grime(room.id));
-            glUniform1f(u.night_time, r.night_time);
-            glUniform1f(u.fog_factor, 0.5f);
-            glUniform1f(u.rooftop_blend, 0.f);
+            u.effect_colors = glm::ivec2{fx_a < 0 ? 0 : fx_a, fx_b < 0 ? 0 : fx_b};
+            u.grime_factor = world.room_get_grime(room.id);
+            u.night_time = r.night_time;
+            u.fog_factor = 0.5f;
+            u.rooftop_blend = 0.f;
             // the grime noise drifts with this clock: keep it slow, and wrap on
             // whole sine periods so it never jumps
             constexpr double grime_speed = 0.004; // radians per second
-            glUniform1f(u.timer, float(std::fmod(double(SDL_GetTicks()) / 1000.0 * grime_speed, 6.283185307179586)));
-            float const zeros[max_lights * 4] = {};
-            glUniform4fv(u.lighting_data, max_lights, zeros);
-            glUniform2fv(u.lighting_pos, max_lights, zeros);
-            glUniform4f(u.replace_a, 0.f, 0.f, 0.f, 0.f);
-            glUniform4f(u.replace_b, 0.f, 0.f, 0.f, 0.f);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, r.room_texture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, r.palette_texarray);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, r.effects_texture);
+            u.timer = float(std::fmod(double(SDL_GetTicks()) / 1000.0 * grime_speed, 6.283185307179586));
             for (size_t i = 0; i < cams.size(); ++i) {
-                glUniform1i(u.camera_index, GLint(i));
-                upload_and_draw(r, i * 6, 6);
+                u.camera_index = int32_t(i);
+                gpu::draw(*r.gpu, gpu::pipeline::room, &u, sizeof(u), {r.room_texture, r.palette_texarray, r.effects_texture}, i * 6, 6);
             }
-            glActiveTexture(GL_TEXTURE0);
         };
         // untextured triangles, flat shader
         auto const draw_flat = [&](auto&& build) {
@@ -3198,11 +2982,8 @@ void main() {
             build();
             if (r.batch.empty())
                 return;
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            glUseProgram(r.program);
-            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-            glUniform1i(r.u_textured, 0);
-            upload_and_draw(r, 0, r.batch.size());
+            upload(r);
+            draw_flat_range(r, proj, 0, 0, r.batch.size());
         };
         auto const draw_geometry = [&] {
             draw_flat([&] { build_geometry(r, s, room, cam, view_w, view_h, textured_room ? 110 : 255); });
@@ -3225,13 +3006,8 @@ void main() {
             build();
             if (r.batch.empty())
                 return;
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-            glUseProgram(r.program);
-            glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-            glBindTexture(GL_TEXTURE_2D, r.game_texture);
-            glUniform1i(r.u_textured, atlas ? 1 : 0);
-            upload_and_draw(r, 0, r.batch.size());
-            glUniform1i(r.u_textured, 0);
+            upload(r);
+            draw_flat_range(r, proj, atlas ? r.game_texture : 0, 0, r.batch.size());
         };
         // the ground that isn't tiles, the plants on it and the dangle fruits'
         // stalks (the Background container)
@@ -3261,18 +3037,9 @@ void main() {
             build_seed_cobs(r, s, room, alpha);
         build_items(r, s, room, alpha, false);
         build_gate_doors(r, s, room);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-        glUseProgram(r.program);
-        glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-        if (sprites) {
-            glBindTexture(GL_TEXTURE_2D, r.slugcat_texture);
-            glUniform1i(r.u_textured, 1);
-        }
-        upload_and_draw(r, 0, bodies_end);
-        glBindTexture(GL_TEXTURE_2D, r.game_texture);
-        glUniform1i(r.u_textured, atlas ? 1 : 0);
-        upload_and_draw(r, bodies_end, r.batch.size() - bodies_end);
-        glUniform1i(r.u_textured, 0);
+        upload(r);
+        draw_flat_range(r, proj, sprites ? r.slugcat_texture : 0, 0, bodies_end);
+        draw_flat_range(r, proj, atlas ? r.game_texture : 0, bodies_end, r.batch.size() - bodies_end);
 
         if (textured_room) {
             draw_cameras(1);
@@ -3341,19 +3108,13 @@ void main() {
         }
         // screen space, y down
         glm::mat4 const proj = glm::ortho(0.f, float(r.width), float(r.height), 0.f);
-        glUseProgram(r.program);
-        glUniformMatrix4fv(r.u_proj, 1, GL_FALSE, glm::value_ptr(proj));
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(r.batch.size() * sizeof(vertex)), r.batch.data(), GL_STREAM_DRAW);
-        glUniform1i(r.u_textured, 0);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(untextured));
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, r.font_texture);
-        glUniform1i(r.u_textured, 1);
-        glDrawArrays(GL_TRIANGLES, GLint(untextured), GLsizei(r.batch.size() - untextured));
+        upload(r);
+        draw_flat_range(r, proj, 0, 0, untextured);
+        draw_flat_range(r, proj, r.font_texture, untextured, r.batch.size() - untextured);
     }
 
     void present(state& r) {
-        SDL_GL_SwapWindow(r.window);
+        gpu::present(*r.gpu);
     }
 
     void set_title(state& r, std::string const& title) {
@@ -3363,14 +3124,23 @@ void main() {
     bool save_screenshot(state& r, char const* path) {
         int const w = r.width;
         int const h = r.height;
+        uint8_t const* frame = gpu::read_back(*r.gpu);
+        if (frame == nullptr)
+            return false;
+        // BGR rows, bottom up (the frame's are RGBA, top down)
         std::vector<uint8_t> px(size_t(w) * size_t(h) * 3);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadBuffer(GL_BACK);
-        glReadPixels(0, 0, w, h, GL_BGR, GL_UNSIGNED_BYTE, px.data());
+        for (int y = 0; y < h; ++y) {
+            uint8_t const* src = frame + size_t(h - 1 - y) * size_t(w) * 4;
+            uint8_t* dst = px.data() + size_t(y) * size_t(w) * 3;
+            for (int x = 0; x < w; ++x) {
+                dst[x * 3 + 0] = src[x * 4 + 2];
+                dst[x * 3 + 1] = src[x * 4 + 1];
+                dst[x * 3 + 2] = src[x * 4 + 0];
+            }
+        }
         FILE* f = std::fopen(path, "wb");
         if (f == nullptr)
             return false;
-        // bottom up rows, which is what glReadPixels returns
         uint32_t const row = uint32_t(w) * 3u;
         uint32_t const pad = (4u - row % 4u) % 4u;
         uint32_t const data_size = (row + pad) * uint32_t(h);

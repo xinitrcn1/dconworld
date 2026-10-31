@@ -18,7 +18,7 @@
 !LICENSE
 !docs/
 !assets/*.txt
-!assets/shaders/
-!assets/shaders/*
+!src/shaders/
+!src/shaders/*
 !tools/
 !tools/*.py

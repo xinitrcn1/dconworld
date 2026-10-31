@@ -2,29 +2,38 @@
 // The camera image encodes per pixel: R = depth/facing/lighting, G = effect
 // colour and flags, B = effect amount. Colours come from the room palette
 // (a layer of the palette texture array) and the global effectcolors.png.
-uniform sampler2DArray u_texture0; //per-room texture (an array of)
-uniform sampler2DArray u_texture1; //palette texture
-uniform sampler2D u_texture2; //global effectscolors.png
-uniform int u_index; //what palette # in array
-uniform int u_camera_index; //# camera in the 2d texture array
-uniform float u_night_time; //[0,1] night time t
-uniform float u_fog_factor; //[0,1] fog factor t
-uniform ivec2 u_camera_view; //# camera for the camera positions
-uniform ivec2 u_effect_colors; //[0,7] EffectColorA + EffectColorB
-uniform float u_grime_factor; //[0,1] amount of grime
-uniform float u_rooftop_blend; //[0,1] alpha of skybox
-uniform float u_timer;
-// 0: background pass (behind sprites), 1: foreground pass (in front of sprites)
-uniform int u_pass;
-// Lighting (we don't prebake lets just go in raw)
-uniform vec4 u_lighting_data[MAX_LIGHTS]; //vec3(rgb), a=intensity
-uniform vec2 u_lighting_pos[MAX_LIGHTS]; //(x,y,z) position (euclidean distance)
-// Used by regionkit regions
-uniform vec4 u_replace_effect_color_a;
-uniform vec4 u_replace_effect_color_b;
+#version 450
 
-out vec4 o_frag_color;
-in vec2 v_texcoord;
+// render::max_lights
+#define MAX_LIGHTS 16
+
+// render.cpp's room_uniforms
+layout(set = 0, binding = 0, std140) uniform room_uniforms {
+    mat4 u_proj;
+    // Lighting (we don't prebake lets just go in raw)
+    vec4 u_lighting_data[MAX_LIGHTS]; //vec3(rgb), a=intensity
+    vec2 u_lighting_pos[MAX_LIGHTS]; //(x,y,z) position (euclidean distance)
+    // Used by regionkit regions
+    vec4 u_replace_effect_color_a;
+    vec4 u_replace_effect_color_b;
+    ivec2 u_effect_colors; //[0,7] EffectColorA + EffectColorB
+    ivec2 u_camera_view; //# camera for the camera positions
+    int u_index; //what palette # in array
+    int u_camera_index; //# camera in the 2d texture array
+    float u_night_time; //[0,1] night time t
+    float u_fog_factor; //[0,1] fog factor t
+    float u_grime_factor; //[0,1] amount of grime
+    float u_rooftop_blend; //[0,1] alpha of skybox
+    float u_timer;
+    // 0: background pass (behind sprites), 1: foreground pass (in front of sprites)
+    int u_pass;
+};
+layout(set = 0, binding = 1) uniform sampler2DArray u_texture0; //per-room texture (an array of)
+layout(set = 0, binding = 2) uniform sampler2DArray u_texture1; //palette texture
+layout(set = 0, binding = 3) uniform sampler2D u_texture2; //global effectscolors.png
+
+layout(location = 0) out vec4 o_frag_color;
+layout(location = 0) in vec2 v_texcoord;
 
 int floor_div(int a, int b) {
     return int(floor(float(a) / float(b)));

@@ -2,18 +2,26 @@
 // wave rolls outwards every couple of seconds, and veins of the far side
 // crack through further the wider the tear is open.
 
-in vec2 v_local;
-out vec4 frag_color;
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "warp_common.glsl"
 
-uniform sampler2D u_scene;   // a copy of the frame drawn so far
-uniform vec2 u_screen;       // framebuffer size in pixels
-uniform float u_radius_px;   // the quad's radius on screen
-uniform float u_open;        // WarpTear.openAnimation (0..1)
-uniform float u_fade;        // WarpTear.fadeAnim (0..1)
-uniform float u_time;        // seconds
-uniform float u_seed;
-uniform float u_variant;     // see warp_far_side
-uniform float u_ghost;       // a warp of the other layer: faint, no core
+layout(location = 0) in vec2 v_local;
+layout(location = 0) out vec4 frag_color;
+
+// render.cpp's warp_tear_uniforms
+layout(set = 0, binding = 0, std140) uniform warp_tear_uniforms {
+    mat4 u_proj;
+    vec2 u_screen;           // framebuffer size in pixels
+    float u_radius_px;       // the quad's radius on screen
+    float u_open;            // WarpTear.openAnimation (0..1)
+    float u_fade;            // WarpTear.fadeAnim (0..1)
+    float u_time;            // seconds
+    float u_seed;
+    float u_variant;         // see warp_far_side
+    float u_ghost;           // a warp of the other layer: faint, no core
+};
+layout(set = 0, binding = 1) uniform sampler2D u_scene;   // a copy of the frame drawn so far
 
 void main() {
     float d = length(v_local);
@@ -48,7 +56,7 @@ void main() {
     vec2 bent = warp_rotate(v_local, swirl) * (1.0 - 0.18 * lens);
     bent += dir * (wave * 0.025 + vein_mask * 0.012);
     vec2 offset_px = (bent - v_local) * u_radius_px;
-    vec2 uv = (gl_FragCoord.xy + offset_px) / u_screen;
+    vec2 uv = (warp_frag_coord(u_screen) + offset_px) / u_screen;
     uv = abs(uv);
     uv = 1.0 - abs(1.0 - uv);
     vec3 scene = texture(u_scene, uv).rgb;

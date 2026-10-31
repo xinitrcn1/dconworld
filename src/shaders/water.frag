@@ -6,16 +6,24 @@
 // so the pattern never visibly repeats; the shimmer and caustics weaken with
 // depth but never fade out, down to the floor of the deepest pools.
 
-in vec2 v_local;          // x: room x, y: depth below the surface (pixels)
-out vec4 frag_color;
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "warp_common.glsl"
 
-uniform sampler2D u_scene;
-uniform vec2 u_screen;
-uniform float u_time;     // seconds
-uniform vec3 u_shallow;   // RoomPalette.waterColor1
-uniform vec3 u_deep;      // RoomPalette.waterColor2
-uniform vec3 u_shine;     // RoomPalette.waterShineColor
-uniform float u_zoom;
+layout(location = 0) in vec2 v_local;          // x: room x, y: depth below the surface (pixels)
+layout(location = 0) out vec4 frag_color;
+
+// render.cpp's water_uniforms
+layout(set = 0, binding = 0, std140) uniform water_uniforms {
+    mat4 u_proj;
+    vec3 u_shallow;   // RoomPalette.waterColor1
+    float u_time;     // seconds
+    vec3 u_deep;      // RoomPalette.waterColor2
+    float u_zoom;
+    vec3 u_shine;     // RoomPalette.waterShineColor
+    vec2 u_screen;
+};
+layout(set = 0, binding = 1) uniform sampler2D u_scene;
 
 // integer hash (no visible lattice, unlike the sin() hashes)
 float hash13(vec3 p) {
@@ -73,7 +81,7 @@ void main() {
     float strength = mix(0.35, 1.0, near);
     vec2 bend = vec2(fbm(vec3(p * 2.0, t * 0.35)), fbm(vec3(p * 2.0 + vec2(9.1, 4.7), t * 0.33))) - 0.5;
     vec2 offset = bend * 7.0 * strength * u_zoom;
-    vec2 uv = clamp((gl_FragCoord.xy + offset) / u_screen, vec2(0.001), vec2(0.999));
+    vec2 uv = clamp((warp_frag_coord(u_screen) + offset) / u_screen, vec2(0.001), vec2(0.999));
     vec3 scene = texture(u_scene, uv).rgb;
 
     // less light the deeper: the sun only reaches so far

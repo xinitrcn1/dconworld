@@ -1,5 +1,12 @@
-// Shared helpers of the warp shaders (prepended to warp_tear.frag and
-// warp_screen.frag): hashed value noise and a few octaves of it
+// Shared helpers of the warp shaders (#included by warp_tear.frag,
+// warp_screen.frag and water.frag): hashed value noise and a few octaves of it
+
+// gl_FragCoord as OpenGL has it, from the bottom left: what the shaders'
+// maths and the scene copy (render.cpp's grab_scene, stored bottom row
+// first) were written for. Vulkan's is from the top left
+vec2 warp_frag_coord(vec2 screen) {
+    return vec2(gl_FragCoord.x, screen.y - gl_FragCoord.y);
+}
 
 // smoothstep that also takes falling (edge0 > edge1) and empty ranges,
 // which GLSL's own leaves undefined

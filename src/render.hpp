@@ -3,7 +3,7 @@
 // Renders rooms with anthiel's level shader (camera images coloured through
 // a palette texture array and effectcolors.png), slugcats with DressMySlugcat
 // style sprites, an optional collision geometry overlay and the VGA font HUD.
-// OpenGL 3.3 (GLEW) in an SDL3 window.
+// Vulkan 1.3 (through gpu.hpp) in an SDL3 window.
 
 #include <cstdint>
 #include <string>
@@ -12,11 +12,11 @@
 #include <vector>
 
 #include "gamestate.hpp"
+#include "gpu.hpp"
 #include "math.hpp"
 #include "world.hpp"
 
 struct SDL_Window;
-struct SDL_GLContextState;
 
 namespace render {
     struct camera {
@@ -24,11 +24,7 @@ namespace render {
         float zoom = 1.f;
     };
 
-    struct vertex {
-        float x, y;
-        uint32_t rgba; // little endian 0xAABBGGRR
-        float u, v;
-    };
+    using vertex = gpu::vertex;
 
     // Rain World constants: camera images and palettes
     inline constexpr int camera_width = 1400;
@@ -49,31 +45,20 @@ namespace render {
         float source_w = 0.f, source_h = 0.f;     // the element's size
     };
 
-    struct room_shader_uniforms {
-        int32_t proj = -1, palette = -1, camera_index = -1, night_time = -1, fog_factor = -1;
-        int32_t effect_colors = -1, grime = -1, rooftop_blend = -1, timer = -1;
-        int32_t lighting_data = -1, lighting_pos = -1, replace_a = -1, replace_b = -1;
-        int32_t pass = -1;
-    };
-
     struct state {
         SDL_Window* window = nullptr;
-        SDL_GLContextState* context = nullptr;
+        gpu::context* gpu = nullptr;
         int width = 0;
         int height = 0;
         bool show_cameras = true;
         bool show_hud = true;
         bool show_geometry = false;
         float night_time = 0.f;
-        uint32_t program = 0;
-        int32_t u_proj = -1;
-        int32_t u_textured = -1;
+        // gpu::texture ids, 0 when not loaded
         uint32_t font_texture = 0;
         int font_width = 1;
         int font_height = 1;
         // room rendering (anthiel's level shader)
-        uint32_t room_program = 0;
-        room_shader_uniforms room_uniforms;
         uint32_t palette_texarray = 0;
         std::vector<uint8_t> palette_pixels; // CPU copy, for the sky colour
         uint32_t effects_texture = 0;
@@ -92,22 +77,11 @@ namespace render {
         int game_width = 1;
         int game_height = 1;
         std::unordered_map<std::string, game_frame> game_frames;
-        // warp effects (assets/shaders/warp_*): the tears and the full screen
-        // transition, both reading a copy of the frame drawn so far
-        uint32_t warp_tear_program = 0;
-        uint32_t warp_screen_program = 0;
-        uint32_t scene_texture = 0;
-        // decals (decals/<name>.png, loaded on first use) and the water body
-        uint32_t decal_program = 0;
-        uint32_t water_program = 0;
+        // decals (decals/<name>.png, loaded on first use)
         struct decal_texture {
             uint32_t texture = 0; // 0: missing
         };
         std::unordered_map<std::string, decal_texture> decal_textures;
-        int scene_width = 0;
-        int scene_height = 0;
-        uint32_t vao = 0;
-        uint32_t vbo = 0;
         std::vector<vertex> batch;
     };
 
@@ -115,7 +89,7 @@ namespace render {
     bool init(state& r, int width, int height, char const* title, bool hidden);
     // the element's frame in the game's atlases, if they were loaded
     game_frame const* find_game_frame(state const& r, std::string_view element);
-    // HUD font, room shader, palettes, the slugcat atlas and, if `r.unity_dir`
+    // HUD font, palettes, the slugcat atlas and, if `r.unity_dir`
     // is set, the game's own atlases (after world::load)
     void load_assets(state& r, sys::game_state const& s);
     // Makes the camera images of `rid` resident (drops the previous room's)
@@ -128,7 +102,7 @@ namespace render {
     void draw_hud(state& r, std::string const& hud);
     void present(state& r);
     void set_title(state& r, std::string const& title);
-    // Saves the current back buffer as a 24 bit BMP
+    // Saves the frame drawn so far as a 24 bit BMP
     bool save_screenshot(state& r, char const* path);
 
     rw::vec2 screen_to_room(state const& r, camera const& cam, float sx, float sy);

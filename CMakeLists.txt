@@ -21,13 +21,14 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
 
-# Fetched dependencies (DataContainer, TBB, glm, GLEW, stb), anthiel style
+# Fetched dependencies (DataContainer, TBB, glm, stb), anthiel style
 add_subdirectory(deps EXCLUDE_FROM_ALL)
 add_subdirectory(ParserGenerator EXCLUDE_FROM_ALL)
 
-# Window, input and the OpenGL context come from the system SDL3
+# Window, input and the Vulkan surface come from the system SDL3; the Vulkan
+# loader, headers and glslangValidator (the shaders' compiler) from the system
 find_package(SDL3 REQUIRED CONFIG COMPONENTS SDL3)
-find_package(OpenGL REQUIRED)
+find_package(Vulkan 1.3 REQUIRED COMPONENTS glslangValidator)
 
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GENERATED_DIR}")
@@ -52,6 +53,36 @@ add_custom_command(
     VERBATIM
 )
 
+# Shaders (src/shaders): GLSL compiled to SPIR-V at build time, each wrapped
+# into a C source + header in the build tree (generated/shaders/<name>_<stage>.c/h,
+# defining <name>_<stage>_spv and <name>_<stage>_spv_size)
+set(SHADER_DIR "${PROJECT_SOURCE_DIR}/src/shaders")
+set(SHADER_OUT "${GENERATED_DIR}/shaders")
+file(MAKE_DIRECTORY "${SHADER_OUT}")
+set(SHADERS
+    flat.vert flat.frag
+    room.vert room.frag
+    decal.vert decal.frag
+    warp.vert warp_tear.frag warp_screen.frag water.frag
+)
+# #included by the shaders above
+set(SHADER_INCLUDES "${SHADER_DIR}/warp_common.glsl")
+set(SHADER_SOURCES "")
+foreach(shader IN LISTS SHADERS)
+    string(REPLACE "." "_" stem "${shader}")
+    add_custom_command(
+        OUTPUT "${SHADER_OUT}/${stem}.c" "${SHADER_OUT}/${stem}.h"
+        COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE} -V --target-env vulkan1.3 --quiet -o "${SHADER_OUT}/${stem}.spv" "${SHADER_DIR}/${shader}"
+        COMMAND ${CMAKE_COMMAND} -DSPV=${SHADER_OUT}/${stem}.spv -DNAME=${stem}_spv -DOUT_C=${SHADER_OUT}/${stem}.c -DOUT_H=${SHADER_OUT}/${stem}.h -P "${PROJECT_SOURCE_DIR}/cmake/spirv_to_c.cmake"
+        DEPENDS "${SHADER_DIR}/${shader}" ${SHADER_INCLUDES} "${PROJECT_SOURCE_DIR}/cmake/spirv_to_c.cmake"
+        COMMENT "Compiling shader ${shader} to SPIR-V"
+        VERBATIM
+    )
+    list(APPEND SHADER_SOURCES "${SHADER_OUT}/${stem}.c")
+endforeach()
+add_library(rwcpp_shaders STATIC ${SHADER_SOURCES})
+target_include_directories(rwcpp_shaders PUBLIC "${SHADER_OUT}")
+
 add_executable(rwcpp
     src/main.cpp
     src/dcon.cpp
@@ -62,6 +93,7 @@ add_executable(rwcpp
     src/player.cpp
     src/player_graphics.cpp
     src/render.cpp
+    src/gpu.cpp
     src/selftest.cpp
     src/shortcuts.cpp
     src/items.cpp
@@ -137,16 +169,16 @@ target_link_libraries(rwcpp PRIVATE
     dependency_DataContainer
     dependency_tbb
     dependency_glm
-    dependency_glew
     dependency_stb
     dependency_dr_libs
     dependency_vgmstream_fsb
     SDL3::SDL3
-    OpenGL::GL
+    Vulkan::Vulkan
+    rwcpp_shaders
 )
 target_compile_options(rwcpp PRIVATE -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
 
-# our own assets (HUD font, shaders, slugcat atlas) are looked up next to the executable
+# our own assets (HUD font, slugcat atlas) are looked up next to the executable
 add_custom_command(TARGET rwcpp POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:rwcpp>/assets"
     VERBATIM

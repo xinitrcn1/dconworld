@@ -2,24 +2,32 @@
 // rings race inwards and it darkens to the far side; past the midpoint the
 // destination unwinds out of its own warp.
 
-in vec2 v_local;
-out vec4 frag_color;
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "warp_common.glsl"
 
-uniform sampler2D u_scene;
-uniform vec2 u_screen;
-uniform vec2 u_center;     // the warp on screen, pixels
-uniform float u_progress;  // 0..1 over the transition
-uniform float u_time;
-uniform float u_variant;
-// WarpPoint effect knobs, each 0..1
-uniform float u_vignette;
-uniform float u_darkness;
-uniform float u_spiral_gap;
-uniform float u_swirl;
-uniform float u_lensing;
-uniform float u_noise;
-uniform float u_twist;
-uniform float u_agitation;
+layout(location = 0) in vec2 v_local;
+layout(location = 0) out vec4 frag_color;
+
+// render.cpp's warp_screen_uniforms
+layout(set = 0, binding = 0, std140) uniform warp_screen_uniforms {
+    mat4 u_proj;
+    vec2 u_screen;
+    vec2 u_center;         // the warp on screen, pixels
+    float u_progress;      // 0..1 over the transition
+    float u_time;
+    float u_variant;
+    // WarpPoint effect knobs, each 0..1
+    float u_vignette;
+    float u_darkness;
+    float u_spiral_gap;
+    float u_swirl;
+    float u_lensing;
+    float u_noise;
+    float u_twist;
+    float u_agitation;
+};
+layout(set = 0, binding = 1) uniform sampler2D u_scene;
 
 void main() {
     float t = clamp(u_progress, 0.0, 1.0);
@@ -27,7 +35,7 @@ void main() {
     float bell = 1.0 - abs(t - 0.5) * 2.0;
     float winding = t < 0.5 ? 1.0 : -1.0;
     float aspect = u_screen.x / u_screen.y;
-    vec2 p = (gl_FragCoord.xy - u_center) / u_screen.y;
+    vec2 p = (warp_frag_coord(u_screen) - u_center) / u_screen.y;
     float r = length(p);
 
     // swirl, strongest at the warp, spiral bands spaced by the gap knob
