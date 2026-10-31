@@ -170,6 +170,8 @@ namespace npc {
         std::atomic<uint32_t> crowded{0};
         std::atomic<uint32_t> warps_made{0};
         std::atomic<uint32_t> strays{0};
+        // the Artificer's pyro jumps up to a ledge
+        std::atomic<uint32_t> pyro_jumps{0};
     };
     counters& stats() noexcept;
     std::string stats_line(sys::game_state const& state);

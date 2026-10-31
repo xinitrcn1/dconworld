@@ -1543,6 +1543,59 @@ namespace selftest {
             s.until(800, [&] { return !gs.warp.active; });
         }
         {
+            // the Artificer's pyro jump: at the top of a jump, a second one
+            // (jump and grab, or the ability key); hot, stunned; overused,
+            // it blows up and takes a lizard close by with it
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(30, 60, [](int32_t, int32_t) { return ' '; }));
+            sim s(gs, room, feet_at(10, 1), player::slugcat_name::artificer);
+            s.run(30);
+            s.run(20, 0, 1);
+            float const ground = s.pos(1).y;
+            // a plain jump, held
+            float plain = ground;
+            for (int i = 0; i < 60; ++i) {
+                s.step(0, 0, true);
+                plain = std::max(plain, s.pos(1).y);
+            }
+            s.run(60);
+            auto const pyro_jump = [&](bool up) {
+                s.run(20, 0, 1);
+                float top = s.pos(1).y;
+                bool fired = false;
+                for (int i = 0; i < 80; ++i) {
+                    auto in = player::make_input(0.f, up && fired ? 1.f : 0.f, true, false, false);
+                    if (!fired && i > 3 && s.vel(1).y < 1.f) {
+                        in.spec = true;
+                        fired = true;
+                    }
+                    simulation::tick(gs, std::span{&s.p, 1}, std::span{&in, 1});
+                    top = std::max(top, s.pos(1).y);
+                }
+                return top;
+            };
+            float const pyro = pyro_jump(false);
+            int32_t const heat = w.player_get_pyro_jump_counter(s.p);
+            s.run(80);
+            // hot: the 7th stuns it
+            w.player_set_pyro_jump_counter(s.p, 6);
+            pyro_jump(false);
+            bool const stunned_hot = w.player_get_pyro_jump_counter(s.p) == 7;
+            s.run(200);
+            auto const liz = lizard::create(gs, room, world::room_view::middle_of_tile(13, 1), lizard::breed::green);
+            s.run(5);
+            w.player_set_pyro_jump_counter(s.p, 9);
+            w.player_set_pyro_jump_cooldown(s.p, 150.f);
+            pyro_jump(false);
+            bool const blew_up = s.dead();
+            bool const hit = creature::dead(gs, liz) || w.creature_get_stun(liz) > 0;
+            char d[200];
+            std::snprintf(d, sizeof(d), " plain=%.0fpx (%.1f tiles) pyro=%.0fpx (%.1f tiles) heat=%d hot_stun=%d blew_up=%d lizard_hit=%d", plain - ground,
+                (plain - ground) / 20.f, pyro - ground, (pyro - ground) / 20.f, heat, int(stunned_hot), int(blew_up), int(hit));
+            r.check("Artificer pyro jump, overused it blows up", pyro - ground > plain - ground + 60.f && heat == 1 && stunned_hot && blew_up && hit, s.describe() + d);
+            creature::destroy(gs, liz);
+        }
+        {
             // a ripple warp only works from the ripple layer (camouflaged at ripple level 5)
             auto const a = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
             auto const b = make_room(gs, region, box(30, 20, [](int32_t, int32_t) { return ' '; }));
@@ -1747,6 +1800,30 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " opened=%d held=%d gave_up=%d reset=%d sides_open=%d stays=%d", int(opened), int(held), int(gave_up), int(reset),
                 int(sides_open), int(stays));
             r.check("region gate resets when held", opened && held && gave_up && reset && sides_open && stays, s.describe() + d);
+        }
+        {
+            // the failsafe for a contested gate: something on both sides of
+            // the middle (vanilla waits for good) starts the cycle after 5 s
+            auto const gate_room = make_room(gs, region, box(48, 25, [](int32_t, int32_t y) { return y < 8 ? '#' : ' '; }));
+            auto& w = gs.world;
+            w.room_set_is_gate(gate_room, true);
+            auto const g = w.create_gate();
+            w.gate_set_mode(g, world::gate_mode::middle_closed);
+            w.try_create_gate_location(g, gate_room);
+            sim s(gs, gate_room, feet_at(19, 8));
+            auto const liz = lizard::create(gs, gate_room, world::room_view::middle_of_tile(28, 8), lizard::breed::green);
+            bool early = false, started = false;
+            uint32_t t = 0;
+            for (; t < 400 && !started; ++t) {
+                w.creature_set_stun(liz, 10);
+                s.run(1);
+                started = w.gate_get_mode(g) == world::gate_mode::closing_air_lock;
+                early = early || (started && t < 190);
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " started=%d after %u ticks early=%d", int(started), t, int(early));
+            r.check("region gate cycles when contested", started && !early, s.describe() + d);
+            creature::destroy(gs, liz);
         }
 
         // a placed object from the room's settings, spawned on the first visit
@@ -2777,6 +2854,49 @@ namespace selftest {
             for (auto const p : pack)
                 names += w.slugcat_npc_get_leader(npc::of(st, p)) ? "" : " (one left)";
             r.check("NPC pack travels together", same_target && waited && all_there && dead == 0, d + names + (all_there ? std::string{} : where));
+        }
+        {
+            // a wall six tiles high between two shelters: only the Artificer
+            // gets up it, with a pyro jump at the top of a jump
+            auto [st_ptr, rgn] = npc_world("npc_pyro");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const from = shelter_room(st, rgn, 1);
+            auto const course = make_room(st, rgn, box(40, 20, [&](int32_t x, int32_t y) {
+                if (char const c = pipe_at(x, y, 3, 2, -1))
+                    return c;
+                if (char const c = pipe_at(x, y, 36, 8, 1))
+                    return c;
+                return y <= (x < 20 ? 1 : 7) ? '#' : ' ';
+            }));
+            auto const to = shelter_room(st, rgn, -1);
+            link(st, exits_of(st, from)[0], from, side_exit(st, course, false), course);
+            link(st, side_exit(st, course, true), course, exits_of(st, to)[0], to);
+            simulation::populate(st);
+            rw::rng rng{0xA271u};
+            auto const surv = npc::create(st, from, feet_at(5, 2), rng, {}, player::slugcat_name::white);
+            auto const sv = npc::reachable_shelters(st, surv);
+            bool const survivor_cant = std::find(sv.begin(), sv.end(), to) == sv.end();
+            npc::destroy(st, surv);
+            auto const p = npc::create(st, from, feet_at(5, 2), rng, {}, player::slugcat_name::artificer);
+            auto const av = npc::reachable_shelters(st, p);
+            bool const artificer_can = std::find(av.begin(), av.end(), to) != av.end();
+            w.slugcat_npc_set_target(npc::of(st, p), to);
+            uint32_t const pyros = npc::stats().pyro_jumps;
+            bool arrived = false;
+            int32_t hottest = 0;
+            uint32_t t = 0;
+            for (; t < 3000 && !arrived; ++t) {
+                tick_world(st, 1);
+                trace_npc(st, p, t);
+                hottest = std::max(hottest, w.player_get_pyro_jump_counter(p));
+                arrived = rooms::room_of(st, p) == to && w.slugcat_npc_get_nav(npc::of(st, p)).what == npc::goal::rest;
+            }
+            char d[200];
+            std::snprintf(d, sizeof(d), " survivor_cant=%d artificer_can=%d arrived=%d after %u ticks pyro_jumps=%u hottest=%d", int(survivor_cant), int(artificer_can),
+                int(arrived), t, npc::stats().pyro_jumps - pyros, hottest);
+            r.check("NPC Artificer pyro jumps up a wall", survivor_cant && artificer_can && arrived && npc::stats().pyro_jumps > pyros && hottest < 7 && !player::dead(st, p),
+                d + (" " + npc::describe(st, p)));
         }
         {
             // a shelter with more than ten slugcats in it is crowded: one on

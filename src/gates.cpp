@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <optional>
+#include <utility>
 
 #include "gates.hpp"
 #include "creature.hpp"
@@ -90,6 +92,19 @@ namespace gates {
             return num;
         }
 
+        // the creatures over the gate's middle in each of its two zones
+        std::pair<int32_t, int32_t> middle_counts(sys::game_state const& state, dcon::room_id room) {
+            std::pair<int32_t, int32_t> n{0, 0};
+            rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
+                int32_t const z = detect_zone(state, c, room);
+                if (z == 1)
+                    ++n.first;
+                else if (z == 2)
+                    ++n.second;
+            });
+            return n;
+        }
+
         bool all_players_through(sys::game_state const& state, dcon::room_id room, bool let_through_dir) {
             int32_t const half = state.world.room_get_width(room) / 2;
             bool through = true;
@@ -142,14 +157,23 @@ namespace gates {
         switch (w.gate_get_mode(g)) {
         case gate_mode::middle_closed: {
             int32_t const num = players_in_zone(state, room);
-            if (num > 0 && num < 3) {
-                bool const dir = num == 1;
+            // not vanilla: something over the middle most of the last 5 s
+            // (creatures coming and going, on both sides, slugcats throwing
+            // each other off it) starts the cycle anyway, for the side more
+            // of them are on
+            auto const [left, right] = middle_counts(state, room);
+            int32_t& busy = w.gate_get_held_counter(g);
+            busy = left + right > 0 ? busy + 1 : std::max(0, busy - 1);
+            bool const forced = left + right > 0 && busy > held_ticks && (num < 0 || !w.gate_get_dont_open(g));
+            if ((num > 0 && num < 3) || forced) {
+                bool const dir = num > 0 ? num == 1 : left != right ? left > right : bool(w.gate_get_let_through_dir(g));
                 w.gate_set_let_through_dir(g, dir);
-                if (!w.gate_get_dont_open(g)) {
-                    if (++start_counter > trigger_ticks) {
+                if (!w.gate_get_dont_open(g) || forced) {
+                    if (++start_counter > trigger_ticks || forced) {
                         w.gate_set_mode(g, gate_mode::closing_air_lock);
                         goal[dir ? 0 : 2] = 1.f;
                         start_counter = 0;
+                        busy = 0;
                     }
                 } else {
                     start_counter = 0;

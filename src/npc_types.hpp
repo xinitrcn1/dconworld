@@ -37,6 +37,9 @@ namespace npc {
         // facing the way, back for 5 ticks cancelled with up at the second,
         // then down, the way and jump at once: far higher than a jump
         vault,
+        // the Artificer: straight up its column in a jump, a pyro jump at
+        // the top, across onto the ledge (cooled down enough first)
+        pyro,
     };
 
     // what it is after

@@ -213,6 +213,10 @@ namespace pathing {
         // a jump up to a ledge or a pole (measured with Player.cs: three
         // tiles with the ledge grab)
         constexpr int32_t max_rise = 3;
+        // the Artificer's pyro jump at the top of a jump straight up (its
+        // feet 8.5 tiles up, measured: "Artificer pyro jump" selftest), onto
+        // a ledge one or two tiles beside the column, a tile and more to spare
+        constexpr int32_t pyro_rise(int32_t dx) noexcept { return dx <= 1 ? 7 : 6; }
 
         bool slug_walkable(room_view const& room, std::vector<uint8_t> const& acc, ivec2 t, bool swim) noexcept {
             if (!room.inside(t.x, t.y))
@@ -462,6 +466,27 @@ namespace pathing {
                                     add(back, v, 40u + 10u * uint32_t(dx) + edge_of_reach(dx, pounce_reach(dy)), step_kind::pounce, s);
                                 }
                     }
+                    // the Artificer: up its column in a pyro jump, onto the
+                    // ledge beside it (nothing to catch on the way up)
+                    if (ground)
+                        for (int32_t const s : {-1, 1})
+                            for (int32_t k = 1; k <= pyro_rise(1) + 1; ++k) {
+                                ivec2 const c = g + ivec2{0, k};
+                                if (!open(room, c) || room.get_tile(c).any_beam() || (k > 1 && walkable(c - ivec2{0, 1})))
+                                    break;
+                                if (k <= max_rise || !open(room, c + ivec2{0, 1}))
+                                    continue;
+                                for (int32_t dx = 1; dx <= 2; ++dx) {
+                                    if (k > pyro_rise(dx))
+                                        continue;
+                                    ivec2 const top = c + ivec2{s * dx, 0};
+                                    bool clear = open(room, top + ivec2{0, 1});
+                                    for (int32_t i = 1; i < dx && clear; ++i)
+                                        clear = open(room, c + ivec2{s * i, 0}) && open(room, c + ivec2{s * i, 1});
+                                    if (clear && standable(room, top) && room.get_tile(top - ivec2{0, 1}).solid() && !walkable(c))
+                                        add(g, top, 60u + 10u * uint32_t(k + dx), step_kind::pyro, s);
+                                }
+                            }
                     // a hop onto a pole close by (from up on a beam with something
                     // under it a little further, not much higher: UW_D02's stubs up
                     // its wall to the pole four over)
@@ -788,7 +813,7 @@ namespace pathing {
             return base * r / 10u;
         }
 
-        void build_slugcat(room_view const& room, std::vector<uint8_t> const& acc, std::vector<jump> const& jumps, ivec2 goal, std::vector<uint16_t>& dist) {
+        void build_slugcat(room_view const& room, std::vector<uint8_t> const& acc, std::vector<jump> const& jumps, ivec2 goal, std::vector<uint16_t>& dist, bool pyro) {
             int32_t const w = room.width, h = room.height;
             dist.assign(size_t(w) * size_t(h), unreachable);
             constexpr uint32_t ring = 4096;
@@ -856,7 +881,8 @@ namespace pathing {
                         relax(v + ivec2{0, k2}, c + drop_cost);
                     auto it = std::lower_bound(jumps.begin(), jumps.end(), i, [](jump const& j, uint32_t to) { return j.to < to; });
                     for (; it != jumps.end() && it->to == i; ++it)
-                        relax(ivec2{int32_t(it->from) % w, int32_t(it->from) / w}, c + it->cost);
+                        if (pyro || it->kind != step_kind::pyro)
+                            relax(ivec2{int32_t(it->from) % w, int32_t(it->from) / w}, c + it->cost);
                 }
                 bucket.clear();
             }
@@ -893,6 +919,11 @@ namespace pathing {
         return out;
     }
 
+    bool has_pyro(sys::game_state& state, room_view const& room) {
+        auto const& jumps = jumps_of(state, room, access_map(state, room));
+        return std::any_of(jumps.begin(), jumps.end(), [](jump const& j) { return j.kind == step_kind::pyro; });
+    }
+
     std::vector<uint8_t> slugcat_reach_from(sys::game_state& state, room_view const& room, ivec2 from) {
         auto const& acc = access_map(state, room);
         auto const& jumps = jumps_of(state, room, acc);
@@ -925,7 +956,7 @@ namespace pathing {
             }
             uint32_t const i = uint32_t(u.y * w + u.x);
             for (auto const& j : jumps)
-                if (j.from == i)
+                if (j.from == i && j.kind != step_kind::pyro)
                     visit(ivec2{int32_t(j.to) % w, int32_t(j.to) / w});
         }
         return seen;
@@ -938,6 +969,7 @@ namespace pathing {
         uint16_t const here = distance(state, f, from);
         if (here == unreachable || here == 0)
             return std::nullopt;
+        bool const pyro = field_of(state, f).movement.slugcat == artificer.slugcat;
         std::optional<step> best;
         uint32_t best_c = 0xFFFFFFFFu;
         auto const consider = [&](ivec2 t, uint32_t cost, step_kind k, int32_t dir) {
@@ -969,7 +1001,7 @@ namespace pathing {
             }
             uint32_t const i = uint32_t(from.y * room.width + from.x);
             for (auto const& j : jumps)
-                if (j.from == i)
+                if (j.from == i && (pyro || j.kind != step_kind::pyro))
                     consider(ivec2{int32_t(j.to) % room.width, int32_t(j.to) / room.width}, j.cost, j.kind, j.dir);
         }
         // off the walkable tiles (in mid air, half way up a wall): towards
@@ -1069,7 +1101,7 @@ namespace pathing {
         auto const& acc = access_map(state, view);
         auto& pf = fields[f];
         if (m.slugcat != 0)
-            build_slugcat(view, acc, jumps_of(state, view, acc), goal, pf.distance);
+            build_slugcat(view, acc, jumps_of(state, view, acc), goal, pf.distance, m.slugcat == artificer.slugcat);
         else
             build(view, acc, m, goal, pf.distance, proximity);
         build_count.fetch_add(1, std::memory_order_relaxed);

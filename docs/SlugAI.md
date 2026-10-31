@@ -114,6 +114,22 @@ the tools for tracing them, and what is known not to work yet.
   30 s; 30 s more after a failed try, e.g. on a pole). Not under
   `--npc-guess`. Tests: "NPC Watcher takes its pack through its own warp"
   (with a stray from another pack pulled along).
+- **The Artificer's pyro jumps.** Its path graph has one more move, up
+  its column in a jump and a pyro jump at the top, onto a ledge beside the
+  column (`step_kind::pyro`, `pathing::pyro_rise`: 7 tiles up one over, 6
+  two over; the feet go 8.5 up straight, measured). Only the Artificer's
+  fields have them (`pathing::artificer`, keyed apart in the cache), and
+  the route table keeps its walkable masks apart (`pyro_exit`,
+  `pyro_arrival`, built only for rooms with pyro jumps, the others
+  copied); `walking()` picks them for the NPC thinking (thread_local, set
+  by `think`, `look_ahead`, `reachable_shelters`, `planned_exit`). The
+  move (`move::pyro`): lined up in the middle of its column standing, a
+  jump straight up, the ability key pressed fresh once the feet hardly
+  rise, straight up again, across onto the ledge once over it. Hot (4 or
+  more pyro jumps it hasn't cooled from) it stands and cools down first: it
+  never gets to the 7th (stunned) or the 10th (blows up). Test: "NPC
+  Artificer pyro jumps up a wall" (a Survivor's routes don't see the shelter
+  past it).
 - **A Watcher in another's pack** in a region with no warps (none placed,
   no dynamic one open) leaves the pack, to make its own way. A Watcher
   leading keeps its pack.
@@ -617,7 +633,28 @@ unlinked from the room; `game_state::free_warps` keeps it for the next
 one. Tests: "dynamic warp: anything close, closes after 30 s", "Watcher
 makes a dynamic warp", "warp cooling down: a creature waits, forced open".
 
+## The Artificer
+
+`player.cpp`'s `artificer_update` ports Player.ClassMechanicsArtificer
+with Downpour's default explosion capacity (10): jump and grab (or a fresh
+press of the ability key) in the air, once until it lands or holds on, is
+a pyro jump (straight up 11 then a jump boost of 8, or along 15 with x
+held; the burst, sparks and sound). Each one heats it a step (cooling a
+step every 60 ticks, 40 when hot, once 150 passed): from 5 it sparks, from
+7 each one goes higher (16) but stuns it 60 ticks more each time, the 10th
+blows it up (PyroDeath: an explosion of radius 350 that kills slugcats
+within 100). Not ported: the parry (down with jump and grab), zero gravity.
+Test: "Artificer pyro jump, overused it blows up" (a held jump lifts its
+feet 1.9 tiles, with the pyro jump at the top 8.5).
+
 ## Gates
+
+Another failsafe, not vanilla: something over the gate's middle most of 5 s
+(`held_counter` going up while anything is in the middle zones, down while
+none is) starts the cycle even when vanilla wouldn't (creatures on both
+sides, coming and going, slugcats throwing each other off it), for the side
+more of them are on. A lone creature staying after a cycle still doesn't
+set it off again (`dont_open`). Test: "region gate cycles when contested".
 
 A failsafe, not vanilla: an airlock that stands open in the middle
 (`middle_open`, both sides shut) for 5 s without everything getting through

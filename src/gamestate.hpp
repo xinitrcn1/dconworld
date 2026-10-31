@@ -200,6 +200,9 @@ namespace sys {
         static constexpr uint32_t max_warps = 8;
         uint64_t from_exit[max_exits] = {};
         uint64_t from_arrival[max_warps] = {};
+        // the same for the Artificer (its pyro jumps: pathing::artificer)
+        uint64_t pyro_exit[max_exits] = {};
+        uint64_t pyro_arrival[max_warps] = {};
         // the room's warp `k`: (its destination room's index + 1) << 3 | the
         // arrival slot there, 0 for one leading nowhere
         uint32_t warp_to[max_warps] = {};

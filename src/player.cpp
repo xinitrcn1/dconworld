@@ -2,6 +2,7 @@
 #include <type_traits>
 
 #include "player.hpp"
+#include "explosions.hpp"
 #include "rooms.hpp"
 #include "physics.hpp"
 #include "cicada.hpp"
@@ -261,6 +262,9 @@ namespace player {
     X(warp_protection) \
     X(dynamic_warp_timer) \
     X(dynamic_warp_cooldown) \
+    X(pyro_jumpped) \
+    X(pyro_jump_counter) \
+    X(pyro_jump_cooldown) \
     X(is_camo) \
     X(camo_progress) \
     X(last_camo_progress) \
@@ -366,6 +370,7 @@ namespace player {
         };
 
         void movement_update(ctx& x);
+        void artificer_update(ctx& x);
         void update_body_mode(ctx& x);
         void update_animation(ctx& x);
         void jump(ctx& x);
@@ -805,10 +810,11 @@ namespace player {
         physics::update_object(state, room, x.o, &terrain_impact, &x);
 
         x.go_through_floors(false);
-        if (p.stun() < 1 && !p.dead()) {
+        if (p.stun() < 1 && !p.dead())
             movement_update(x);
+        artificer_update(x);
+        if (p.stun() < 1 && !p.dead())
             items::grab_update(state, id, room);
-        }
     }
 }
 
@@ -2919,6 +2925,103 @@ namespace player {
             }
             particles::bubbles(state, x.room.id, at, 40, 36.f);
             water::disturb(state, x.room.id, at.x, 6.f, 80.f);
+        }
+
+        // Player.ClassMechanicsArtificer with Downpour's default explosion
+        // capacity (10): the pyro jump. Jump and grab (or the ability key) in
+        // the air: a burst off its back throws it up (straight up or along,
+        // as held), once until it lands or holds on to something. Each one
+        // heats it up a step (cooling a step every 60 ticks, 40 when hot, once
+        // 150 passed); hot (5) it smokes and sparks, from the 7th it goes
+        // higher but is stunned longer each time, the 10th blows it up
+        // (PyroDeath). The parry (down with jump and grab) isn't ported
+        constexpr int32_t pyro_capacity = 10;
+        constexpr int32_t pyro_hot = pyro_capacity - 5;
+        constexpr int32_t pyro_stun = pyro_capacity - 3;
+
+        void pyro_burst(ctx& x, vec2 at) {
+            auto& state = x.state;
+            x.sound(sound::sound_id::fire_spear_explode, 0.3f + p_random(x).value() * 0.3f, 0.5f + p_random(x).value() * 2.f);
+            state.add_noise(x.room.id, at, 8000.f, x.o);
+            if (!state.viewed(x.room.id))
+                return;
+            auto& r = p_random(x);
+            particles::spawn(state, x.room.id, particles::kind::flash, at, vec2{0.f, 0.f}, 50.f, 0.15f, rw::vec3{1.f, 1.f, 1.f}, 1.f);
+            for (int i = 0; i < 8; ++i)
+                particles::spawn(state, x.room.id, particles::kind::dust, at, custom::deg_to_vec(r.value() * 360.f) * 5.f * r.value(), 3.f, 0.6f,
+                    rw::vec3{0.6f, 0.6f, 0.6f}, 0.7f);
+            for (int i = 0; i < 10; ++i) {
+                vec2 const d = custom::deg_to_vec(r.value() * 360.f);
+                particles::spawn(state, x.room.id, particles::kind::spark, at + d * r.value() * 40.f, d * mathf::lerp(4.f, 30.f, r.value()) * 0.5f, 1.5f, 0.3f,
+                    rw::vec3{1.f, 1.f, 1.f});
+            }
+        }
+
+        // Player.PyroDeath: one blast much bigger than a bomb's
+        void pyro_death(ctx& x) {
+            pref& p = x.p;
+            p.pyro_jump_counter() = pyro_capacity;
+            vec2 const at = rw::lerp(x.pos(0), x.last_pos(0), 0.35f);
+            explosions::explode(x.state, x.room, at, explosions::desc{350.f, 26.2f, 2.f, 280.f, 100.f}, x.o);
+            explosions::flash(x.state, x.room, at, 280.f);
+            die_impl(p);
+        }
+
+        void artificer_update(ctx& x) {
+            pref& p = x.p;
+            if (p.stats().name != slugcat_name::artificer)
+                return;
+            bool const pressed = (p.want_to_jump() > 0 && x.in(0).pckp) || (x.in(0).spec && !x.in(1).spec);
+            if (p.pyro_jump_counter() > 0 && (x.consious() || p.dead())) {
+                p.pyro_jump_cooldown() -= 1.f;
+                if (p.pyro_jump_cooldown() <= 0.f) {
+                    p.pyro_jump_cooldown() = p.pyro_jump_counter() >= pyro_hot ? 40.f : 60.f;
+                    --p.pyro_jump_counter();
+                }
+            }
+            if (p.pyro_jump_counter() >= pyro_hot && x.state.viewed(x.room.id) && p_random(x).value() < 0.5f)
+                particles::spawn(x.state, x.room.id, particles::kind::spark, x.pos(0), custom::deg_to_vec(p_random(x).value() * 360.f), 1.f, 0.2f,
+                    rw::vec3{1.f, 1.f, 1.f});
+            auto const a = p.animation();
+            auto const m = p.body_mode();
+            bool const holding_on = a == animation_index::hang_from_beam || a == animation_index::climb_on_beam || m == body_mode_index::wall_climb
+                || m == body_mode_index::swimming;
+            if (pressed && !p.pyro_jumpped() && p.can_jump() <= 0 && x.in(0).y >= 0 && x.consious() && m != body_mode_index::crawl
+                && m != body_mode_index::corridor_climb && m != body_mode_index::climb_into_shortcut && !holding_on) {
+                p.pyro_jumpped() = 1;
+                p.no_grab_counter() = 5;
+                pyro_burst(x, x.pos(0));
+                // (zero gravity isn't ported)
+                int32_t const ix = x.in(0).x;
+                if (ix != 0) {
+                    x.vel(0).y = mathf::min(x.vel(0).y, 0.f) + 8.f;
+                    x.vel(1).y = mathf::min(x.vel(1).y, 0.f) + 7.f;
+                    p.jump_boost() = 6.f;
+                }
+                if (ix == 0 || x.in(0).y == 1) {
+                    bool const hot = p.pyro_jump_counter() >= pyro_stun;
+                    x.vel(0).y = hot ? 16.f : 11.f;
+                    x.vel(1).y = hot ? 15.f : 10.f;
+                    p.jump_boost() = hot ? 10.f : 8.f;
+                }
+                if (x.in(0).y == 1) {
+                    x.vel(0).x = 10.f * float(ix);
+                    x.vel(1).x = 8.f * float(ix);
+                } else {
+                    x.vel(0).x = 15.f * float(ix);
+                    x.vel(1).x = 13.f * float(ix);
+                }
+                p.animation() = animation_index::flip;
+                ++p.pyro_jump_counter();
+                p.pyro_jump_cooldown() = 150.f;
+                p.body_mode() = body_mode_index::default_;
+                if (p.pyro_jump_counter() >= pyro_stun)
+                    stun_impl(p, 60 * (p.pyro_jump_counter() - (pyro_stun - 1)));
+                if (p.pyro_jump_counter() >= pyro_capacity)
+                    pyro_death(x);
+            }
+            if (p.can_jump() > 0 || !x.consious() || p.stun() > 0 || holding_on)
+                p.pyro_jumpped() = 0;
         }
 
         // Player.LungUpdate (base game lung settings; the Artificer blows up at

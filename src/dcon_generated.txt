@@ -731,6 +731,12 @@ object{
 	// held, ticks before it can make another
 	property{ name{dynamic_warp_timer} type{int32_t} }
 	property{ name{dynamic_warp_cooldown} type{int32_t} }
+	// the Artificer's pyro jumps (Player.pyroJumpped, pyroJumpCounter,
+	// pyroJumpCooldown): one done since it left the ground, how hot it is,
+	// ticks before it cools a step
+	property{ name{pyro_jumpped} type{uint8_t} }
+	property{ name{pyro_jump_counter} type{int32_t} }
+	property{ name{pyro_jump_cooldown} type{float} }
 	// camouflage (isCamo, camoCharge, the hold to toggle timers) and how
 	// faded out the slugcat is drawn
 	property{ name{is_camo} type{uint8_t} }

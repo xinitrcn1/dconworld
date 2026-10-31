@@ -37,6 +37,24 @@ namespace npc {
     }
 
     namespace {
+        // The NPC thinking now is the Artificer: its own path fields (its
+        // pyro jumps) and walkable ways between a room's exits
+        // (thread_local: the rooms think in parallel)
+        thread_local bool artificer_now = false;
+        pathing::movement const& walking() { return artificer_now ? pathing::artificer : pathing::slugcat; }
+        struct walking_as {
+            bool before;
+            walking_as(sys::game_state const& state, dcon::player_id p) : before(artificer_now) {
+                artificer_now = state.world.player_get_stats(p).name == player::slugcat_name::artificer;
+            }
+            ~walking_as() { artificer_now = before; }
+        };
+        uint64_t const* exit_masks(sys::slugcat_room_routes const& rr) { return artificer_now ? rr.pyro_exit : rr.from_exit; }
+        uint64_t const* arrival_masks(sys::slugcat_room_routes const& rr) { return artificer_now ? rr.pyro_arrival : rr.from_arrival; }
+        // a hot Artificer cools down before a pyro jump (one more from 7 on
+        // stuns it, the 10th blows it up)
+        constexpr int32_t pyro_cool_enough = 4;
+
         // the slugcats in each shelter (alive, out of the pipes), by room
         // index: counted in update_world, read while the rooms think
         std::vector<uint8_t>& crowds() {
@@ -200,7 +218,7 @@ namespace npc {
         uint64_t goals_from(sys::game_state& state, room_view const& room, ivec2 at) {
             uint64_t mask = 0;
             for (auto const& g : goals_of(state, room)) {
-                auto const f = pathing::field_to(state, room.id, g.tile, pathing::slugcat);
+                auto const f = pathing::field_to(state, room.id, g.tile, walking());
                 if (reaches(state, room, f, at))
                     mask |= uint64_t(1) << g.bit;
             }
@@ -297,7 +315,7 @@ namespace npc {
                 auto const r = room_at(st / slots);
                 uint32_t const slot = st % slots;
                 auto const& rr = all[size_t(r.index())];
-                uint64_t const walkable = slot < routes::max_exits ? rr.from_exit[slot] : rr.from_arrival[slot - arrival_slot];
+                uint64_t const walkable = slot < routes::max_exits ? exit_masks(rr)[slot] : arrival_masks(rr)[slot - arrival_slot];
                 // (nor the rooms a guess already failed in: `known`'s)
                 bool tried = false;
                 if (known)
@@ -471,7 +489,7 @@ namespace npc {
             });
             std::sort(options.begin(), options.end(), [](option const& a, option const& b) { return a.score > b.score; });
             for (size_t i = 0; i < options.size() && i < 3; ++i) {
-                auto const f = pathing::field_to(state, room.id, options[i].tile, pathing::slugcat);
+                auto const f = pathing::field_to(state, room.id, options[i].tile, walking());
                 if (pathing::distance(state, f, at) != pathing::unreachable)
                     return options[i].tile;
             }
@@ -519,7 +537,7 @@ namespace npc {
             if (!spear)
                 return std::nullopt;
             // where it can't get to yet: near what reaches the goal
-            auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+            auto const f = pathing::field_to(state, room.id, goal, walking());
             auto const near_goal = [&](ivec2 b) {
                 for (int32_t dy = -4; dy <= 4; ++dy)
                     for (int32_t dx = -4; dx <= 4; ++dx)
@@ -572,7 +590,7 @@ namespace npc {
                     }
                 ++w.room_get_geometry_version(room.id);
                 auto const view = world::get_room_view(state, room.id);
-                auto const ff = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                auto const ff = pathing::field_to(state, room.id, goal, walking());
                 bool const works = pathing::distance(state, ff, o.from) != pathing::unreachable;
                 for (int i = 0; i < 2; ++i)
                     if (room.inside(tiles[i].x, tiles[i].y) && !room.get_tile(tiles[i]).solid())
@@ -729,6 +747,66 @@ namespace npc {
                     // (for a pole: up once the hands are by it, to catch it)
                     bool const by_pole = room.get_tile(nav.aim).vertical_beam() && std::abs(pos(state, p, 0).x - room_view::middle_of_tile(nav.aim).x) < 20.f;
                     return input(high && t < 15 && !by_pole ? 0 : dir, t < 22 && !by_pole ? 0 : 1, t < 24 && t > 8);
+                }
+                case move::pyro: {
+                    // up there, landed (or hanging on the ledge: go() climbs on): done
+                    // (in the air its tile is the walkable one by its feet)
+                    if (t > 8 && at.y >= nav.aim.y && (!airborne(state, p) || w().player_get_animation(p) == player::animation_index::ledge_grab))
+                        break;
+                    if (t > 120) {
+                        failed(60);
+                        break;
+                    }
+                    if (t < 8) {
+                        // (hot: it cools down first, standing)
+                        if (w().player_get_pyro_jump_counter(p) >= pyro_cool_enough) {
+                            nav.move_timer = 0;
+                            nav.stuck = 0;
+                            return input(0, 0);
+                        }
+                        // the middle of its column, standing
+                        int32_t const feet_x = room_view::get_tile_position(pos(state, p, 1)).x;
+                        float const off = pos(state, p, 1).x - room_view::middle_of_tile(nav.from).x;
+                        if ((feet_x != nav.from.x || std::abs(off) > 3.f) && t < 6) {
+                            nav.move_timer = 1;
+                            if (++nav.cool > 60) {
+                                failed(30);
+                                break;
+                            }
+                            if (feet_x == nav.from.x)
+                                return input(nav.cool % 2 == 0 ? 0 : off > 0.f ? -1 : 1, 0);
+                            return input(rw::math_sign(nav.from.x - feet_x), 0);
+                        }
+                        return input(0, mode == player::body_mode_index::stand ? 0 : 1);
+                    }
+                    // straight up, and at the top of the jump the pyro jump (a
+                    // fresh press of the ability key), straight up again
+                    if (t == 8)
+                        return input(0, 0, true);
+                    if (!nav.hold_jump) {
+                        // (its feet hardly rising any more)
+                        auto const feet = player::body_chunk(state, p, 1);
+                        if (t > 12 && w().body_chunk_get_pos(feet).y - w().body_chunk_get_last_pos(feet).y < 1.5f) {
+                            nav.hold_jump = 1;
+                            auto in = input(0, 0, true);
+                            in.spec = true;
+                            return in;
+                        }
+                        // (back on the ground before it: the jump didn't take)
+                        if (t > 20 && w().player_get_can_jump(p) > 0) {
+                            failed(30);
+                            break;
+                        }
+                        return input(0, 0, true);
+                    }
+                    // back on the ground under it: it fell short
+                    if (t > 30 && at.y <= nav.from.y && mode == player::body_mode_index::stand) {
+                        failed(60);
+                        break;
+                    }
+                    // over the ledge: across onto it, up to catch it
+                    bool const over = pos(state, p, 1).y > room_view::middle_of_tile(nav.aim).y - 15.f;
+                    return input(over ? dir : 0, over ? 1 : 0, true);
                 }
                 case move::crouch: {
                     if (t > 60) {
@@ -1076,7 +1154,7 @@ namespace npc {
                 // in the air: keep going the way it was, grabbing a pole on
                 // the way
                 if (airborne(state, p)) {
-                    auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                    auto const f = pathing::field_to(state, room.id, goal, walking());
                     bool grab = room.get_tile(at).vertical_beam() && pathing::distance(state, f, at) <= nav.best;
                     // (the way on is up: reaching for whatever is there, a
                     // platform, a beam, a ledge)
@@ -1091,7 +1169,7 @@ namespace npc {
                         if (t == goal || t == goal + hole)
                             return input(-hole.x, -hole.y);
                 }
-                auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                auto const f = pathing::field_to(state, room.id, goal, walking());
                 // the end of its body further along the way (its head
                 // against a wall its feet haven't reached)
                 ivec2 const head_tile = room_view::get_tile_position(pos(state, p, 0));
@@ -1183,6 +1261,10 @@ namespace npc {
                     return started();
                 case pathing::step_kind::vault:
                     begin(move::vault, st->tile, st->dir);
+                    return started();
+                case pathing::step_kind::pyro:
+                    begin(move::pyro, st->tile, st->dir);
+                    ++stats().pyro_jumps;
                     return started();
                 case pathing::step_kind::wall:
                     begin(move::wall, st->tile, st->dir);
@@ -1714,7 +1796,7 @@ namespace npc {
                         return;
                     vec2 const ip = w().body_chunk_get_pos(items::chunk(state, it));
                     ivec2 const t = room_view::get_tile_position(ip);
-                    auto const f = pathing::field_to(state, room.id, t, pathing::slugcat);
+                    auto const f = pathing::field_to(state, room.id, t, walking());
                     if (pathing::distance(state, f, at) == pathing::unreachable && t != at)
                         return;
                     float const d = rw::distance(ip, pos(state, p, 1));
@@ -1745,7 +1827,7 @@ namespace npc {
             std::optional<player::input_package> spear_way(ivec2 goal) {
                 uint16_t const here = uint16_t(room.id.index() + 1);
                 if (nav.spear_phase == 0) {
-                    auto const f = pathing::field_to(state, room.id, goal, pathing::slugcat);
+                    auto const f = pathing::field_to(state, room.id, goal, walking());
                     if (pathing::distance(state, f, at) != pathing::unreachable || nav.spear_looked == here)
                         return std::nullopt;
                     nav.spear_looked = here;
@@ -1815,7 +1897,7 @@ namespace npc {
                     // to where slugcats sleep, not just in by the pipe
                     // (giving up after a while: a crowd, a spot it can't reach)
                     if (auto const spot = spawn_spot(state, room); spot && *spot != at && nav.goal_timer < 600) {
-                        auto const f = pathing::field_to(state, room.id, *spot, pathing::slugcat);
+                        auto const f = pathing::field_to(state, room.id, *spot, walking());
                         if (pathing::distance(state, f, at) != pathing::unreachable)
                             return go(*spot, false);
                     }
@@ -2070,17 +2152,30 @@ namespace npc {
                 for (auto const& g : goals)
                     every |= uint64_t(1) << g.bit;
                 for (auto const& [node, t] : starts)
-                    rr.from_exit[node] = every;
+                    rr.from_exit[node] = rr.pyro_exit[node] = every;
                 return;
             }
-            for (auto const& g : goals) {
-                auto const f = pathing::field_to(state, r, g.tile, pathing::slugcat);
-                for (auto const& [node, t] : starts)
-                    if (node != g.bit && reaches(state, view, f, t))
-                        rr.from_exit[node] |= uint64_t(1) << g.bit;
-                for (uint32_t j = 0; j < routes::max_warps; ++j)
-                    if (rr.arrival[j].x >= 0 && reaches(state, view, f, rr.arrival[j]))
-                        rr.from_arrival[j] |= uint64_t(1) << g.bit;
+            // (the Artificer's the same, unless the room has pyro jumps)
+            bool const pyro = pathing::has_pyro(state, view);
+            for (auto const& m : {pathing::slugcat, pathing::artificer}) {
+                bool const art = m == pathing::artificer;
+                if (art && !pyro)
+                    break;
+                auto* exits = art ? rr.pyro_exit : rr.from_exit;
+                auto* arrivals_mask = art ? rr.pyro_arrival : rr.from_arrival;
+                for (auto const& g : goals) {
+                    auto const f = pathing::field_to(state, r, g.tile, m);
+                    for (auto const& [node, t] : starts)
+                        if (node != g.bit && reaches(state, view, f, t))
+                            exits[node] |= uint64_t(1) << g.bit;
+                    for (uint32_t j = 0; j < routes::max_warps; ++j)
+                        if (rr.arrival[j].x >= 0 && reaches(state, view, f, rr.arrival[j]))
+                            arrivals_mask[j] |= uint64_t(1) << g.bit;
+                }
+            }
+            if (!pyro) {
+                std::copy(std::begin(rr.from_exit), std::end(rr.from_exit), std::begin(rr.pyro_exit));
+                std::copy(std::begin(rr.from_arrival), std::end(rr.from_arrival), std::begin(rr.pyro_arrival));
             }
             // (the fields were for this only)
             state.runtime(r).path_fields.clear();
@@ -2093,6 +2188,7 @@ namespace npc {
         auto const room = rooms::room_of(state, p);
         if (!room)
             return {};
+        walking_as walk{state, p};
         auto const view = world::get_room_view(state, room);
         auto const& s = explore(state, room, goals_from(state, view, tile_of(state, p, view)));
         return shelters_of(state, s, room);
@@ -2310,6 +2406,7 @@ namespace npc {
         if (!target || target == room)
             return std::nullopt;
         auto const view = world::get_room_view(state, room);
+        walking_as walk{state, p};
         // (no walkable way: the way its guessed trip goes, the rooms'
         // connections where the walkable way doesn't reach)
         auto& nav = w.slugcat_npc_get_nav(n);
@@ -2367,6 +2464,7 @@ namespace npc {
             auto& nav = w.slugcat_npc_get_nav(n);
             auto const p = w.slugcat_npc_get_player(n);
             auto const c = player::creature_of(state, p);
+            walking_as walk{state, p};
             auto const& t = w.creature_get_trip(c);
             uint32_t sig = uint32_t(t.hops) * 131u + t.next;
             for (uint32_t i = 0; i < t.hops; ++i)
@@ -2387,7 +2485,7 @@ namespace npc {
                 if (in < 0 || out >= migrate::warp_hop || out >= routes::max_exits)
                     continue;
                 spear = spear || spear_in_room(state, r);
-                if (state.slugcat_routes[size_t(r.index())].from_exit[size_t(in)] >> out & 1u)
+                if (exit_masks(state.slugcat_routes[size_t(r.index())])[size_t(in)] >> out & 1u)
                     continue;
                 auto const a = dens::exit_entrance(state, r, uint8_t(in));
                 auto const b = dens::exit_entrance(state, r, out);
@@ -2643,6 +2741,7 @@ namespace npc {
                 }
             }
         }
+        walking_as walk{state, p};
         brain b{state, p, n, c, room, nav, w.creature_get_random(c), tile_of(state, p, room)};
         if (creature::held(state, c)) {
             // wriggling
@@ -2661,7 +2760,7 @@ namespace npc {
             return "player";
         auto const& nav = w.slugcat_npc_get_nav(n);
         static char const* const goals[] = {"start", "travel", "flee", "rest"};
-        static char const* const moves[] = {"walk", "rise", "back up", "run", "crouch", "charge", "flight", "swing", "tip", "wall", "bounce", "vault"};
+        static char const* const moves[] = {"walk", "rise", "back up", "run", "crouch", "charge", "flight", "swing", "tip", "wall", "bounce", "vault", "pyro"};
         auto const target = w.slugcat_npc_get_target(n);
         auto const l = w.slugcat_npc_get_leader(n);
         std::string s = std::string{"NPC "} + player::to_string(w.player_get_stats(p).name) + " " + goals[size_t(nav.what)] + "/" + moves[size_t(nav.how)];
@@ -2690,10 +2789,10 @@ namespace npc {
         char buf[640];
         std::snprintf(buf, sizeof buf,
             "NPC slugcats: %u (%u alive, %u resting, %u packs); %u shelters reached, %u regions crossed, %u trips, %u rises, %u leaps, %u pounces, "
-            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pick ups, %u throws, %u stuck, %u no way",
+            "%u flights, %u hurried, %u turned back, %u braved, %u retargeted, %u diverted, %u spear steps, %u gave up, %u crowded, %u warps made, %u strays, %u pyro jumps, %u pick ups, %u throws, %u stuck, %u no way",
             total, alive, resting, packs, s.arrived.load(), s.regions_crossed.load(), s.trips.load(), s.rises.load(), s.leaps.load(), s.pounces.load(), s.flights.load(),
             s.hurried.load(), s.turned_back.load(), s.braved.load(), s.retargeted.load(), s.diverted.load(), s.spear_steps.load(), s.gave_up.load(), s.crowded.load(),
-            s.warps_made.load(), s.strays.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
+            s.warps_made.load(), s.strays.load(), s.pyro_jumps.load(), s.picked_up.load(), s.thrown.load(), s.stuck.load(), s.no_way.load());
         return buf;
     }
 }

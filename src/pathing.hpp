@@ -79,6 +79,8 @@ namespace pathing {
     // (`skip`: moves (from, to) it shouldn't take)
     std::optional<step> slugcat_step(sys::game_state& state, field_id f, rw::ivec2 from, std::function<bool(rw::ivec2, rw::ivec2)> const& skip = nullptr);
     std::string debug_jumps(sys::game_state& state, world::room_view const& room, rw::ivec2 from);
+    // the room has pyro jumps (the Artificer's way differs from the others')
+    bool has_pyro(sys::game_state& state, world::room_view const& room);
     // the tiles a slugcat at `from` can get to (row major, 1 reachable)
     std::vector<uint8_t> slugcat_reach_from(sys::game_state& state, world::room_view const& room, rw::ivec2 from);
 

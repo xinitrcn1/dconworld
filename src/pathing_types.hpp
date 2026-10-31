@@ -67,6 +67,8 @@ namespace pathing {
     inline constexpr movement tube_worm{{10, 10, 0, 0, 0, 0, 0}, 0};
     // the NPC slugcat: floors, corridors, poles at 1.5, swimming at 2
     inline constexpr movement slugcat{{10, 10, 15, 0, 0, 0, 0}, 20, 0, 0, 1};
+    // the NPC Artificer: the same, and its pyro jumps (`step_kind::pyro`)
+    inline constexpr movement artificer{{10, 10, 15, 0, 0, 0, 0}, 20, 0, 0, 2};
 
     // How the slugcat gets from a tile to the next: a step (walking,
     // crawling, climbing, swimming), letting go above a drop (off a pole,
@@ -74,8 +76,10 @@ namespace pathing {
     // tiles up, a running jump or a charge pounce over a gap, a jump from
     // a pole to another one, from a pole's tip (onto the ground, or off a
     // wall back to a pole over it), wall jumps up a narrow shaft, a pipe
-    // within the room
-    enum class step_kind : uint8_t { walk, drop, rise, leap, pounce, swing, tip, bounce, wall, pipe, vault };
+    // within the room; the Artificer's pyro jump up the open column over
+    // it, onto a ledge far higher than a jump goes (`movement::artificer`
+    // only)
+    enum class step_kind : uint8_t { walk, drop, rise, leap, pounce, swing, tip, bounce, wall, pipe, vault, pyro };
     // A slugcat move other than a plain step or a straight drop, between
     // two tiles of a room (row major indices), its cost in tenths and its
     // side (-1 left, 1 right, 0 straight up)
