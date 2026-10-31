@@ -22,6 +22,7 @@ namespace daddy {
         daddy,
         brother,
         mother,
+        grandmother,
         hunter,
     };
     inline constexpr uint32_t variant_count = 4;
@@ -46,7 +47,7 @@ namespace daddy {
     // bounds of the constructor's rolls: Random.Range(4, 16) chunks for the
     // mother, Random.Range(5, 13) tentacles, DaddyState.tentacleHealth[13],
     // Random.Range(5, 15) tubes less the dead legs
-    inline constexpr uint32_t max_chunks = 15;
+    inline constexpr uint32_t max_chunks = 30;
     inline constexpr uint32_t max_tentacles = 12;
     inline constexpr uint32_t max_tubes = 16;
     inline constexpr uint32_t max_sources = 8;

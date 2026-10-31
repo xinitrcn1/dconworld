@@ -1288,7 +1288,7 @@ int main(int argc, char* argv[]) {
                     // a group of three, maybe a pack
                     float mx = 0.f, my = 0.f;
                     SDL_GetMouseState(&mx, &my);
-                    npc::spawn_group(gs, a.room, render::screen_to_room(r, a.cam, mx, my), 3, gs.random);
+                    npc::spawn_group(gs, a.room, render::screen_to_room(r, a.cam, mx, my), 10, gs.random);
                     reports::add_log("three NPC slugcats; " + npc::stats_line(gs));
                     break;
                 }

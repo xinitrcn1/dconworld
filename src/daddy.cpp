@@ -938,6 +938,8 @@ namespace daddy {
         case variant::brother: return "brother";
         case variant::mother: return "mother";
         case variant::hunter: return "hunter";
+        // non-vanilla
+        case variant::grandmother: return "grandmother";
         }
         return "?";
     }
@@ -1014,9 +1016,9 @@ namespace daddy {
         // everywhere but Garbage Wastes and Silent Construct
         auto const region = w.room_get_region_from_region_membership(room);
         std::string_view const rname = region ? state.to_string_view(w.region_get_name(region)) : std::string_view{};
-        bool const size_class = v == variant::mother || v == variant::daddy;
+        bool const size_class = v == variant::grandmother || v == variant::mother || v == variant::daddy;
         bool color_class = size_class && (!region || (rname != "GW" && rname != "CL"));
-        if (rname == "RM" || v == variant::mother)
+        if (rname == "RM" || v == variant::mother || v == variant::grandmother)
             color_class = true;
         bool const hd = v == variant::hunter;
         vec3 effect, eye;
@@ -1024,6 +1026,8 @@ namespace daddy {
             effect = eye = vec3{0.57255f, 0.11373f, 0.22745f};
         } else if (v == variant::mother) {
             effect = eye = vec3{0.3f, 0.f, 1.f};
+        } else if (v == variant::grandmother) {
+            effect = eye = vec3{1.f, 0.f, 0.f};
         } else if (size_class) {
             effect = region ? w.region_get_corruption_effect_color(region) : vec3{0.f, 0.f, 1.f};
             eye = region ? w.region_get_corruption_eye_color(region) : vec3{0.f, 0.f, 1.f};
@@ -1053,13 +1057,16 @@ namespace daddy {
         w.creature_get_payload(d).daddy.graphics_seed = r.range(0, std::numeric_limits<int32_t>::max());
         float num = size_class ? 12.f : 8.f;
         int32_t num2 = 8, num3 = 7;
-        if (v == variant::mother) {
+        if (v == variant::grandmother) {
+            num2 = 40;
+            num3 = 39;
+            num = 25.f;
+        } else if (v == variant::mother) {
             num2 = 16;
             num3 = 11;
             num = 18.f;
         } else if (hd) {
-            num2 = 6;
-            num3 = 6;
+            num2 = num3 = 6;
             num = 4.f;
         }
         int32_t const n = r.range(4, size_class ? num2 : num3);
@@ -1070,7 +1077,7 @@ namespace daddy {
         desc.surface_friction = 0.4f;
         desc.water_friction = 0.96f;
         desc.buoyancy = 0.95f;
-        if (v == variant::mother) {
+        if (v == variant::mother || v == variant::grandmother) {
             desc.gravity = 0.75f;
             desc.water_friction = 0.99f;
             desc.buoyancy = 0.75f;
@@ -1107,6 +1114,9 @@ namespace daddy {
             num8 = 13;
             num9 = 12;
             num10 = 1000.f;
+        } else if (v == variant::grandmother) {
+            num8 = num9 = 40;
+            num10 = 10000.f;
         }
         int32_t nt;
         float num11;
