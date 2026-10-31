@@ -63,12 +63,13 @@ set(SHADERS
     flat.vert flat.frag
     room.vert room.frag
     decal.vert decal.frag
+    light.vert light.frag
     warp.vert warp_tear.frag warp_screen.frag water.frag
     rope.vert rope.frag
     circle.vert circle.frag
 )
 # #included by the shaders above
-set(SHADER_INCLUDES "${SHADER_DIR}/warp_common.glsl")
+set(SHADER_INCLUDES "${SHADER_DIR}/warp_common.glsl" "${SHADER_DIR}/level_common.glsl")
 set(SHADER_SOURCES "")
 foreach(shader IN LISTS SHADERS)
     string(REPLACE "." "_" stem "${shader}")

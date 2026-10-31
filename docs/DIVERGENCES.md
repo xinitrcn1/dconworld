@@ -22,6 +22,15 @@ Shared by every kind ported here:
 - Floating point: the build targets the host CPU (`RWCPP_NATIVE`, `-march=native`), where GCC fuses `a * b + c` into FMA instructions, so results differ from vanilla's C# in the last bits. A given build is still deterministic: one thread and every thread agree.
 
 
+## Level rendering (LevelColor, Decal, LightSource)
+
+- The level is drawn in passes instead of once over the sprites: depths 5+ behind the sprites, depths 0..4 over them, then (after the sprites) the sunlit pixels a sprite shades. The sprites are read from the frame's alpha (the level pipelines don't write it, so it holds the sprites' coverage) grabbed after them, standing in for vanilla's GrabPass; behind a semi-transparent sprite the level still shows, where vanilla's goes transparent. The background container's sand and plants count as sprites, like vanilla's.
+- `_NoiseTex` and `_NoiseTex2` are hashed value noise in the shaders (level_common.glsl), so the cloud shadows, the grime shimmer and the decals' drips have vanilla's formulas but not its noise image's shapes.
+- Not ported: the ripple, heat and melt variants, Watcher terrain (`_SlopedTerrainMask`), snow, the colour adjustment effects (darkness, contrast, saturation, hue, brightness), the wet terrain displacement, lightning, the ghost mode's `_light` and clouds speed. `_SwarmRoom` is always 1. RoomCamera's palette fades are the existing day/rain toggle.
+- `_light` and LightSource's fadeWithSun use the room's region cycle's ShaderLight (rain::shader_light, CycleStartUp 1); a room of no region has full sun.
+- Placed LightSources only (PlacedObject.LightSource); LightFixtures and the creatures' and items' LightSources don't light the level. No UnderWaterLight sprite, no darkenLightsFactor, no LightSourceExposure (creatures' visibility ignores lights). nightLight lights stay off (nightFade only rises with the DayNight effect). The blink runs on the world tick rather than the room's syncTicker. Environment coloured lights take the colour of the camera image the level shows at the light, every frame.
+- A decal or light over several overlapping camera images paints each pixel from the one the level shows there (the last drawn), as vanilla only ever has one camera image. CustomDecal's per vertex rolls (UnityEngine.Random seeded by the corners) are a hash.
+
 ## Noodlefly (BigNeedleWorm, SmallNeedleWorm)
 
 - No sounds: none of the noodlefly sound ids (trumpets, wing loops, attack, impale, bounce) are in sound_types.hpp. The cries (SmallCry, BigCry, the young's screams) only show as the snout's quiver (`screaming`).

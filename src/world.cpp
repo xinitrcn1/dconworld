@@ -176,6 +176,18 @@ namespace world {
             // CustomDecalData.vertices: per corner opacity and smudge
             rw::vec2 uv[4] = {{0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}, {0.5f, 0.f}};
         };
+        // PlacedObject.LightSourceData
+        struct parsed_light {
+            rw::vec2 pos{0.f, 0.f};
+            float rad = 100.f;
+            float strength = 1.f;
+            float blink_rate = 0.f;
+            uint8_t color_type = 0;
+            uint8_t blink_type = 0;
+            bool fade_with_sun = true;
+            bool flat = false;
+            bool night_light = false;
+        };
         struct parsed_thing {
             thing_kind kind = thing_kind::dangle_fruit;
             rw::vec2 pos{0.f, 0.f};
@@ -226,6 +238,7 @@ namespace world {
             std::vector<parsed_warp> warps;
             std::vector<parsed_warp_target> warp_targets;
             std::vector<parsed_decal> decals;
+            std::vector<parsed_light> lights;
             std::vector<parsed_thing> things;
 
             room_view view() const noexcept {
@@ -746,6 +759,19 @@ namespace world {
                 dc.decal_placed_set_uv_d(did, o.uv[3]);
                 dc.try_create_decal_location(did, rid);
             }
+            for (auto const& o : r.lights) {
+                auto const lid = dc.create_light_placed();
+                dc.light_placed_set_pos(lid, o.pos);
+                dc.light_placed_set_rad(lid, o.rad);
+                dc.light_placed_set_strength(lid, o.strength);
+                dc.light_placed_set_blink_rate(lid, o.blink_rate);
+                dc.light_placed_set_color_type(lid, o.color_type);
+                dc.light_placed_set_blink_type(lid, o.blink_type);
+                dc.light_placed_set_fade_with_sun(lid, o.fade_with_sun);
+                dc.light_placed_set_flat(lid, o.flat);
+                dc.light_placed_set_night_light(lid, o.night_light);
+                dc.try_create_light_location(lid, rid);
+            }
             for (auto const& o : r.warp_targets) {
                 auto const tid = dc.create_warp_target();
                 dc.warp_target_set_pos(tid, o.pos);
@@ -1240,6 +1266,28 @@ namespace world {
                         for (int k = 0; k < 4; ++k)
                             dc.uv[k] = rw::vec2{num(d[size_t(12 + k * 2)]), num(d[size_t(13 + k * 2)])};
                     r.decals.push_back(std::move(dc));
+                    continue;
+                }
+                if (parts[0] == "LightSource") {
+                    // LightSourceData.FromString: strength~colorType~handle.x~handle.y~
+                    // panel.x~panel.y~fadeWithSun~flat[~blinkType~blinkRate[~nightLight]]
+                    auto const d = split(parts[3], "~");
+                    if (d.size() < 8)
+                        continue;
+                    parsed_light l;
+                    l.pos = rw::vec2{num(parts[1]), num(parts[2])};
+                    l.strength = num(d[0]);
+                    l.color_type = d[1] == "White" ? 1 : d[1] == "EffectColor1" ? 2 : d[1] == "EffectColor2" ? 3 : 0;
+                    l.rad = rw::magnitude(rw::vec2{num(d[2]), num(d[3])});
+                    l.fade_with_sun = num(d[6]) > 0.f;
+                    l.flat = num(d[7]) > 0.f;
+                    if (d.size() > 9) {
+                        l.blink_type = d[8] == "Flash" ? 1 : d[8] == "Fade" ? 2 : 0;
+                        l.blink_rate = num(d[9]);
+                    }
+                    if (d.size() > 10)
+                        l.night_light = num(d[10]) > 0.f;
+                    r.lights.push_back(l);
                     continue;
                 }
                 if (parts[0] == "DynamicWarpTarget") {

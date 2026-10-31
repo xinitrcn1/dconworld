@@ -16,6 +16,8 @@
 // generated from src/shaders at build time (cmake/spirv_to_c.cmake)
 #include "shaders/decal_frag.h"
 #include "shaders/decal_vert.h"
+#include "shaders/light_frag.h"
+#include "shaders/light_vert.h"
 #include "shaders/flat_frag.h"
 #include "shaders/flat_vert.h"
 #include "shaders/circle_frag.h"
@@ -37,7 +39,7 @@ namespace gpu {
         constexpr uint32_t frames_in_flight = 2;
         constexpr VkFormat target_format = VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkDeviceSize uniform_range = 1024; // the biggest uniform block a draw may pass
-        constexpr uint32_t textures_per_draw = 3;    // bindings 1..3
+        constexpr uint32_t textures_per_draw = 4;    // bindings 1..4
         constexpr uint32_t storage_binding = 1 + textures_per_draw;
         constexpr VkDeviceSize storage_align = 32; // a whole number of rope_points and circles
         constexpr uint32_t sets_per_pool = 1024;
@@ -175,7 +177,7 @@ namespace gpu {
             b = buffer{};
         }
 
-        image make_image(context const& c, int w, int h, int layers, VkImageUsageFlags usage, VkFormat format, bool alpha_one = false) {
+        image make_image(context const& c, int w, int h, int layers, VkImageUsageFlags usage, VkFormat format) {
             image im;
             im.width = w;
             im.height = h;
@@ -203,8 +205,7 @@ namespace gpu {
             vi.image = im.img;
             vi.viewType = layers > 0 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
             vi.format = format;
-            vi.components = VkComponentMapping{VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                alpha_one ? VK_COMPONENT_SWIZZLE_ONE : VK_COMPONENT_SWIZZLE_IDENTITY};
+            vi.components = VkComponentMapping{VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
             vi.subresourceRange = VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, ii.arrayLayers};
             check(vkCreateImageView(c.device, &vi, nullptr, &im.view), "vkCreateImageView");
             im.used = true;
@@ -284,7 +285,8 @@ namespace gpu {
             c.target_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (c.scene != 0)
                 free_image(c, tex(c, c.scene));
-            image sc = make_image(c, w, h, 0, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, target_format, true);
+            // (its alpha as the frame has it: the sprite mask, see the pipelines)
+            image sc = make_image(c, w, h, 0, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, target_format);
             sc.samp = sampler::linear_clamp;
             if (c.scene == 0)
                 c.scene = add_texture(c, sc);
@@ -452,6 +454,10 @@ namespace gpu {
             VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
             cb.attachmentCount = 1;
             cb.pAttachments = &blend;
+            VkPipelineColorBlendAttachmentState blend_rgb = blend;
+            blend_rgb.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+            VkPipelineColorBlendStateCreateInfo cb_rgb = cb;
+            cb_rgb.pAttachments = &blend_rgb;
             VkDynamicState const dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
             ds.dynamicStateCount = 2;
@@ -467,6 +473,7 @@ namespace gpu {
                 {spirv{flat_vert_spv, flat_vert_spv_size}, spirv{flat_frag_spv, flat_frag_spv_size}},
                 {spirv{room_vert_spv, room_vert_spv_size}, spirv{room_frag_spv, room_frag_spv_size}},
                 {spirv{decal_vert_spv, decal_vert_spv_size}, spirv{decal_frag_spv, decal_frag_spv_size}},
+                {spirv{light_vert_spv, light_vert_spv_size}, spirv{light_frag_spv, light_frag_spv_size}},
                 {warp_vert, spirv{warp_tear_frag_spv, warp_tear_frag_spv_size}},
                 {warp_vert, spirv{warp_screen_frag_spv, warp_screen_frag_spv_size}},
                 {warp_vert, spirv{water_frag_spv, water_frag_spv_size}},
@@ -494,7 +501,13 @@ namespace gpu {
                 pi.pViewportState = &vp;
                 pi.pRasterizationState = &rs;
                 pi.pMultisampleState = &ms;
-                pi.pColorBlendState = &cb;
+                // the level and what paints it keep the target's alpha: what
+                // the sprites leave there (the frame is cleared to alpha 0) is
+                // their coverage, the sprite mask render.cpp grabs for the
+                // level shaders (vanilla's GrabPass of the sprites)
+                bool const keeps_alpha = i == size_t(pipeline::room) || i == size_t(pipeline::decal) || i == size_t(pipeline::light)
+                    || i == size_t(pipeline::warp_tear);
+                pi.pColorBlendState = keeps_alpha ? &cb_rgb : &cb;
                 pi.pDynamicState = &ds;
                 pi.layout = c.layout;
                 check(vkCreateGraphicsPipelines(c.device, VK_NULL_HANDLE, 1, &pi, nullptr, &c.pipelines[i]), "vkCreateGraphicsPipelines");
@@ -676,7 +689,7 @@ namespace gpu {
 
         VkDescriptorSet descriptor_set(context& c, std::array<texture, textures_per_draw> const& t) {
             frame& f = cur(c);
-            uint64_t const key = uint64_t(t[0]) | (uint64_t(t[1]) << 21) | (uint64_t(t[2]) << 42);
+            uint64_t const key = uint64_t(t[0]) | (uint64_t(t[1]) << 16) | (uint64_t(t[2]) << 32) | (uint64_t(t[3]) << 48);
             if (auto const it = f.sets.find(key); it != f.sets.end())
                 return it->second;
             VkDescriptorSet set = VK_NULL_HANDLE;
@@ -972,7 +985,7 @@ namespace gpu {
         c.clear[0] = r;
         c.clear[1] = g;
         c.clear[2] = b;
-        c.clear[3] = 1.f;
+        c.clear[3] = 0.f; // alpha: the sprite mask (see the pipelines)
         c.readback_valid = false;
         begin_commands(c);
         resume(c, true);
@@ -996,7 +1009,7 @@ namespace gpu {
                 uniform_range, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
             std::memcpy(f.uniforms.map + ubo, uniforms, std::min<size_t>(size, uniform_range));
             // unused slots: whichever kind the shader declares there, nothing reads them
-            std::array<texture, textures_per_draw> t{c.white_2d, c.white_array, c.white_2d};
+            std::array<texture, textures_per_draw> t{c.white_2d, c.white_array, c.white_2d, c.white_2d};
             size_t i = 0;
             for (texture const x : textures)
                 if (i < textures_per_draw) {

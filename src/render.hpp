@@ -31,7 +31,6 @@ namespace render {
     inline constexpr int camera_height = 800;
     inline constexpr int palette_width = 32;
     inline constexpr int palette_height = 16;
-    inline constexpr int max_lights = 16;
 
     struct atlas_frame {
         float x = 0.f, y = 0.f, w = 0.f, h = 0.f; // pixels, top left origin

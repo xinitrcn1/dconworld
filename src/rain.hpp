@@ -84,6 +84,10 @@ namespace rain {
     inline int32_t time_until_rain(cycle const& c) noexcept { return c.cycle_length - c.timer; }
     // RainCycle.RainApproaching (story mode): 1 far from the rain, 0 when it hits
     float rain_approaching(cycle const& c) noexcept;
+    // RainCycle.ShaderLight (story mode): the sun, 1 at mid cycle, sinking to
+    // -1 as the rain approaches; GlobalRain's once the death rain fell.
+    // CycleStartUp is 1 (no start up ticks)
+    float shader_light(cycle const& c) noexcept;
     // the death rain is falling
     inline bool deadly(cycle const& c) noexcept { return c.death_rain_has_hit != 0; }
     // RainTracker.Utility (story mode) for a creature in `room`: how badly it

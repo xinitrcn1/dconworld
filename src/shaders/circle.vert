@@ -12,7 +12,7 @@ struct circle {
     uint seed;      // the dents' rolls
     float pad;
 };
-layout(set = 0, binding = 4, std430) readonly buffer circles_buffer {
+layout(set = 0, binding = 5, std430) readonly buffer circles_buffer {
     circle circles[];
 };
 layout(set = 0, binding = 0, std140) uniform circle_uniforms {

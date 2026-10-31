@@ -21,7 +21,7 @@ struct rope_point {
     float rad; // half width, room pixels (< 0: padding)
     uint rgba; // 0xAABBGGRR
 };
-layout(set = 0, binding = 4, std430) readonly buffer rope_points {
+layout(set = 0, binding = 5, std430) readonly buffer rope_points {
     rope_point points[];
 };
 layout(set = 0, binding = 0, std140) uniform rope_uniforms {

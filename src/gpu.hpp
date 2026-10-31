@@ -54,12 +54,15 @@ namespace gpu {
     };
 
     // one per vertex/fragment shader pair; the uniform block (set 0,
-    // binding 0) is each shader's own, textures are bindings 1..3, the
-    // storage buffer (upload_storage) binding 4
+    // binding 0) is each shader's own, textures are bindings 1..4, the
+    // storage buffer (upload_storage) binding 5. room, decal, light and
+    // warp_tear don't write the target's alpha: the frame starts at alpha 0
+    // and the other pipelines' alpha blending leaves their coverage there
     enum class pipeline : uint8_t {
         flat,        // flat.vert/frag: coloured, optionally textured (1: the texture)
-        room,        // room.vert/frag: the level shader (1: cameras, 2: palettes, 3: effect colours)
-        decal,       // decal.vert/frag (1: cameras, 2: palettes, 3: the decal)
+        room,        // room.vert/frag: the level shader (1: cameras, 2: palettes, 3: effect colours, 4: the sprite mask)
+        decal,       // decal.vert/frag (1: cameras, 2: palettes, 3: the decal, 4: the sprite mask)
+        light,       // light.vert/frag: LightSource (1: cameras, 2: palettes, 3: effect colours, 4: the sprite mask)
         warp_tear,   // warp.vert + warp_tear.frag (1: the scene)
         warp_screen, // warp.vert + warp_screen.frag (1: the scene)
         water,       // warp.vert + water.frag (1: the scene)
@@ -96,7 +99,8 @@ namespace gpu {
     // out of the storage buffer by gl_VertexIndex), triangle list
     void draw_pulled(context& c, pipeline p, void const* uniforms, size_t size, std::initializer_list<texture> textures, size_t vertices);
     // a copy of the frame drawn so far (Unity's GrabPass), bottom row first
-    // like glCopyTexSubImage2D's, linearly filtered, alpha 1
+    // like glCopyTexSubImage2D's, linearly filtered; its alpha is the frame's
+    // (the sprites' coverage, see `pipeline`)
     texture grab_scene(context& c);
     // the frame drawn so far, RGBA, width * height texels, rows top to bottom
     // (unlike glReadPixels); waits for the GPU. Stays valid until the next draw

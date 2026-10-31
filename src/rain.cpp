@@ -286,6 +286,16 @@ namespace rain {
         return mathf::inverse_lerp(0.f, 2400.f, float(time_until_rain(c)));
     }
 
+    float shader_light(cycle const& c) noexcept {
+        if (deadly(c))
+            return c.shader_light;
+        float const proximity_to_middle = c.cycle_length > 0
+            ? std::fabs(float(c.timer) - float(c.cycle_length) / 2.f) / (float(c.cycle_length) / 2.f)
+            : 0.f;
+        float const light_change = mathf::inverse_lerp(0.4f, 1.f, rain_approaching(c));
+        return -1.f + mathf::lerp(1.f, 1.f - proximity_to_middle, 0.2f) * 2.f * mathf::inverse_lerp(0.4f, 1.f, light_change);
+    }
+
     cycle const* of_room(sys::game_state const& state, dcon::room_id room) noexcept {
         auto const r = region_of(state, room);
         return r ? &state.world.region_get_rain(r) : nullptr;

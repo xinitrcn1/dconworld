@@ -489,6 +489,33 @@ relationship{
 	primary_key{decal}
 }
 
+// Placed LightSource objects (PlacedObject.LightSourceData; Room.Loaded
+// makes them environmental LightSources): only drawn, never simulated.
+// color_type: 0 Environment, 1 White, 2 EffectColor1, 3 EffectColor2;
+// blink_type: 0 None, 1 Flash, 2 Fade
+object{
+	name{light_placed}
+	storage_type{contiguous}
+	size{8192}
+	tag{scenario}
+	property{ name{pos} type{rw::vec2} }
+	property{ name{rad} type{float} }
+	property{ name{strength} type{float} }
+	property{ name{blink_rate} type{float} }
+	property{ name{color_type} type{uint8_t} }
+	property{ name{blink_type} type{uint8_t} }
+	property{ name{fade_with_sun} type{bitfield} }
+	property{ name{flat} type{bitfield} }
+	property{ name{night_light} type{bitfield} }
+}
+relationship{
+	name{light_location}
+	tag{scenario}
+	link{ object{light_placed} name{light} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{light}
+}
+
 // The other placed objects the simulation uses: food, weapons and pearls
 // (they become items on the first visit), corn plants, mud pits and the sand
 // terrain's handles, in file order

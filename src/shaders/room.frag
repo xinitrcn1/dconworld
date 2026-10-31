@@ -1,162 +1,116 @@
-// Level colouring for room camera images, from anthiel's nv_shaders/room.frag.
-// The camera image encodes per pixel: R = depth/facing/lighting, G = effect
-// colour and flags, B = effect amount. Colours come from the room palette
-// (a layer of the palette texture array) and the global effectcolors.png.
+// The level shader for room camera images: vanilla's LevelColor (the
+// ripple, heat and melt variants left out). Its colours come from the
+// room palette (a layer of the palette texture array) and the global
+// effectcolors.png (vanilla copies them into the palette's columns 30, 31).
+//
+// Vanilla draws the level once over the sprites, making it transparent
+// wherever a sprite was drawn on depths 5+, and the sprites cast shadows
+// on sunlit depths 5+ along the room's lightAngle (the GrabPass of what was
+// drawn before). Here it is drawn in passes:
+//   0: depths 5+ and the sky, behind the sprites, with the clouds' shadow;
+//   1: depths 0..4, over the sprites;
+//   2: after the sprites, over the pass 0 pixels no sprite covers: only
+//      those a sprite shades from the sun, in their shaded colour. The
+//      sprites are read from the sprite mask (binding 4: the frame's alpha
+//      grabbed after them, render.cpp)
 #version 450
-
-// render::max_lights
-#define MAX_LIGHTS 16
+#extension GL_GOOGLE_include_directive : require
+#include "level_common.glsl"
 
 // render.cpp's room_uniforms
 layout(set = 0, binding = 0, std140) uniform room_uniforms {
     mat4 u_proj;
-    // Lighting (we don't prebake lets just go in raw)
-    vec4 u_lighting_data[MAX_LIGHTS]; //vec3(rgb), a=intensity
-    vec2 u_lighting_pos[MAX_LIGHTS]; //(x,y,z) position (euclidean distance)
-    // Used by regionkit regions
-    vec4 u_replace_effect_color_a;
-    vec4 u_replace_effect_color_b;
-    ivec2 u_effect_colors; //[0,7] EffectColorA + EffectColorB
-    ivec2 u_camera_view; //# camera for the camera positions
-    int u_index; //what palette # in array
-    int u_camera_index; //# camera in the 2d texture array
-    float u_night_time; //[0,1] night time t
-    float u_fog_factor; //[0,1] fog factor t
-    float u_grime_factor; //[0,1] amount of grime
-    float u_rooftop_blend; //[0,1] alpha of skybox
-    float u_timer;
-    // 0: background pass (behind sprites), 1: foreground pass (in front of sprites)
+    vec2 u_screen;        // framebuffer pixels
+    vec2 u_view_pos;      // the view's bottom left, room pixels
+    vec2 u_cam_origin;    // this camera image's bottom left, room pixels
+    vec2 u_light_dir;     // room.lightAngle
+    ivec2 u_effect_colors; // EffectColorA, EffectColorB (-1: none)
+    int u_index;          // palette layer
+    int u_camera_index;   // camera image layer
+    float u_zoom;
+    float u_night_time;   // [0, 1] towards the rain palette
+    float u_grime;        // roomSettings.Grime
+    float u_rain;         // vanilla's _RAIN clock
+    float u_light;        // vanilla's _light
+    float u_clouds_speed; // vanilla's _cloudsSpeed
     int u_pass;
+    float u_swarm;        // vanilla's _SwarmRoom
 };
-layout(set = 0, binding = 1) uniform sampler2DArray u_texture0; //per-room texture (an array of)
-layout(set = 0, binding = 2) uniform sampler2DArray u_texture1; //palette texture
-layout(set = 0, binding = 3) uniform sampler2D u_texture2; //global effectscolors.png
+layout(set = 0, binding = 1) uniform sampler2DArray u_level;   // the room's camera images
+layout(set = 0, binding = 2) uniform sampler2DArray u_palette;
+layout(set = 0, binding = 3) uniform sampler2D u_effects;      // effectcolors.png
+layout(set = 0, binding = 4) uniform sampler2D u_mask;         // the sprite mask (pass 2)
 
 layout(location = 0) out vec4 o_frag_color;
 layout(location = 0) in vec2 v_texcoord;
 
-int floor_div(int a, int b) {
-    return int(floor(float(a) / float(b)));
+// palette texel (30 + col, y) as vanilla's ApplyEffectColorsToPaletteTexture
+// leaves it for effect colour `e` (1: A, 2: B): rows y 5/4 (A) and 3/2 (B)
+vec3 effect_texel(int e, int col, bool far, bool rain) {
+    int fx = e == 1 ? u_effect_colors.x : u_effect_colors.y;
+    if (fx < 0)
+        return level_pal(u_palette, u_index, 30 + col, (e == 1 ? 5 : 3) - (far ? 1 : 0), rain);
+    // effectcolors.png, top row first: rows 0/1 the palette's near/far, 2/3 the rain's
+    return texelFetch(u_effects, ivec2(fx * 2 + col, (rain ? 2 : 0) + (far ? 1 : 0)), 0).rgb;
 }
 
-vec3 get_replaced_colour(ivec2 index, vec4 c) {
-    bool unlit = (index.y % 2) > 0;
-    return unlit ? c.rgb : c.rgb;
-}
-
-vec4 get_room_color(bool rain, ivec3 index, vec4 light_color) {
-    bool grime = (((index.g >> 2) & 1) != 0);
-    bool decal = (((index.g >> 3) & 1) != 0);
-    bool unlit = (((index.g >> 4) & 1) != 0);
-    bool lit = (index.r > 90 && !rain) && !unlit;
-
-    int facing = floor_div(index.r - 1, 30) % 3;
-    int depth = !unlit ? ((index.r - 1) % 30) : 0;
-
-    vec3 fog_color = texelFetch(u_texture1, ivec3(1, 0, u_index), 0).rgb;
-    vec3 shadow_color = texelFetch(u_texture1, ivec3(2, 0, u_index), 0).rgb;
-    float fog_amount = texelFetch(u_texture1, ivec3(9, 0, u_index), 0).r;
-    vec3 shortcut_1_color = texelFetch(u_texture1, ivec3(10, 0, u_index), 0).rgb;
-    vec3 shortcut_2_color = texelFetch(u_texture1, ivec3(11, 0, u_index), 0).rgb;
-    vec3 shortcut_3_color = texelFetch(u_texture1, ivec3(12, 0, u_index), 0).rgb;
-
-    if (decal && index.b == 0) {
-        return vec4(((index.g & 0x01) != 0) ? shortcut_1_color : shortcut_1_color, 1.f);
+vec3 level_color(bool rain, ivec3 t, level_px p, float shadow, vec2 uv) {
+    int red = p.depth;
+    int column = p.floor_dark ? red : 0;
+    vec3 fog = level_pal(u_palette, u_index, 1, 7, rain);
+    vec3 c = mix(level_pal(u_palette, u_index, column, p.palette_color + 3, rain),
+                 level_pal(u_palette, u_index, column, p.palette_color, rain), shadow);
+    // grime
+    float rbcol = sin((u_rain + level_tex_noise(uv * 2.0) * 4.0 + float(red) / 12.0) * 3.14 * 2.0) * 0.5 + 0.5;
+    if (p.green >= 4)
+        c = mix(c, level_pal(u_palette, u_index, int(5.5 + rbcol * 25.0), 6, rain), 0.2 * u_grime);
+    if (p.prop) {
+        // coloured props: their colour from the image's top row
+        vec3 prop = texelFetch(u_level, ivec3(255 - t.b, 0, u_camera_index), 0).rgb;
+        if (p.palette_color == 2)
+            prop = mix(prop, vec3(1.0), 0.2 - shadow * 0.1);
+        prop = mix(prop, fog, float(red) / 60.0);
+        c = mix(mix(c, prop, 0.7), c * prop * 1.5, mix(0.9, 0.3 + 0.4 * shadow, clamp((float(red) - 3.5) * 0.3, 0.0, 1.0)));
+    } else if (p.green > 0 && p.green < 3) {
+        vec3 near = mix(effect_texel(p.green, 0, false, rain), effect_texel(p.green, 1, false, rain), shadow);
+        vec3 far = mix(effect_texel(p.green, 0, true, rain), effect_texel(p.green, 1, true, rain), shadow);
+        c = mix(c, mix(near, far, float(red) / 30.0), float(t.b) / 255.0);
+    } else if (p.green == 3) {
+        c = mix(c, vec3(1.0), float(t.b) / 255.0 * u_swarm);
     }
-
-    {
-        int variant_row = depth < 10 ? 0 : 1;
-        int variant_column = lit ? 0 : 1;
-
-        // scenery - if you invert the `abs(x - y)` the glsl compiler bugs out for some reason
-        int scenery_palette_row_a = abs((facing + (lit ? 3 : 0)) - (rain ? 15 : 7));
-        vec3 scenery_color_a = texelFetch(u_texture1, ivec3(depth, scenery_palette_row_a, u_index), 0).rgb;
-        int scenery_palette_row_b = abs(facing - (rain ? 15 : 7));
-        vec3 scenery_color_b = texelFetch(u_texture1, ivec3(depth, scenery_palette_row_b, u_index), 0).rgb;
-        vec3 scenery_color = mix(scenery_color_b, scenery_color_a * light_color.rgb, light_color.a);
-
-        // blending
-        vec3 blend_color_rgb;
-        switch (index.g & 3) {
-        case 0: {
-            blend_color_rgb = scenery_color;
-            break;
-        }
-        case 1: { //EffectColorA
-            int palette_row = (rain ? 2 : 0) + variant_row;
-            int palette_column = u_effect_colors[0] * 2 + variant_column;
-            if (u_replace_effect_color_a != vec4(0.f)) { // regionkit+
-                blend_color_rgb = get_replaced_colour(ivec2(palette_column, palette_row), u_replace_effect_color_a);
-            } else {
-                blend_color_rgb = texelFetch(u_texture2, ivec2(palette_column, palette_row), 0).rgb;
-            }
-            break;
-        }
-        case 2: { //EffectColorB
-            int palette_row = (rain ? 2 : 0) + variant_row;
-            int palette_column = u_effect_colors[1] * 2 + variant_column;
-            if (u_replace_effect_color_b != vec4(0.f)) { // regionkit+
-                blend_color_rgb = get_replaced_colour(ivec2(palette_column, palette_row), u_replace_effect_color_b);
-            } else {
-                blend_color_rgb = texelFetch(u_texture2, ivec2(palette_column, palette_row), 0).rgb;
-            }
-            break;
-        }
-        case 3:
-            blend_color_rgb = vec3(1.f);
-            break;
-        }
-
-        vec3 out_color_rgb;
-        if (decal) {
-            // pipes handled above
-            out_color_rgb = texelFetch(u_texture0, ivec3(255 - index.b, 0, u_camera_index), 0).rgb;
-            out_color_rgb = mix(scenery_color, out_color_rgb, 0.25f - 0.25f * float(depth) / 30.f);
-        } else {
-            out_color_rgb = mix(scenery_color, blend_color_rgb, float(index.b) / 255.f);
-        }
-        if (grime) {
-            int grime_seed = int(sin((v_texcoord.x + u_timer)) * 128.f + cos((v_texcoord.y + u_timer)) * 128.f) % 30;
-            vec3 grime_color = texelFetch(u_texture2, ivec2(grime_seed, 1), 0).rgb;
-            out_color_rgb = mix(out_color_rgb, grime_color, u_grime_factor * (float(index.r) / 255.f));
-        }
-        out_color_rgb = mix(out_color_rgb, fog_color, (1.f - fog_amount) * (float(depth) / 30.f));
-        return vec4(out_color_rgb, 1.f);
-    }
+    float fog_amount = level_fog_amount(u_palette, u_index, rain);
+    float fog_k = red < 10 ? mix(p.floor_dark ? 1.0 : 0.0, 1.0, 0.5) : 1.0;
+    return mix(c, fog, clamp(float(red) * fog_k * fog_amount / 30.0, 0.0, 1.0));
 }
 
 void main() {
-    vec3 room_color = texture(u_texture0, vec3(v_texcoord.xy, float(u_camera_index))).rgb;
-    ivec3 index = ivec3(room_color * 255.0f);
-
-    // Vanilla LevelColor masks out every pixel with depth >= 5 wherever a sprite
-    // was drawn (the level graphic sits above creatures), so those pixels are
-    // background and depths 0..4 are foreground. Split them into two passes.
-    bool sky_pixel = index == ivec3(255, 255, 255);
-    int split_depth = (index.r - 1) % 30;
-    bool foreground = !sky_pixel && index.r > 0 && split_depth < 5;
-    if (u_pass == 0 && foreground)
+    ivec3 t = ivec3(texture(u_level, vec3(v_texcoord, float(u_camera_index))).rgb * 255.0 + 0.5);
+    level_px p = level_decode(t);
+    bool foreground = !p.sky && t.r > 0 && p.depth < 5;
+    if (u_pass == 1 ? !foreground : foreground)
         discard;
-    if (u_pass == 1 && !foreground)
-        discard;
-
-    vec4 light_color = vec4(0.f);
-    for (int i = 0; i < MAX_LIGHTS; ++i) {
-        float light_i = u_lighting_data[i].w;
-        float light_d = 1.f - distance(v_texcoord, u_lighting_pos[i].xy);
-        float light_sublayer = float((index.r - 1) % 30) / 30.f;
-        float amount = light_d * light_i - light_sublayer * light_i;
-        light_color = mix(light_color, vec4(u_lighting_data[i].rgb, 1.f), amount);
+    if (p.sky) {
+        if (u_pass == 2)
+            discard;
+        // the sky colour is the frame's clear colour (and the backgrounds')
+        o_frag_color = vec4(0.0);
+        return;
     }
-    light_color.a = mix(light_color.a, 1.f, u_rooftop_blend);
-
-    vec4 day_color = get_room_color(false, index, light_color);
-    vec4 night_color = get_room_color(true, index, light_color);
-    if (index == ivec3(255, 255, 255)) {
-        // sky layer
-        o_frag_color = vec4(0.f);
-    } else {
-        // normal layer
-        o_frag_color = mix(day_color, night_color, u_night_time);
+    // Unity's uv: y from the bottom
+    vec2 uv = vec2(v_texcoord.x, 1.0 - v_texcoord.y);
+    float shadow = p.sunlit ? level_cloud_shadow(uv, t.r, u_rain, u_clouds_speed, u_light) : 1.0;
+    if (u_pass == 2) {
+        if (shadow >= 1.0)
+            discard;
+        vec2 room = u_cam_origin + uv * level_size;
+        // (vanilla's level is transparent there: the sprite shows)
+        if (level_sprite_at(u_mask, (room - u_view_pos) * u_zoom / u_screen))
+            discard;
+        if (!level_sprite_shadow(u_mask, uv, p.depth, u_light_dir, u_cam_origin, u_view_pos, u_zoom, u_screen))
+            discard;
+        shadow = 1.0;
     }
+    vec3 day = level_color(false, t, p, shadow, uv);
+    vec3 night = level_color(true, t, p, shadow, uv);
+    o_frag_color = vec4(mix(day, night, u_night_time), 1.0);
 }

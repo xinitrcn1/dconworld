@@ -60,6 +60,7 @@
 #include "terrain.hpp"
 #include "shortcuts.hpp"
 #include "reports.hpp"
+#include "rain.hpp"
 
 namespace render {
     using rw::vec2;
@@ -93,32 +94,65 @@ namespace render {
             glm::mat4 proj;
             int32_t textured;
         };
+        // camera images an overlapping draw defers to (decal.frag, light.frag)
+        constexpr size_t max_later_cameras = 32;
         struct room_uniforms {
             glm::mat4 proj;
-            glm::vec4 lighting_data[max_lights];
-            glm::vec4 lighting_pos[max_lights]; // vec2 u_lighting_pos[]: a 16 byte stride
-            glm::vec4 replace_effect_color_a;
-            glm::vec4 replace_effect_color_b;
+            glm::vec2 screen;
+            glm::vec2 view_pos;
+            glm::vec2 cam_origin;
+            glm::vec2 light_dir;
             glm::ivec2 effect_colors;
-            glm::ivec2 camera_view;
             int32_t index;
             int32_t camera_index;
+            float zoom;
             float night_time;
-            float fog_factor;
-            float grime_factor;
-            float rooftop_blend;
-            float timer;
+            float grime;
+            float rain;
+            float light;
+            float clouds_speed;
             int32_t pass;
+            float swarm;
         };
-        static_assert(offsetof(room_uniforms, replace_effect_color_a) == 576 && offsetof(room_uniforms, pass) == 652);
+        static_assert(offsetof(room_uniforms, effect_colors) == 96 && offsetof(room_uniforms, swarm) == 140);
         struct decal_uniforms {
             glm::mat4 proj;
+            glm::vec2 screen;
+            glm::vec2 view_pos;
             glm::vec2 cam_origin;
-            float from, to;
+            glm::vec2 light_dir;
             int32_t index;
             int32_t camera_index;
-            int32_t pass;
+            float zoom;
+            float night_time;
+            float rain;
+            float light;
+            float clouds_speed;
+            int32_t later_count;
+            glm::vec4 later[max_later_cameras / 2];
+            float from, to;
         };
+        static_assert(offsetof(decal_uniforms, later) == 128 && offsetof(decal_uniforms, from) == 384);
+        struct light_uniforms {
+            glm::mat4 proj;
+            glm::vec2 screen;
+            glm::vec2 view_pos;
+            glm::vec2 cam_origin;
+            glm::vec2 center;
+            glm::vec4 color;
+            glm::ivec2 effect_colors;
+            int32_t index;
+            int32_t camera_index;
+            float zoom;
+            float night_time;
+            int32_t color_type;
+            int32_t flat;
+            glm::vec2 env_origin;
+            int32_t env_camera;
+            int32_t later_count;
+            glm::vec4 later[max_later_cameras / 2];
+        };
+        static_assert(offsetof(light_uniforms, effect_colors) == 112 && offsetof(light_uniforms, env_origin) == 144 && offsetof(light_uniforms, later) == 160);
         struct warp_tear_uniforms {
             glm::mat4 proj;
             glm::vec2 screen;
@@ -2829,15 +2863,56 @@ namespace render {
             return t.texture;
         }
 
+        // What the level shaders drawn after the sprites share in a frame
+        // (decal.frag, light.frag): the view, the room's sun and the sprite mask
+        struct level_frame {
+            glm::mat4 proj{1.f};
+            vec2 screen{1.f, 1.f};
+            vec2 view_pos{0.f, 0.f};
+            float zoom = 1.f;
+            vec2 light_dir{0.f, 0.f};
+            int32_t palette = 0;
+            glm::ivec2 effect_colors{-1, -1};
+            float night_time = 0.f;
+            float rain = 0.f;         // vanilla's _RAIN
+            float light = 1.f;        // vanilla's _light
+            float shader_light = 1.f; // RainCycle.ShaderLight
+            uint32_t mask = 0;        // the sprite mask (gpu::grab_scene after the sprites)
+            std::vector<vec2> const* cams = nullptr;
+            uint32_t tick = 0;
+        };
+
+        // the camera images drawn after `c` (the level shows theirs where they
+        // overlap it), two per vec4; how many
+        int32_t later_cameras(std::vector<vec2> const& cams, size_t c, glm::vec4* out) {
+            int32_t n = 0;
+            for (size_t k = c + 1; k < cams.size() && size_t(n) < max_later_cameras; ++k, ++n) {
+                glm::vec4& v = out[n / 2];
+                if (n % 2 == 0) {
+                    v.x = cams[k].x;
+                    v.y = cams[k].y;
+                } else {
+                    v.z = cams[k].x;
+                    v.w = cams[k].y;
+                }
+            }
+            return n;
+        }
+
+        bool camera_touches(vec2 o, vec2 lo, vec2 hi) {
+            return !(hi.x < o.x || lo.x > o.x + float(camera_width) || hi.y < o.y || lo.y > o.y + float(camera_height));
+        }
+
         // CustomDecal: the image stretched over the quad, split into a grid
-        // (finer for bigger decals) whose inner points the decal's noise
-        // jitters, its corners' opacity blended across it, drawn once per
-        // camera image under it
-        void draw_decals(state& r, sys::game_state const& s, world::room_view const& room, glm::mat4 const& proj, int pass, std::vector<vec2> const& cams) {
+        // (finer for bigger decals) whose points carry the corners' opacity
+        // and smudge, blended across it and broken up by the decal's noise
+        // (CustomDecal.UpdateVerts), drawn once per camera image under it,
+        // after the sprites (vanilla's Foreground container, over the level)
+        void draw_decals(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f) {
             auto const& w = s.world;
+            auto const& cams = *f.cams;
             if (cams.empty())
                 return;
-            auto const palette = w.room_get_palette(room.id).id;
             w.room_for_each_decal_location(room.id, [&](dcon::decal_location_id l) {
                 auto const d = w.decal_location_get_decal(l);
                 uint32_t const tex = decal_texture(r, s, std::string{s.to_string_view(w.decal_placed_get_image(d))});
@@ -2853,6 +2928,7 @@ namespace render {
                 // CustomDecalData.vertices: per corner (opacity, smudge)
                 vec2 const cvv[4] = {w.decal_placed_get_uv_a(d), w.decal_placed_get_uv_b(d), w.decal_placed_get_uv_c(d), w.decal_placed_get_uv_d(d)};
                 float const cv[4][2] = {{cvv[0].x, cvv[0].y}, {cvv[1].x, cvv[1].y}, {cvv[2].x, cvv[2].y}, {cvv[3].x, cvv[3].y}};
+                // (UnityEngine.Random seeded with the corners' sum: a hash here)
                 uint32_t h = uint32_t(int32_t(q[0].x + q[0].y + q[1].x + q[1].y + q[2].x + q[2].y + q[3].x + q[3].y)) * 2654435761u + 1u;
                 auto const roll = [&] {
                     h ^= h << 13; h ^= h >> 17; h ^= h << 5;
@@ -2865,26 +2941,18 @@ namespace render {
                         float const tj = float(j) / float(div);
                         // j runs along q0 -> q1, i along q0 -> q3
                         vec2 const pos = rw::lerp(rw::lerp(q[0], q[3], ti), rw::lerp(q[1], q[2], ti), tj);
-                        // q0 bottom left, q1 top left, q2 top right, q3 bottom right
-                        float u = ti;
-                        float v = tj;
-                        if (noise > 0.f && i > 0 && j > 0 && i < div && j < div) {
-                            // the decal's noise roughens the image's stretch inside its edges
-                            u = mathf::clamp01(u + (roll() - 0.5f) * noise * 0.5f / float(div));
-                            v = mathf::clamp01(v + (roll() - 0.5f) * noise * 0.5f / float(div));
-                        }
-                        // the corners' opacity (and smudge), blended across the
-                        // quad and broken up by the noise
                         auto const corners = [&](int k) {
                             return mathf::lerp(mathf::lerp(cv[3][k], cv[2][k], ti), mathf::lerp(cv[0][k], cv[1][k], ti), tj);
                         };
+                        float smudge = mathf::clamp01(corners(1));
                         float opacity = mathf::clamp01(corners(0));
-                        float const smudge = mathf::clamp01(corners(1));
-                        if (noise > 0.f) {
-                            opacity = std::pow(opacity, 1.f + (roll() - 0.5f) * noise);
-                            opacity = mathf::lerp(opacity, roll(), noise * std::pow(1.f - 2.f * std::fabs(smudge - 0.5f), 2.5f));
-                        }
-                        grid[size_t(j * (div + 1) + i)] = vertex{pos.x, pos.y, rgba(uint8_t(smudge * 255.f), 255, 255, uint8_t(mathf::clamp01(opacity) * 255.f + 0.5f)), u, v};
+                        smudge = std::pow(smudge, 1.f + mathf::lerp(-0.5f, 0.5f, roll()) * noise);
+                        opacity = std::pow(opacity, 1.f + mathf::lerp(-0.5f, 0.5f, roll()) * noise);
+                        smudge = mathf::lerp(smudge, roll(), noise * std::pow(1.f - 2.f * std::fabs(smudge - 0.5f), 2.5f));
+                        opacity = mathf::lerp(opacity, roll(), noise * std::pow(1.f - 2.f * std::fabs(smudge - 0.5f), 2.5f));
+                        // q0 bottom left, q1 top left, q2 top right, q3 bottom right
+                        grid[size_t(j * (div + 1) + i)] = vertex{pos.x, pos.y,
+                            rgba(uint8_t(mathf::clamp01(smudge) * 255.f + 0.5f), 0, 0, uint8_t(mathf::clamp01(opacity) * 255.f + 0.5f)), ti, tj};
                     }
                 }
                 r.batch.clear();
@@ -2903,19 +2971,102 @@ namespace render {
                     hi = glm::max(hi, p);
                 }
                 decal_uniforms u{};
-                u.proj = proj;
-                u.index = palette ? int32_t(palette.index()) : 0;
-                u.pass = pass;
+                u.proj = f.proj;
+                u.screen = f.screen;
+                u.view_pos = f.view_pos;
+                u.light_dir = f.light_dir;
+                u.index = f.palette;
+                u.zoom = f.zoom;
+                u.night_time = f.night_time;
+                u.rain = f.rain;
+                u.light = f.light;
+                u.clouds_speed = 1.f;
                 u.from = w.decal_placed_get_from_depth(d);
                 u.to = w.decal_placed_get_to_depth(d);
                 upload(r);
                 for (size_t c = 0; c < cams.size(); ++c) {
-                    vec2 const o = cams[c];
-                    if (hi.x < o.x || lo.x > o.x + float(camera_width) || hi.y < o.y || lo.y > o.y + float(camera_height))
+                    if (!camera_touches(cams[c], lo, hi))
                         continue;
                     u.camera_index = int32_t(c);
-                    u.cam_origin = o;
-                    gpu::draw(*r.gpu, gpu::pipeline::decal, &u, sizeof(u), {r.room_texture, r.palette_texarray, tex}, 0, r.batch.size());
+                    u.cam_origin = cams[c];
+                    u.later_count = later_cameras(cams, c, u.later);
+                    gpu::draw(*r.gpu, gpu::pipeline::decal, &u, sizeof(u), {r.room_texture, r.palette_texarray, tex, f.mask}, 0, r.batch.size());
+                }
+            });
+        }
+
+        // The placed LightSources (Room.Loaded's environmental lights) over
+        // the level: vanilla's ForegroundLights container. Their alpha as
+        // LightSource.Alpha and DrawSprites have it (fadeWithSun, the blink;
+        // environmental lights ignore the palette's darkness); the colour
+        // (Environment, White, the effect colours) is worked out by the shader
+        void draw_lights(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f) {
+            auto const& w = s.world;
+            auto const& cams = *f.cams;
+            if (cams.empty())
+                return;
+            float const sun = std::pow(mathf::inverse_lerp(-0.5f, 0.f, f.shader_light), 1.2f);
+            w.room_for_each_light_location(room.id, [&](dcon::light_location_id ll) {
+                auto const l = w.light_location_get_light(ll);
+                // nightLight: nightFade starts at 0 and only rises with the
+                // DayNight effect late in the cycle (not ported)
+                if (w.light_placed_get_night_light(l))
+                    return;
+                float alpha = w.light_placed_get_strength(l);
+                if (w.light_placed_get_fade_with_sun(l))
+                    alpha *= sun;
+                // the blink, on the room's syncTicker (the world's tick here)
+                uint8_t const blink = w.light_placed_get_blink_type(l);
+                if (blink != 0) {
+                    float period = (1.01f - w.light_placed_get_blink_rate(l)) * 1000.f;
+                    if (blink == 1)
+                        period /= 4.f;
+                    if (period > 0.f) {
+                        float const t = float(f.tick);
+                        if (blink == 1)
+                            alpha *= std::fmod(t, period * 2.f) <= period ? 0.f : 1.f;
+                        else
+                            alpha *= (std::sin(std::fmod(t, period) / period * 3.1415927f * 2.f) + 1.f) / 2.f;
+                    }
+                }
+                float const rad = w.light_placed_get_rad(l);
+                if (alpha <= 0.f || rad < 0.5f)
+                    return;
+                // CircularSprite at floor(pos) + 0.5
+                vec2 const center = rw::vec2{std::floor(w.light_placed_get_pos(l).x), std::floor(w.light_placed_get_pos(l).y)} + vec2{0.5f, 0.5f};
+                vec2 const lo = center - vec2{rad, rad}, hi = center + vec2{rad, rad};
+                vertex const bl{lo.x, lo.y, 0xFFFFFFFFu, 0.f, 0.f};
+                vertex const br{hi.x, lo.y, 0xFFFFFFFFu, 1.f, 0.f};
+                vertex const tr{hi.x, hi.y, 0xFFFFFFFFu, 1.f, 1.f};
+                vertex const tl{lo.x, hi.y, 0xFFFFFFFFu, 0.f, 1.f};
+                r.batch.clear();
+                r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
+                upload(r);
+                light_uniforms u{};
+                u.proj = f.proj;
+                u.screen = f.screen;
+                u.view_pos = f.view_pos;
+                u.center = center;
+                u.color = glm::vec4{1.f, 1.f, 1.f, alpha};
+                u.effect_colors = f.effect_colors;
+                u.index = f.palette;
+                u.zoom = f.zoom;
+                u.night_time = f.night_time;
+                u.color_type = w.light_placed_get_color_type(l);
+                u.flat = w.light_placed_get_flat(l) ? 1 : 0;
+                // Environment: the colour of the camera image the level shows at the light
+                u.env_camera = 0;
+                for (size_t c = 0; c < cams.size(); ++c)
+                    if (camera_touches(cams[c], center, center))
+                        u.env_camera = int32_t(c);
+                u.env_origin = cams[size_t(u.env_camera)];
+                for (size_t c = 0; c < cams.size(); ++c) {
+                    if (!camera_touches(cams[c], lo, hi))
+                        continue;
+                    u.camera_index = int32_t(c);
+                    u.cam_origin = cams[c];
+                    u.later_count = later_cameras(cams, c, u.later);
+                    gpu::draw(*r.gpu, gpu::pipeline::light, &u, sizeof(u), {r.room_texture, r.palette_texarray, r.effects_texture, f.mask}, 0, 6);
                 }
             });
         }
@@ -3147,6 +3298,28 @@ namespace render {
                 cams.push_back(world.room_camera_get_position(world.camera_location_get_camera(cl)));
             });
         }
+        // the level shaders' share of the frame: the view, the room's sun
+        // (RoomCamera's _light: the clouds dim it, and so does the coming rain
+        // in rooms with a DangerType), vanilla's _RAIN clock
+        level_frame lf;
+        lf.proj = proj;
+        lf.screen = vec2{float(r.width), float(r.height)};
+        lf.view_pos = cam.pos;
+        lf.zoom = cam.zoom;
+        lf.light_dir = world.room_get_light_angle(room.id);
+        lf.palette = palette ? int32_t(palette.index()) : 0;
+        lf.effect_colors = glm::ivec2{world.room_get_effect_color_a(room.id), world.room_get_effect_color_b(room.id)};
+        lf.night_time = r.night_time;
+        lf.rain = float(std::fmod(double(SDL_GetTicks()) / 5000.0, 2000.0));
+        lf.cams = &cams;
+        lf.tick = s.tick;
+        if (auto const* cyc = rain::of_room(s, room.id))
+            lf.shader_light = rain::shader_light(*cyc);
+        {
+            float const clouds = world.room_get_clouds(room.id);
+            float const sun = world.room_get_danger_type(room.id) != world::danger_type::none ? lf.shader_light : 1.f;
+            lf.light = clouds == 0.f ? 1.f : mathf::lerp(sun, -1.f, clouds);
+        }
         auto const draw_cameras = [&](int pass) {
             r.batch.clear();
             for (auto const c : cams) {
@@ -3158,25 +3331,26 @@ namespace render {
                 r.batch.insert(r.batch.end(), {bl, br, tr, bl, tr, tl});
             }
             upload(r);
-            // (no lights, no RegionKit colour replacements: left zero)
+            // (no RegionKit colour replacements)
             room_uniforms u{};
             u.proj = proj;
+            u.screen = lf.screen;
+            u.view_pos = lf.view_pos;
+            u.light_dir = lf.light_dir;
+            u.effect_colors = lf.effect_colors;
+            u.index = lf.palette;
+            u.zoom = lf.zoom;
+            u.night_time = lf.night_time;
+            u.grime = world.room_get_grime(room.id);
+            u.rain = lf.rain;
+            u.light = lf.light;
+            u.clouds_speed = 1.f;
             u.pass = pass;
-            u.index = palette ? int32_t(palette.index()) : 0;
-            int16_t const fx_a = world.room_get_effect_color_a(room.id);
-            int16_t const fx_b = world.room_get_effect_color_b(room.id);
-            u.effect_colors = glm::ivec2{fx_a < 0 ? 0 : fx_a, fx_b < 0 ? 0 : fx_b};
-            u.grime_factor = world.room_get_grime(room.id);
-            u.night_time = r.night_time;
-            u.fog_factor = 0.5f;
-            u.rooftop_blend = 0.f;
-            // the grime noise drifts with this clock: keep it slow, and wrap on
-            // whole sine periods so it never jumps
-            constexpr double grime_speed = 0.004; // radians per second
-            u.timer = float(std::fmod(double(SDL_GetTicks()) / 1000.0 * grime_speed, 6.283185307179586));
+            u.swarm = 1.f;
             for (size_t i = 0; i < cams.size(); ++i) {
                 u.camera_index = int32_t(i);
-                gpu::draw(*r.gpu, gpu::pipeline::room, &u, sizeof(u), {r.room_texture, r.palette_texarray, r.effects_texture}, i * 6, 6);
+                u.cam_origin = cams[i];
+                gpu::draw(*r.gpu, gpu::pipeline::room, &u, sizeof(u), {r.room_texture, r.palette_texarray, r.effects_texture, lf.mask}, i * 6, 6);
             }
         };
         // untextured triangles, flat shader
@@ -3197,7 +3371,6 @@ namespace render {
         float const seconds = float(std::fmod(double(SDL_GetTicks()) / 1000.0, 1000.0));
         if (textured_room) {
             draw_cameras(0);
-            draw_decals(r, s, room, proj, 0, cams);
         } else {
             draw_geometry();
         }
@@ -3253,8 +3426,13 @@ namespace render {
         clear_pulled(r);
 
         if (textured_room) {
+            // what the sprites left in the frame's alpha: the sprite mask the
+            // level shaders read from here on (vanilla's GrabPass)
+            lf.mask = gpu::grab_scene(*r.gpu);
+            // the sprites' shadows on the sunlit level behind them
+            draw_cameras(2);
             draw_cameras(1);
-            draw_decals(r, s, room, proj, 1, cams);
+            draw_decals(r, s, room, lf);
             if (r.show_geometry)
                 draw_geometry();
         }
@@ -3262,6 +3440,9 @@ namespace render {
         draw_flat([&] { build_pearl_lights(r, s, room, alpha); });
         // the lantern mice's glow
         draw_flat([&] { build_mouse_lights(r, s, room, alpha); });
+        // the placed LightSources (ForegroundLights)
+        if (textured_room)
+            draw_lights(r, s, room, lf);
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 
