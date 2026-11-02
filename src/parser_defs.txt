@@ -39,7 +39,7 @@ region_properties
     cloudsStart                                     skip        float           20000
     cloudsEnd                                       skip        float           31400
     proceduralMusicBank                             skip        string          ""
-    mudColor                                        skip        color           0.31,0.19,0.13
+    mudColor                                        defer       color           0.31,0.19,0.13
     fuseSize                                        skip        float           10
     hideTimer                                       skip        bool            false
     mapName                                         skip        string          ""
@@ -97,7 +97,7 @@ room_template
     TerrainStainBrightness                          skip        float           0.0
     TerrainWaves                                    skip        float           0.0
     TerrainGooHeight                                skip        float           0.0
-    TerrainDepth                                    skip        float           0.0
+    TerrainDepth                                    member      float           0.0
     TerrainLight                                    member        float           0.0
     TerrainGrain                                    member        float           0.0
     TerrainEdgeRadius                               member        float           0.0

@@ -10,6 +10,7 @@
 #include <queue>
 
 #include "vulture_internal.hpp"
+#include "ve_utils.hpp"
 #include "daddy_internal.hpp"
 #include "body_parts.hpp"
 
@@ -820,22 +821,50 @@ namespace vulture::detail {
 
     bool has_any_grip(wing_work const& ww) { return ww.w.attached_at_tip || ww.w.segments_gripping_terrain > 0; }
 
+    namespace {
+        // TentacleContour with its two cosines given: `mid` the one of
+        // InverseLerp(num2, 1.2, x) * pi / 2, `tip` the one of
+        // pow(InverseLerp(num3, 1, x), 4) * pi / 2
+        float tentacle_contour_with(variant v, float flying_mode, float x, float mid, float tip) {
+            float const num = mathf::lerp(0.45f, 0.1f, flying_mode);
+            float const num2 = mathf::lerp(0.51f, 0.25f, flying_mode);
+            float const num3 = mathf::lerp(0.85f, 0.4f, flying_mode);
+            float const num4 = mathf::lerp(6.5f, 5.5f, flying_mode);
+            float const num5 = mathf::lerp(0.5f, 0.35f, flying_mode);
+            float const num6 = mathf::lerp(0.85f, 0.f, flying_mode);
+            float const num7 = num6 + (1.f - num6) * mid;
+            float const num8 = v == variant::king ? 1.2f : 1.f;
+            if (x < num)
+                return num4 * num5 * num8;
+            if (x < num2)
+                return num4 * mathf::lerp(num5, 1.f, custom::s_curve(mathf::inverse_lerp(num, num2, x), 0.1f)) * num8;
+            if (x < num3)
+                return num4 * num7 * num8;
+            return num4 * mathf::lerp(0.5f, 1.f, tip) * num7 * num8;
+        }
+    }
+
     float tentacle_contour(variant v, float flying_mode, float x) {
-        float const num = mathf::lerp(0.45f, 0.1f, flying_mode);
         float const num2 = mathf::lerp(0.51f, 0.25f, flying_mode);
         float const num3 = mathf::lerp(0.85f, 0.4f, flying_mode);
-        float const num4 = mathf::lerp(6.5f, 5.5f, flying_mode);
-        float const num5 = mathf::lerp(0.5f, 0.35f, flying_mode);
-        float const num6 = mathf::lerp(0.85f, 0.f, flying_mode);
-        float const num7 = num6 + (1.f - num6) * std::cos(mathf::inverse_lerp(num2, 1.2f, x) * mathf::pi * 0.5f);
-        float const num8 = v == variant::king ? 1.2f : 1.f;
-        if (x < num)
-            return num4 * num5 * num8;
-        if (x < num2)
-            return num4 * mathf::lerp(num5, 1.f, custom::s_curve(mathf::inverse_lerp(num, num2, x), 0.1f)) * num8;
-        if (x < num3)
-            return num4 * num7 * num8;
-        return num4 * mathf::lerp(0.5f, 1.f, std::cos(mathf::pow(mathf::inverse_lerp(num3, 1.f, x), 4.f) * mathf::pi * 0.5f)) * num7 * num8;
+        return tentacle_contour_with(v, flying_mode, x, std::cos(mathf::inverse_lerp(num2, 1.2f, x) * mathf::pi * 0.5f),
+            std::cos(mathf::pow(mathf::inverse_lerp(num3, 1.f, x), 4.f) * mathf::pi * 0.5f));
+    }
+
+    // TentacleContour along `n` places (n <= 64) at once: the cosines and
+    // the pow in ve:: lanes
+    void tentacle_contours(variant v, float flying_mode, float const* x, uint32_t n, float* out) {
+        float const num2 = mathf::lerp(0.51f, 0.25f, flying_mode);
+        float const num3 = mathf::lerp(0.85f, 0.4f, flying_mode);
+        float mid[64], tip[64];
+        for (uint32_t k = 0; k < n; ++k) {
+            mid[k] = mathf::inverse_lerp(num2, 1.2f, x[k]) * mathf::pi * 0.5f;
+            tip[k] = mathf::inverse_lerp(num3, 1.f, x[k]);
+        }
+        ve::transform(mid, n, [](ve::fp_vector a) { return ve::cos(a); });
+        ve::transform(tip, n, [](ve::fp_vector a) { return ve::cos(ve::pow(a, ve::fp_vector{4.f}) * ve::fp_vector{mathf::pi * 0.5f}); });
+        for (uint32_t k = 0; k < n; ++k)
+            out[k] = tentacle_contour_with(v, flying_mode, x[k], mid[k], tip[k]);
     }
 
     float feather_contour(float x, float k) {
@@ -1040,9 +1069,14 @@ namespace vulture::detail {
             }
         }
         auto& other = x.other_wing(ww);
+        // the contour along the wing, every chunk at once
+        float t_pos[64] = {}, rads[64];
+        for (uint32_t k = 0; k < n; ++k)
+            t_pos[k] = w.c[k].t_pos;
+        tentacle_contours(x.v, w.flying_mode, t_pos, n, rads);
         for (uint32_t k = 0; k < n; ++k) {
             auto& c = w.c[k];
-            c.rad = tentacle_contour(x.v, w.flying_mode, c.t_pos);
+            c.rad = rads[k];
             if (w.t.backtrack_from == -1 || int32_t(k) < w.t.backtrack_from) {
                 if (k > 1 && custom::dist_less(c.pos, w.c[k - 2].pos, 30.f))
                     c.vel -= custom::dir_vec(c.pos, w.c[k - 2].pos) * (30.f - rw::distance(c.pos, w.c[k - 2].pos)) * 0.1f;
@@ -1133,6 +1167,11 @@ namespace vulture::detail {
                     flag3 = ww.number % 2 == 0;
                 vec2 const cp = x.pos(w.t.connected_chunk);
                 vec2 const other_base = x.pos(flag3 ? 3 : 2);
+                // the flap's wave along the wing (ve::sin over the chunks)
+                float wave[64];
+                for (uint32_t k = 0; k < n; ++k)
+                    wave[k] = mathf::pi * 2.f * (x.p.wing_flap - w.c[k].t_pos * 0.5f);
+                ve::transform(wave, n, [](ve::fp_vector a) { return ve::sin(a); });
                 for (uint32_t k = 0; k < n; ++k) {
                     auto& c = w.c[k];
                     c.vel *= 0.95f;
@@ -1140,7 +1179,7 @@ namespace vulture::detail {
                     vec2 v = cp - custom::dir_vec(cp, other_base) * w.t.ideal_length * c.t_pos;
                     v = rw::lerp(v, cp + vec2{dir * w.t.ideal_length * c.t_pos, 0.f}, 0.5f);
                     vec2 const a2 = custom::perpendicular_vector(rw::normalized(cp - v)) * (flag3 ? -1.f : 1.f);
-                    v += a2 * std::sin(mathf::pi * 2.f * (x.p.wing_flap - c.t_pos * 0.5f)) * mathf::lerp(200.f, 600.f, x.p.wing_flap_amplitude);
+                    v += a2 * wave[k] * mathf::lerp(200.f, 600.f, x.p.wing_flap_amplitude);
                     c.vel += rw::clamp_magnitude(v - c.pos, 30.f) / 30.f * 5.f * mathf::lerp(0.2f, 1.f, x.p.wing_flap_amplitude);
                     if (c.contact_point.x != 0 || c.contact_point.y != 0)
                         flag2 = true;

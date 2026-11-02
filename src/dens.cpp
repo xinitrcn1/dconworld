@@ -9,6 +9,7 @@
 #include "creature.hpp"
 #include "daddy.hpp"
 #include "items.hpp"
+#include "offscreen.hpp"
 #include "physics.hpp"
 #include "player.hpp"
 #include "rain.hpp"
@@ -259,6 +260,18 @@ namespace dens {
 
     std::optional<ivec2> home_tile(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
+        // living off screen: out over the border, into a region
+        // transportation pipe, or a room exit on the way to one
+        if (offscreen::homed(state, c)) {
+            auto const t = offscreen::way_out(state, c, room);
+            if (!t)
+                return std::nullopt;
+            w.creature_set_going_home(c, 1);
+            w.creature_set_travel_tile(c, *t);
+            if (room.get_tile(*t).t != world::terrain::shortcut_entrance)
+                return *t;
+            return *t + room.shortcut_entrance_hole_direction(*t);
+        }
         // (a leech's FleeFromRainGoal only knows the dens of the room it is in)
         auto const home = w.creature_get_type(c) == creature::type::leech ? dcon::room_id{} : w.creature_get_home_room(c);
         std::optional<ivec2> tile;
@@ -351,8 +364,22 @@ namespace dens {
         // of tiles of the entrance or the tile before it, in sight of it,
         // is pulled in: the AIs stop a tile or two short of their goal)
         ivec2 const tile = w.creature_get_travel_tile(c);
-        if (room.get_tile(tile).t != world::terrain::shortcut_entrance)
+        if (room.get_tile(tile).t != world::terrain::shortcut_entrance) {
+            // living off screen, at the border it leaves by: off it goes
+            // (its prey eaten off screen, a while)
+            if (!offscreen::homed(state, c) || creature::held(state, c) || !offscreen::near_border(state, c, room))
+                return;
+            int32_t const meal = (creature::grasped(w, c, 0) || creature::grasped(w, c, 1)) ? 400 : 0;
+            take_prey(state, c, room.id);
+            creature::release_all(state, c, room.id);
+            w.creature_set_going_home(c, 0);
+            state.defer(room.id, [c, from = room.id, meal](sys::game_state& st) {
+                if (st.world.creature_is_valid(c) && st.world.creature_get_away(c) == uint8_t(where::room)
+                    && st.world.physical_object_get_room_from_object_location(creature::body(st, c)) == from)
+                    offscreen::arrive(st, c, from, meal);
+            });
             return;
+        }
         vec2 const hole = room_view::middle_of_tile(tile);
         vec2 const front = room_view::middle_of_tile(tile + room.shortcut_entrance_hole_direction(tile));
         bool close = false;
@@ -363,8 +390,17 @@ namespace dens {
         }
         if (!close)
             return;
-        if (creature::held(state, c))
-            return;
+        // (ShortcutHelper: a frog latched on doesn't keep its host out)
+        if (creature::held(state, c)) {
+            uint32_t frogs = 0;
+            creature::for_each_holder(state, room.id, c, [&](dcon::creature_id h, uint32_t) {
+                if (creature::is(w, h, creature::type::frog))
+                    ++frogs;
+            });
+            auto const o = w.creature_get_body_from_creature_body(c);
+            if (w.physical_object_get_grabbed_by_count(o) > frogs)
+                return;
+        }
         take_prey(state, c, room.id);
         creature::release_all(state, c, room.id);
         w.creature_set_entering_shortcut(c, tile);
@@ -396,6 +432,11 @@ namespace dens {
             }
         });
         for_each_away(state, room.id, [&](dcon::creature_id c) {
+            if (w.creature_get_away(c) == uint8_t(where::offscreen)) {
+                // in the offscreen den (this is its region's anchor room)
+                offscreen::update(state, c, room);
+                return;
+            }
             if (w.creature_get_away(c) == uint8_t(where::den)) {
                 // AbstractCreature.InDenUpdate
                 int32_t& remain = w.creature_get_remain_in_den(c);
@@ -480,13 +521,23 @@ namespace dens {
                 for (uint32_t g = 0; g < 2; ++g)
                     creature::release_grasp(state, c, g);
                 ++stats().into_dens;
-                // it lives here now if it had no den
-                if (!w.creature_get_home_room(c) || w.creature_get_home_room(c) == room.id) {
+                // it lives here now if it had no den (not one living off screen)
+                if ((!w.creature_get_home_room(c) || w.creature_get_home_room(c) == room.id) && !offscreen::homed(state, c)) {
                     if (auto const e = w.shortcut_get_exit_from_shortcut_destination(s)) {
                         w.creature_set_home_room(c, room.id);
                         w.creature_set_home_den(c, w.room_exit_get_index(e));
                     }
                 }
+                return;
+            }
+            // a region transportation pipe: the way to the offscreen den,
+            // for the creatures living there
+            if (type == shortcut_type::region_transportation && offscreen::homed(state, c) && !w.creature_get_dead(c)) {
+                int32_t const meal = (creature::grasped(w, c, 0) || creature::grasped(w, c, 1)) ? 400 : 0;
+                state.defer(room.id, [c, from = room.id, meal](sys::game_state& st) {
+                    if (st.world.creature_is_valid(c) && st.world.creature_get_away(c) == uint8_t(where::shortcut))
+                        offscreen::arrive(st, c, from, meal);
+                });
                 return;
             }
             if (type != shortcut_type::room_exit) {

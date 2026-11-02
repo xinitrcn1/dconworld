@@ -1,7 +1,9 @@
 // LoachGraphics.cs with its LoachTentacleGraphic (RopeGraphic) and Dangler
 // (HasDanglers). Everything here is cosmetic and only updates where a
-// camera looks. The RotLoach's DaddyGraphics.Eye bulbs and tentacle
-// circles aren't drawn (docs/DIVERGENCES.md).
+// camera looks. The RotLoach (the Rot Behemoth) has its rot: fifteen
+// DaddyGraphics.Eye bulbs over the front of the body and the circles
+// (growths and little eyes) along its mouth tentacles, in its region's
+// corruption colour.
 
 #include <algorithm>
 #include <cmath>
@@ -196,6 +198,120 @@ namespace loach_graphics {
             return mathf::lerp(a, b, x / connection_distance[num4]);
         }
 
+        //
+        // The RotLoach's rot (DaddyGraphics.Eye through IHaveRotGraphics)
+        //
+        // Custom.BezierDerivative
+        vec2 bezier_derivative(vec2 a, vec2 ca, vec2 b, vec2 cb, float f) {
+            return (ca - a) * (3.f * (1.f - f) * (1.f - f)) + (cb - ca) * (6.f * (1.f - f) * f) + (b - cb) * (3.f * f * f);
+        }
+        // EyeData.IdealPos: along the curve over the front three chunks
+        vec2 eye_ideal_pos(sys::game_state const& state, dcon::creature_id c, loach::rot_eye const& e) {
+            vec2 a = chunk_pos(state, c, 0, 1.f);
+            vec2 const v = chunk_pos(state, c, 1, 1.f);
+            a += rw::normalized(a - v) * (chunk_rad(state, c, 0) * 0.9f);
+            vec2 const b = chunk_pos(state, c, 2, 1.f);
+            vec2 const a2 = custom::bezier(a, v, b, v, e.along_body);
+            vec2 const a3 = custom::perpendicular_vector(bezier_derivative(a, v, b, v, e.along_body));
+            return a2 + a3 * e.perp_offset;
+        }
+        // EyeData.PushOutFromPos
+        vec2 eye_push_out_from(sys::game_state const& state, dcon::creature_id c, loach::rot_eye const& e, float alpha) {
+            vec2 const a = chunk_pos(state, c, 0, alpha);
+            vec2 const v = chunk_pos(state, c, 1, alpha);
+            vec2 const b = chunk_pos(state, c, 2, alpha);
+            if (e.along_body < 0.5f)
+                return rw::lerp(a, v, e.along_body * 2.f);
+            return rw::lerp(v, b, e.along_body * 2.f - 1.f);
+        }
+        // where a tracked creature is for an eye (DangerPos in sight, else
+        // the best guess's tile); false when it isn't tracked any more
+        bool eye_target(sys::game_state const& state, dcon::creature_id c, room_view const& room, dcon::creature_id t, vec2& out) {
+            auto const* r = tracker::find(state, c, t);
+            if (!r)
+                return false;
+            out = r->visual && creature::here(state, t, room.id) ? creature::main_pos(state, t) : room_view::middle_of_tile(tracker::best_guess(*r));
+            return true;
+        }
+        // DaddyGraphics.Eye.Update (FindNewLookObject: the tracker's
+        // creatures; the loach keeps no NoiseTracker sources)
+        void eye_update(sys::game_state& state, dcon::creature_id c, room_view const& room, graphics_state& g, uint32_t index, rw::rng& rng) {
+            auto const& w = state.world;
+            auto& e = g.eyes[index];
+            bool const dead = w.creature_get_dead(c) != 0;
+            int32_t const stun = w.creature_get_stun(c);
+            e.last_dir = e.dir;
+            e.last_closed = e.closed;
+            float const delay = float(std::max<int32_t>(1, e.eyes_closed_delay));
+            // (RotEyesClose: the stun; Creature.Deaf isn't kept)
+            e.closed = mathf::lerp(e.closed, mathf::inverse_lerp(0.f, delay, float(stun)), 1.f / delay);
+            if (stun == 0)
+                e.eyes_closed_delay = int16_t(rng.range(1, 20));
+            vec2 look{0.f, 0.f};
+            if (e.creature_seen && !eye_target(state, c, room, e.creature_seen, look))
+                e.creature_seen = dcon::creature_id{};
+            float num = 0.f;
+            if (look.x != 0.f && look.y != 0.f) {
+                vec2 const at = e.pos;
+                e.dir = rw::slerp(e.dir, custom::dir_vec(at, look) * mathf::inverse_lerp(0.f, 200.f, rw::distance(at, look)), 0.3f);
+                num = e.light * mathf::inverse_lerp(0.f, 1.f, rw::distance(e.last_dir, e.dir));
+                e.light = mathf::max(dead ? 0.f : 0.2f, e.light - 0.05f);
+            } else {
+                e.dir *= 0.9f;
+                e.light = mathf::max(dead ? 0.f : 0.1f, e.light - 0.05f);
+                // FindNewLookObject
+                auto const& ts = tracker::of(state, c);
+                if (ts.count > 0) {
+                    auto const who = ts.reps[uint32_t(rng.range(0, int32_t(ts.count)))].who;
+                    bool flag = true;
+                    for (uint32_t k = 0; k < g.eye_count && flag; ++k)
+                        if (g.eyes[k].creature_seen == who)
+                            flag = false;
+                    if (flag) {
+                        e.creature_seen = who;
+                        e.light = mathf::max(0.75f, e.light);
+                    }
+                }
+            }
+            e.flash = mathf::max(0.f, e.flash - 0.16666667f);
+            if (rng.value() < num)
+                e.get_to_focus = mathf::max(e.get_to_focus, rng.value());
+            else if (rng.value() < 0.014285714f)
+                e.get_to_focus = 0.f;
+            e.last_focus = e.focus;
+            if (e.focus < e.get_to_focus)
+                e.focus = mathf::min(e.focus + 0.05f, e.get_to_focus);
+            else
+                e.focus = mathf::max(e.focus - 0.05f, e.get_to_focus);
+        }
+        // LoachGraphics.ReactToCreature: the eye facing it turns to it,
+        // preferring one not looking at anything
+        void react_to_creature(sys::game_state& state, dcon::creature_id c, room_view const& room, graphics_state& g, dcon::creature_id t, rw::rng& rng) {
+            if (g.eye_count == 0)
+                return;
+            vec2 at;
+            if (!eye_target(state, c, room, t, at))
+                return;
+            auto const* r = tracker::find(state, c, t);
+            vec2 const p = room_view::middle_of_tile(tracker::best_guess(*r));
+            vec2 const pos = chunk_pos(state, c, 0, 1.f);
+            float best = -3.4e38f;
+            uint32_t pick = 0;
+            for (uint32_t i = 0; i < g.eye_count; ++i) {
+                float num3 = rw::dot(custom::dir_vec(pos, g.eyes[i].pos), custom::dir_vec(pos, p));
+                if (g.eyes[i].creature_seen)
+                    num3 -= 2.f;
+                if (num3 > best) {
+                    best = num3;
+                    pick = i;
+                }
+            }
+            // Eye.ReactToCreature (no Daddy_React_To_Tentacle_Touch sound)
+            auto& e = g.eyes[pick];
+            e.creature_seen = t;
+            e.light = mathf::max(e.light, rng.value());
+        }
+
         // Dangler.Reset
         void reset_danglers(sys::game_state& state, dcon::creature_id c) {
             auto& w = state.world;
@@ -356,6 +472,61 @@ namespace loach_graphics {
             s.scale = r.value() * 0.4f + 0.6f;
             s.angle_factor = r.value() * 0.5f + 0.25f;
         }
+        // Loach's effectColor and eyeColor: grey, or a RotLoach's region's
+        // corruption colour (corruptionEyeColor isn't kept per region here:
+        // the effect colour for both)
+        bool const rot = loach::rotted(state, c);
+        if (rot) {
+            auto const region = w.room_get_region_from_region_membership(creature::room_of(state, c));
+            g.effect_color = region ? w.region_get_corruption_effect_color(region) : effect_rot;
+        } else {
+            g.effect_color = effect_gray;
+        }
+        g.eye_color = g.effect_color;
+        // the LoachTentacleGraphics: a RotLoach's tentacle circles
+        for (uint32_t l = 0; l < loach::tentacle_count; ++l) {
+            g.circle_count[l] = 0;
+            if (!rot)
+                continue;
+            int32_t const num = r.range(8, 11);
+            auto* cs = g.circles[l];
+            uint32_t n = 0;
+            for (int32_t i = 0; i < num; ++i) {
+                float const num2 = 1.f - float(i) / float(num - 1);
+                vec2 const offset{r.range(-1.f, 1.f) * 5.f * num2, float(i) * 4.f};
+                float const a = r.value();
+                float const t = r.value();
+                float num3 = mathf::lerp(a, num2, t) * 4.f + 1.5f;
+                if (i == 0)
+                    num3 = mathf::lerp(num3, 5.f, 0.5f);
+                cs[n++] = loach::tentacle_circle{offset, num3, 0};
+            }
+            for (int32_t j = 0; j < num; ++j) {
+                float const num4 = 1.f - float(j) / float(num - 1);
+                if (r.value() < 0.6f * num4 && n < loach::max_tentacle_circles) {
+                    float const radius = cs[j].radius * mathf::lerp(0.2f, 0.8f, mathf::pow(r.value(), mathf::lerp(1.5f, 0.5f, num4)));
+                    cs[n++] = loach::tentacle_circle{cs[j].offset, radius, 1};
+                }
+            }
+            g.circle_count[l] = uint8_t(n);
+        }
+        // a RotLoach's Eyes (DaddyGraphics.Eye) with their EyeData
+        g.eye_count = rot ? uint8_t(loach::rot_eye_count) : 0;
+        g.reaction_timer = 0;
+        float const main_rad = chunk_rad(state, c, 0);
+        for (uint32_t m = 0; m < g.eye_count; ++m) {
+            auto& e = g.eyes[m];
+            e = loach::rot_eye{};
+            float const num7 = float(m) / float(loach::rot_eye_count - 1);
+            float const a = r.value();
+            float const b = r.value();
+            e.rad = mathf::lerp(5.f, 13.f, mathf::lerp(1.f - num7, a, b));
+            e.rotats[0] = r.value() * 360.f;
+            e.rotats[1] = r.value();
+            e.along_body = mathf::pow(num7, 2.5f);
+            e.perp_offset = main_rad * r.range(-1.f, 1.f) * mathf::lerp(0.5f, 1.f, std::sqrt(num7));
+            e.jag_seed = rw::keyed::mix(uint32_t(w.loach_data_get_seed(d)) ^ (m + 1u) * 0x9E3779B1u) | 1u;
+        }
         w.loach_data_set_graphics(d, g);
         w.loach_data_get_danglers(d).load_range(segs.data(), segs.data() + segs.size());
     }
@@ -373,6 +544,13 @@ namespace loach_graphics {
                 s.bend_index = -1;
             }
         reset_danglers(state, c);
+        // EyeData.Reset
+        for (uint32_t m = 0; m < g.eye_count && m < loach::rot_eye_count; ++m) {
+            auto& e = g.eyes[m];
+            e.pos = eye_ideal_pos(state, c, e);
+            e.last_pos = e.pos;
+            e.vel = vec2{0.f, 0.f};
+        }
     }
 
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
@@ -478,12 +656,38 @@ namespace loach_graphics {
                 }
             }
         }
+        // a RotLoach's eyes: EyeData.Update, then Eye.Update
+        {
+            vec2 const main_vel = w.body_chunk_get_vel(creature::chunk(state, c, 0));
+            uint32_t const n = std::min<uint32_t>(g.eye_count, loach::rot_eye_count);
+            for (uint32_t m = 0; m < n; ++m) {
+                auto& e = g.eyes[m];
+                e.last_pos = e.pos;
+                e.pos += e.vel;
+                vec2 const ideal = eye_ideal_pos(state, c, e);
+                e.vel += (ideal - e.pos) * 0.5f;
+                e.pos += (ideal - e.pos) * 0.5f;
+                e.vel = rw::lerp(e.vel, main_vel, 0.2f);
+                e.pos = rw::clamp_magnitude(e.pos - ideal, e.rad) + ideal;
+            }
+            for (uint32_t m = 0; m < n; ++m)
+                eye_update(state, c, room, g, m, rng);
+            if (g.reaction_timer > 0)
+                --g.reaction_timer;
+        }
         // the eyes' blink
         if (!cons)
             g.blink = 10;
         --g.blink;
         if (g.blink < -80 && rng.value() < 0.05f)
             g.blink = rng.range(25, 35);
+        // LoachGraphics.Update: hunting, an eye turns to the focus creature
+        if (g.eye_count > 0 && loach::behavior(w.creature_get_behavior(c)) == loach::behavior::hunt && g.reaction_timer == 0) {
+            if (auto const f = loach::focus(state, c)) {
+                g.reaction_timer = rng.range(10, 40);
+                react_to_creature(state, c, room, g, f, rng);
+            }
+        }
         // CreatureLooker (simplified): the AI's focus creature, if it still
         // tracks it
         g.look_point[1] = g.look_point[0];
@@ -501,7 +705,7 @@ namespace loach_graphics {
     }
 
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
-        std::vector<sprites::strip_vertex>& strip) {
+        std::vector<sprites::strip_vertex>& strip, std::vector<sprites::rope_point>& ropes) {
         auto const& w = state.world;
         auto const d = data(state, c);
         auto const& g = w.loach_data_get_graphics(d);
@@ -510,11 +714,10 @@ namespace loach_graphics {
         // ApplyPalette
         vec3 const black = pal.black();
         vec3 const body_color = rot ? black : black + (vec3{1.f, 1.f, 1.f} - black) * 0.1f;
-        vec3 const effect = rot ? effect_rot : effect_gray;
+        vec3 const effect = g.effect_color;
         float const num = mathf::lerp(g.last_flip, g.flip, alpha);
         vec2 const a = custom::dir_vec(chunk_pos(state, c, 3, alpha), chunk_pos(state, c, 1, alpha));
         static thread_local std::vector<vec2> verts;
-        static thread_local std::vector<vec4> cols;
         loach::limb const* legs[loach::leg_count];
         loach::limb const* tents[loach::tentacle_count];
         limbs_of(state, c, legs, tents);
@@ -565,16 +768,27 @@ namespace loach_graphics {
         };
         draw_spots(false);
 
-        // the tentacles (LoachTentacleGraphic.DrawSprite)
+        // the tentacles (LoachTentacleGraphic.DrawSprite): its long mesh as
+        // one rope (the GPU makes the ribbon out of its points, like daddy
+        // long legs' tubes). MakeLongMesh's four vertices per segment are two
+        // points here, a third of the way in from either end, with the half
+        // widths the vertex pairs have there; straight segments between them
+        // as the mesh's (the sides bisect the bends instead of following each
+        // pair's own segment: the same outline where the tentacle is smooth)
         {
             vec3 const tip_color = rot ? effect : effect + (body_color - effect) * 0.75f;
             uint32_t const n = loach::tentacle_graphic_segments;
+            // verticeColors, in pairs along the mesh: pair j's
+            auto const color = [&](uint32_t j) {
+                float const f = float(2 * j) / float(4 * n - 2);
+                vec3 const cc = body_color + (tip_color - body_color) * (mathf::pow(mathf::clamp01(f * 1.5f - 0.5f), 2.f) * 0.4f);
+                return vec4{cc.x, cc.y, cc.z, 1.f};
+            };
             for (uint32_t t = 0; t < loach::tentacle_count; ++t) {
                 if (!tents[t])
                     continue;
                 auto const& seg = g.tentacle_segments[t];
-                verts.clear();
-                cols.clear();
+                size_t const first = ropes.size();
                 vec2 vector = chunk_pos(state, c, tents[t]->connected_chunk, alpha);
                 vector += custom::dir_vec(rw::lerp(seg[1].last_pos, seg[1].pos, alpha), vector);
                 float aw = 2.f;
@@ -582,29 +796,42 @@ namespace loach_graphics {
                     float const num1 = float(i) / float(n - 1);
                     vec2 const v2 = rw::lerp(seg[i].last_pos, seg[i].pos, alpha);
                     vec2 const nn = rw::normalized(vector - v2);
-                    vec2 const a2 = custom::perpendicular_vector(nn);
                     float const dd = rw::distance(vector, v2) / 3.f;
                     float num2;
                     if (rot)
                         num2 = 2.5f + 1.f * mathf::pow(1.f - num1, 2.f);
                     else
                         num2 = (1.5f + 2.f * mathf::pow(1.f - num1, 2.f)) * mathf::pow(1.f - num1, 0.25f) + 3.f * std::sin(mathf::pi * mathf::pow(num1, 10.f));
-                    verts.push_back(vector - nn * dd - a2 * mathf::lerp(aw, num2, 0.5f));
-                    verts.push_back(vector - nn * dd + a2 * mathf::lerp(aw, num2, 0.5f));
-                    verts.push_back(v2 + nn * dd - a2 * num2);
-                    verts.push_back(v2 + nn * dd + a2 * num2);
+                    ropes.push_back(sprites::rope_point{vector - nn * dd, mathf::lerp(aw, num2, 0.5f), color(2 * i)});
+                    ropes.push_back(sprites::rope_point{v2 + nn * dd, num2, color(2 * i + 1)});
                     vector = v2;
                     aw = num2;
                 }
-                // verticeColors, in pairs along the mesh
-                size_t const nv = verts.size();
-                for (size_t i = 0; i < nv; i += 2) {
-                    float const f = float(i) / float(nv - 2);
-                    vec3 const cc = body_color + (tip_color - body_color) * (mathf::pow(mathf::clamp01(f * 1.5f - 0.5f), 2.f) * 0.4f);
-                    cols.push_back(vec4{cc.x, cc.y, cc.z, 1.f});
-                    cols.push_back(vec4{cc.x, cc.y, cc.z, 1.f});
+                sprites::add_rope(out, ropes, first, false);
+                // a RotLoach's circles along it (Circle20, radius / 10)
+                uint32_t const nc = std::min<uint32_t>(g.circle_count[t], loach::max_tentacle_circles);
+                if (nc == 0)
+                    continue;
+                float const len = mathf::max(limb_length(state, c, true, t), 1.f);
+                // LoachTentacleGraphic.OneDimensionalTubePos
+                auto const tube_pos = [&](float fp) {
+                    int32_t const a = custom::int_clamp(int32_t(std::floor(fp * float(n - 1))), 0, int32_t(n) - 1);
+                    int32_t const b = custom::int_clamp(a + 1, 0, int32_t(n) - 1);
+                    float const tt = mathf::inverse_lerp(float(a), float(b), fp * float(n - 1));
+                    return rw::lerp(rw::lerp(seg[a].last_pos, seg[b].last_pos, tt), rw::lerp(seg[a].pos, seg[b].pos, tt), alpha);
+                };
+                for (uint32_t j = 0; j < nc; ++j) {
+                    auto const& cc = g.circles[t][j];
+                    float const y = 1.f - mathf::clamp01(cc.offset.y / len);
+                    // OnTubePos
+                    vec2 const p = tube_pos(y - 1.f / float(n));
+                    vec2 const p2 = tube_pos(y + 1.f / float(n));
+                    vec2 const at = tube_pos(y) + custom::perpendicular_vector(custom::dir_vec(p, p2)) * cc.offset.x;
+                    float const num2 = nc > 1 ? float(j) / float(nc - 1) : 0.f;
+                    vec3 const col = body_color + (effect - body_color) * (cc.eye ? 1.f : 0.4f - 0.1f * num2);
+                    float const sc = cc.radius / 10.f;
+                    sprites::add(out, sprites::sprite{"Circle20", at, 0.f, vec2{sc, sc}, vec2{0.5f, 0.5f}, col});
                 }
-                sprites::long_mesh(out, strip, verts.data(), cols.data(), nv);
             }
         }
 
@@ -793,6 +1020,62 @@ namespace loach_graphics {
                     sprites::add(out, sprites::sprite{"Circle4", a6 + a5 * 2.f, 0.f, vec2{1.f, mathf::min(1.f, num5 * 3.f)}, vec2{0.5f, 0.5f}, pupil_color});
                 else
                     sprites::add(out, sprites::sprite{"pixel", a6 + a5 * 2.f, custom::vec_to_deg(n2), vec2{1.f, 4.f}, vec2{0.5f, 0.5f}, pupil_color});
+            }
+        }
+
+        // a RotLoach's Eyes (DaddyGraphics.Eye.DrawSprite, as daddy_graphics'):
+        // the jagged bulb in the body colour (EyeBulbColor), two slits in the
+        // eye colour (RotEyeColor), BumpSize 1, jittering while it digests
+        {
+            uint32_t const ne = std::min<uint32_t>(g.eye_count, loach::rot_eye_count);
+            float const digesting = loach::most_digested(state, c);
+            uint32_t roll = state.tick * 2654435761u + uint32_t(c.index()) * 97u + 1u;
+            auto const flicker = [&roll]() {
+                roll ^= roll << 13;
+                roll ^= roll >> 17;
+                roll ^= roll << 5;
+                return float(roll >> 8) * (1.f / 16777215.f);
+            };
+            auto const mix = [](vec3 a, vec3 b, float t) { return a + (b - a) * mathf::clamp01(t); };
+            // Eye.BulgeVertex
+            auto const bulge = [](vec2 v, vec2 dir, float rad) { return rw::lerp(v, rw::clamp_magnitude(v + dir * rad, rad), rw::magnitude(dir)); };
+            constexpr float bump = 1.f;
+            for (uint32_t j = 0; j < ne; ++j) {
+                auto const& e = g.eyes[j];
+                vec2 const rnd = custom::deg_to_vec(flicker() * 360.f);
+                vec2 const pos = rw::lerp(e.last_pos, e.pos, alpha) + rnd * (digesting * 4.f * flicker());
+                vec2 const middle = eye_push_out_from(state, c, e, alpha);
+                float const rotation = custom::aim(pos, middle) + e.rotats[0];
+                sprites::add_circle(out, pos, e.rad * 1.1f + 2.f, body_color, rotation, 0.16f, e.jag_seed);
+                // Eye.RenderSlits
+                float const num0 = mathf::pow(mathf::max(0.f, mathf::lerp(e.last_closed, e.closed, alpha)), 0.6f);
+                float const num2 = bump * (1.f - num0);
+                vec2 const b = rw::lerp(e.last_dir, e.dir, alpha);
+                float num3 = mathf::lerp(e.last_focus, e.focus, alpha) * mathf::pow(mathf::inverse_lerp(-1.f, 1.f, rw::dot(custom::dir_vec(middle, pos), rw::normalized(b))), 0.7f);
+                num3 = mathf::max(num3, num0);
+                float num4 = mathf::inverse_lerp(0.f, mathf::lerp(30.f, 50.f, e.rotats[1]), rw::distance(middle, pos + custom::dir_vec(middle, pos) * e.rad)) * 0.9f;
+                num4 = mathf::lerp(num4, 1.f, 0.5f * num3);
+                vec2 const a = rw::lerp(custom::dir_vec(middle, pos) * num4, b, rw::magnitude(b) * 0.5f);
+                vec3 render = mix(g.eye_color, vec3{1.f, 1.f, 1.f}, mathf::lerp(flicker() * e.light, 1.f, num0));
+                if (num0 > 0.f)
+                    render = mix(render, body_color, num0);
+                render = mix(render, vec3{1.f, 1.f, 1.f}, e.flash);
+                float const squint = mathf::lerp(1.f, 0.6f, num3);
+                for (int i = 0; i < 2; ++i) {
+                    vec2 const v = custom::deg_to_vec(rotation + 90.f * float(i));
+                    vec2 const a2 = custom::perpendicular_vector(v);
+                    vec2 sv[10];
+                    sv[0] = pos + bulge(v * e.rad * 0.9f * squint, a, e.rad);
+                    sv[9] = pos + bulge(v * -e.rad * 0.9f * squint, a, e.rad);
+                    for (int jj = 1; jj < 5; ++jj)
+                        for (int kk = 0; kk < 2; ++kk) {
+                            float const dd = e.rad * (jj < 3 ? 0.7f : 0.25f) * (kk == 0 ? 1.f : -1.f) * squint;
+                            int const num5 = kk == 0 ? jj : 9 - jj;
+                            float const d2 = num2 * (jj < 3 ? 0.5f : 1.f) * (num5 % 2 == 0 ? 1.f : -1.f) * mathf::lerp(1.f, 2.5f, num3);
+                            sv[num5] = pos + bulge(v * dd + a2 * d2, a, e.rad);
+                        }
+                    sprites::long_mesh(out, strip, sv, 10, render);
+                }
             }
         }
     }

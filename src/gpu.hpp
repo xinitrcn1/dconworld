@@ -40,7 +40,26 @@ namespace gpu {
         uint32_t seed;  // the corners' rolls (xorshift32)
         float pad;
     };
-    static_assert(sizeof(rope_point) == 16 && sizeof(circle) == 32);
+    // the sprite pipeline's instances (sprite.vert/frag): six vertices each,
+    // read as uvec4s (floats as their bits). `mode` (extra[0]):
+    //   0 a Futile sprite: p0 = (x, y, rotation in degrees clockwise, -),
+    //     p1 = its corners' local x0, y0, x1, y1 (anchor and scale applied),
+    //     uv = u0, v_top, u1, v_bottom, rgba = top left, top right, bottom
+    //     right, bottom left (FSprite.UpdateLocalVertices, triangles bl br tr, bl tr tl)
+    //   1 a free quad (CustomFSprite, or a triangle with corner 3 = corner 2):
+    //     p0 = corners 0, 1, p1 = corners 2, 3 (top left, top right, bottom
+    //     right, bottom left; triangles 0 1 2, 0 2 3), uv and rgba as for 0
+    //   2 the Watcher's halo (WeaverGlow): p0 = (centre x, y, strength,
+    //     n11), p1 = (n12, -, -, -), rgba[0] its colour; the shader makes the
+    //     glow (a ring 10..50px, brightest at 25, eight soft lobes) per pixel
+    struct sprite_instance {
+        float p0[4];
+        float p1[4];
+        float uv[4];
+        uint32_t rgba[4];
+        uint32_t extra[4];
+    };
+    static_assert(sizeof(rope_point) == 16 && sizeof(circle) == 32 && sizeof(sprite_instance) == 80);
 
     struct context; // opaque
 
@@ -71,6 +90,7 @@ namespace gpu {
         sand,        // sand.vert/frag: the Watcher's sand (1: cameras, 2: palettes, 3: terrain palette, 4: the sprite mask)
         sandstorm,   // sand.vert + sandstorm.frag, premultiplied alpha (1: cameras, 2: palettes, 3: surface mask, 4: the sprite mask)
         spores,      // sand.vert + spores.frag: the Spores shader's specks (1: cameras)
+        sprite,      // sprite.vert/frag: sprite_instances, six vertices each (1: the atlas; no vertex input: draw_pulled)
         count,
     };
 

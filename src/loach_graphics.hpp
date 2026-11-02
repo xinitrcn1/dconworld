@@ -5,7 +5,9 @@
 // (Dangler), the shoulders over the legs, the body (eleven circles along
 // the chunks), the spots (GrowthA/B, in front of or behind the body as it
 // turns), the six legs (two jointed deerLeg sprites and a mesh each, as
-// the rain deer's) and the two peeper eyes, in vanilla sprite order.
+// the rain deer's) and the two peeper eyes, in vanilla sprite order. A
+// RotLoach (the Rot Behemoth) has no peepers but the rot instead: circles
+// along its tentacles and fifteen DaddyGraphics.Eye bulbs (drawn last).
 
 #include <vector>
 
@@ -23,7 +25,7 @@ namespace loach_graphics {
     // the graphics module's Update, once per tick after the creature's
     void update(sys::game_state& state, dcon::creature_id c, world::room_view const& room);
     // DrawSprites (ApplyPalette from `pal`); a TriangleMesh.MakeLongMesh's
-    // vertices go to `strip`
+    // vertices go to `strip`, the tentacles' rope points to `ropes`
     void build(sys::game_state const& state, dcon::creature_id c, float alpha, sprites::room_palette const& pal, std::vector<sprites::draw_cmd>& out,
-        std::vector<sprites::strip_vertex>& strip);
+        std::vector<sprites::strip_vertex>& strip, std::vector<sprites::rope_point>& ropes);
 }

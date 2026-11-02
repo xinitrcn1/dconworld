@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "needle_worm.hpp"
+#include "ve_utils.hpp"
 #include "dens.hpp"
 #include "migrate.hpp"
 #include "needle_worm_graphics.hpp"
@@ -1025,11 +1026,17 @@ namespace needle_worm {
         // NeedleWorm.SinMovementInBody: a wave down the body
         void sin_movement_in_body(ctx& x, float amp1, float amp2, float wave1, float wave2, bool add_to_positions) {
             vec2 add[max_segments] = {};
+            // the wave's sines all at once (ve::sin), then the pushes
+            float wave[max_segments] = {};
             for (uint32_t i = 1; i < x.total; ++i) {
                 float const fi = float(i);
-                add[i] = custom::perpendicular_vector(x.seg_pos(i), x.seg_pos(i - 1))
-                    * std::sin(x.x.crawl_sin + fi * custom::lerp_map(fi, 1.f, float(x.total - 1), wave1, wave2))
-                    * custom::lerp_map(fi, 1.f, float(x.total - 1), amp1, amp2);
+                wave[i] = x.x.crawl_sin + fi * custom::lerp_map(fi, 1.f, float(x.total - 1), wave1, wave2);
+            }
+            if (x.total > 1)
+                ve::transform(wave + 1, x.total - 1, [](ve::fp_vector v) { return ve::sin(v); });
+            for (uint32_t i = 1; i < x.total; ++i) {
+                float const fi = float(i);
+                add[i] = custom::perpendicular_vector(x.seg_pos(i), x.seg_pos(i - 1)) * wave[i] * custom::lerp_map(fi, 1.f, float(x.total - 1), amp1, amp2);
             }
             for (uint32_t i = 1; i < x.total; ++i) {
                 x.add_seg_vel(i, add[i]);

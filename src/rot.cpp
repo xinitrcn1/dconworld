@@ -348,7 +348,7 @@ namespace rot {
         void for_each_creature_chunk(sys::game_state const& state, dcon::room_id room, F&& f) {
             bool stop = false;
             rooms::for_each_creature(state, room, [&](dcon::creature_id c) {
-                if (stop || creature::type_of(state.world, c) == creature::type::daddy)
+                if (stop || creature::type_of(state.world, c) == creature::type::daddy || creature::type_of(state.world, c) == creature::type::oracle)
                     return;
                 rot_prey const base{prey_kind::creature, 0, uint16_t(c.index())};
                 if (!prey_in_room(state, base, room))

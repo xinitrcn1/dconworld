@@ -8,7 +8,10 @@
 // daddy.*, leech.*, tube_worm.*, needle_worm.*, pole_mimic.*,
 // tentacle_plant.*, jetfish.*, scavenger.*, deer.*, miros.*, barnacle.*,
 // egg_bug.*, garbage_worm.*, lantern_mouse.*, loach.*, moth_grub.*,
-// overseer.*, snail.*, sky_whale.*, yeek.*, vulture.*. Whatever doesn't depend on the kind is here and runs the
+// overseer.*, snail.*, sky_whale.*, yeek.*, vulture.*, angler.*, spider.*,
+// big_spider.* (dart_maggot.*), stowaway.*, drill_crab.*, batfly.*, frog.*,
+// moth.*, oracle.*, inspector.*, big_eel.*. Whatever
+// doesn't depend on the kind is here and runs the
 // same for all of them: the body and its chunks, Creature.Update's stun
 // countdown, being conscious, grasps, the other creatures it refers to (by
 // id: a tracked prey, a grasp, a bite), the projectile trace and Violence's
@@ -103,6 +106,33 @@ namespace creature {
     }
     inline dcon::loach_data_id loach_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::loach_data_id{dcon::loach_data_id::value_base_t(w.creature_get_payload(c).loach.data)};
+    }
+    inline dcon::angler_data_id angler_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::angler_data_id{dcon::angler_data_id::value_base_t(w.creature_get_payload(c).angler.data)};
+    }
+    inline dcon::spider_data_id spider_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::spider_data_id{dcon::spider_data_id::value_base_t(w.creature_get_payload(c).spider.data)};
+    }
+    inline dcon::big_spider_data_id big_spider_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::big_spider_data_id{dcon::big_spider_data_id::value_base_t(w.creature_get_payload(c).big_spider.data)};
+    }
+    inline dcon::stowaway_data_id stowaway_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::stowaway_data_id{dcon::stowaway_data_id::value_base_t(w.creature_get_payload(c).stowaway.data)};
+    }
+    inline dcon::drill_crab_data_id drill_crab_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::drill_crab_data_id{dcon::drill_crab_data_id::value_base_t(w.creature_get_payload(c).drill_crab.data)};
+    }
+    inline dcon::batfly_data_id batfly_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::batfly_data_id{dcon::batfly_data_id::value_base_t(w.creature_get_payload(c).batfly.data)};
+    }
+    inline dcon::frog_data_id frog_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::frog_data_id{dcon::frog_data_id::value_base_t(w.creature_get_payload(c).frog.data)};
+    }
+    inline dcon::moth_data_id moth_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::moth_data_id{dcon::moth_data_id::value_base_t(w.creature_get_payload(c).moth.data)};
+    }
+    inline dcon::big_eel_data_id big_eel_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
+        return dcon::big_eel_data_id{dcon::big_eel_data_id::value_base_t(w.creature_get_payload(c).big_eel.data)};
     }
     inline dcon::moth_grub_data_id moth_grub_data(dcon::data_container const& w, dcon::creature_id c) noexcept {
         return dcon::moth_grub_data_id{dcon::moth_grub_data_id::value_base_t(w.creature_get_payload(c).moth_grub.data)};

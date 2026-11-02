@@ -2,6 +2,7 @@
 #include <string>
 
 #include "creature.hpp"
+#include "offscreen_types.hpp"
 #include "dens.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
@@ -42,7 +43,29 @@
 #include "loach.hpp"
 #include "loach_graphics.hpp"
 #include "moth_grub.hpp"
+#include "big_eel.hpp"
+#include "inspector.hpp"
+#include "oracle.hpp"
+#include "moth.hpp"
+#include "frog.hpp"
+#include "batfly.hpp"
+#include "drill_crab.hpp"
+#include "stowaway.hpp"
+#include "big_spider.hpp"
+#include "spider.hpp"
+#include "angler.hpp"
 #include "moth_grub_graphics.hpp"
+#include "big_eel_graphics.hpp"
+#include "inspector_graphics.hpp"
+#include "oracle_graphics.hpp"
+#include "moth_graphics.hpp"
+#include "frog_graphics.hpp"
+#include "batfly_graphics.hpp"
+#include "drill_crab_graphics.hpp"
+#include "stowaway_graphics.hpp"
+#include "big_spider_graphics.hpp"
+#include "spider_graphics.hpp"
+#include "angler_graphics.hpp"
 #include "overseer.hpp"
 #include "overseer_graphics.hpp"
 #include "snail.hpp"
@@ -89,6 +112,17 @@ namespace creature {
         case type::lantern_mouse: return "lantern mouse";
         case type::loach: return "loach";
         case type::moth_grub: return "moth grub";
+        case type::big_eel: return "leviathan";
+        case type::inspector: return "inspector";
+        case type::oracle: return "oracle";
+        case type::moth: return "moth";
+        case type::frog: return "frog";
+        case type::batfly: return "batfly";
+        case type::drill_crab: return "drill crab";
+        case type::stowaway: return "stowaway";
+        case type::big_spider: return "big spider";
+        case type::spider: return "spider";
+        case type::angler: return "angler";
         case type::overseer: return "overseer";
         case type::snail: return "snail";
         case type::sky_whale: return "sky whale";
@@ -123,6 +157,7 @@ namespace creature {
         w.creature_set_spawn_flags(c, 0);
         w.creature_set_vessel_last_progress(c, 0.f);
         w.creature_set_stun(c, 0);
+        w.creature_set_offscreen(c, offscreen::state{});
         w.creature_set_dead(c, 0);
         w.creature_set_grasps(c, grasp_pair{});
         w.creature_set_killed_by(c, 0);
@@ -210,6 +245,50 @@ namespace creature {
             pl.moth_grub = moth_grub_payload{};
             pl.moth_grub.data = uint16_t(w.create_moth_grub_data().index());
             break;
+        case type::big_eel:
+            pl.big_eel = big_eel_payload{};
+            pl.big_eel.data = uint16_t(w.create_big_eel_data().index());
+            break;
+        case type::inspector:
+            pl.inspector = inspector_payload{};
+            pl.inspector.data = uint16_t(w.create_inspector_data().index());
+            break;
+        case type::oracle:
+            pl.oracle = oracle_payload{};
+            pl.oracle.data = uint16_t(w.create_oracle_data().index());
+            break;
+        case type::moth:
+            pl.moth = moth_payload{};
+            pl.moth.data = uint16_t(w.create_moth_data().index());
+            break;
+        case type::frog:
+            pl.frog = frog_payload{};
+            pl.frog.data = uint16_t(w.create_frog_data().index());
+            break;
+        case type::batfly:
+            pl.batfly = batfly_payload{};
+            pl.batfly.data = uint16_t(w.create_batfly_data().index());
+            break;
+        case type::drill_crab:
+            pl.drill_crab = drill_crab_payload{};
+            pl.drill_crab.data = uint16_t(w.create_drill_crab_data().index());
+            break;
+        case type::stowaway:
+            pl.stowaway = stowaway_payload{};
+            pl.stowaway.data = uint16_t(w.create_stowaway_data().index());
+            break;
+        case type::big_spider:
+            pl.big_spider = big_spider_payload{};
+            pl.big_spider.data = uint16_t(w.create_big_spider_data().index());
+            break;
+        case type::spider:
+            pl.spider = spider_payload{};
+            pl.spider.data = uint16_t(w.create_spider_data().index());
+            break;
+        case type::angler:
+            pl.angler = angler_payload{};
+            pl.angler.data = uint16_t(w.create_angler_data().index());
+            break;
         case type::overseer:
             pl.overseer = overseer_payload{};
             pl.overseer.data = uint16_t(w.create_overseer_data().index());
@@ -260,6 +339,17 @@ namespace creature {
         case type::lantern_mouse: w.delete_lantern_mouse_data(lantern_mouse_data(w, c)); break;
         case type::loach: w.delete_loach_data(loach_data(w, c)); break;
         case type::moth_grub: w.delete_moth_grub_data(moth_grub_data(w, c)); break;
+        case type::big_eel: w.delete_big_eel_data(big_eel_data(w, c)); break;
+        case type::moth: w.delete_moth_data(moth_data(w, c)); break;
+        case type::oracle: w.delete_oracle_data(oracle::data(state, c)); break;
+        case type::inspector: w.delete_inspector_data(inspector::data_of(w, c)); break;
+        case type::frog: w.delete_frog_data(frog_data(w, c)); break;
+        case type::batfly: w.delete_batfly_data(batfly_data(w, c)); break;
+        case type::drill_crab: w.delete_drill_crab_data(drill_crab_data(w, c)); break;
+        case type::stowaway: w.delete_stowaway_data(stowaway_data(w, c)); break;
+        case type::big_spider: w.delete_big_spider_data(big_spider_data(w, c)); break;
+        case type::spider: w.delete_spider_data(spider_data(w, c)); break;
+        case type::angler: w.delete_angler_data(angler_data(w, c)); break;
         case type::overseer: w.delete_overseer_data(overseer_data(w, c)); break;
         case type::snail: w.delete_snail_data(snail_data(w, c)); break;
         case type::sky_whale: w.delete_sky_whale_data(sky_whale_data(w, c)); break;
@@ -289,6 +379,11 @@ namespace creature {
                 break;
             case part_kind::vulture_wing:
                 w.delete_vulture_wing(dcon::vulture_wing_id{dcon::vulture_wing_id::value_base_t(pp.vulture_wing.data)});
+                break;
+            case part_kind::drill_crab_leg:
+                break;
+            case part_kind::inspector_head:
+                w.delete_inspector_head(dcon::inspector_head_id{dcon::inspector_head_id::value_base_t(pp.inspector_head.data)});
                 break;
             }
             w.delete_creature_part(p);
@@ -500,6 +595,18 @@ namespace creature {
         case type::lantern_mouse: return lantern_mouse::create(state, room, pos);
         case type::loach: return loach::create(state, room, pos, loach::variant(d.variety % loach::variant_count));
         case type::moth_grub: return moth_grub::create(state, room, pos);
+        case type::big_eel: return big_eel::create(state, room, pos);
+        case type::inspector: return inspector::create(state, room, pos);
+        // (only oracle::spawn_room makes them)
+        case type::oracle: return dcon::creature_id{};
+        case type::moth: return moth::create(state, room, pos, moth::variant(d.variety % moth::variant_count));
+        case type::frog: return frog::create(state, room, pos);
+        case type::batfly: return batfly::create(state, room, pos);
+        case type::drill_crab: return drill_crab::create(state, room, pos, drill_crab::variant(d.variety % drill_crab::variant_count));
+        case type::stowaway: return stowaway::create(state, room, pos);
+        case type::big_spider: return big_spider::create(state, room, pos, big_spider::variant(d.variety % big_spider::variant_count));
+        case type::spider: return spider::create(state, room, pos);
+        case type::angler: return angler::create(state, room, pos);
         case type::overseer: return overseer::create(state, room, pos);
         case type::snail: return snail::create(state, room, pos);
         case type::sky_whale: return sky_whale::create(state, room, pos, d.variety != 0);
@@ -533,6 +640,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse::destroy(state, c); return;
         case type::loach: loach::destroy(state, c); return;
         case type::moth_grub: moth_grub::destroy(state, c); return;
+        case type::big_eel: big_eel::destroy(state, c); return;
+        case type::inspector: inspector::destroy(state, c); return;
+        case type::oracle: oracle::destroy(state, c); return;
+        case type::moth: moth::destroy(state, c); return;
+        case type::frog: frog::destroy(state, c); return;
+        case type::batfly: batfly::destroy(state, c); return;
+        case type::drill_crab: drill_crab::destroy(state, c); return;
+        case type::stowaway: stowaway::destroy(state, c); return;
+        case type::big_spider: big_spider::destroy(state, c); return;
+        case type::spider: spider::destroy(state, c); return;
+        case type::angler: angler::destroy(state, c); return;
         case type::overseer: overseer::destroy(state, c); return;
         case type::snail: snail::destroy(state, c); return;
         case type::sky_whale: sky_whale::destroy(state, c); return;
@@ -546,7 +664,9 @@ namespace creature {
         auto const& w = state.world;
         if (w.creature_get_away(c) != 0) {
             auto const room = w.creature_get_away_room(c);
-            auto const where = std::string{w.creature_get_away(c) == 1 ? "in a pipe" : "in a den"} + " of " + std::string{state.to_string_view(w.room_get_name(room))};
+            uint8_t const a = w.creature_get_away(c);
+            auto const where = a == 3 ? std::string{"off screen (region of "} + std::string{state.to_string_view(w.room_get_name(room))} + ")"
+                : std::string{a == 1 ? "in a pipe" : "in a den"} + " of " + std::string{state.to_string_view(w.room_get_name(room))};
             return std::string{to_string(w.creature_get_type(c))} + " " + where + (w.creature_get_away(c) == 2 ? " (out in " + std::to_string(w.creature_get_remain_in_den(c)) + " ticks)" : "");
         }
         auto const at = [](vec2 p) { return std::to_string(int(p.x)) + "," + std::to_string(int(p.y)); };
@@ -619,6 +739,28 @@ namespace creature {
             return loach::describe(state, c) + dead;
         case type::moth_grub:
             return moth_grub::describe(state, c) + dead;
+        case type::big_eel:
+            return big_eel::describe(state, c) + dead;
+        case type::inspector:
+            return inspector::describe(state, c) + dead;
+        case type::oracle:
+            return oracle::describe(state, c) + dead;
+        case type::moth:
+            return moth::describe(state, c) + dead;
+        case type::frog:
+            return frog::describe(state, c) + dead;
+        case type::batfly:
+            return batfly::describe(state, c) + dead;
+        case type::drill_crab:
+            return drill_crab::describe(state, c) + dead;
+        case type::stowaway:
+            return stowaway::describe(state, c) + dead;
+        case type::big_spider:
+            return big_spider::describe(state, c) + dead;
+        case type::spider:
+            return spider::describe(state, c) + dead;
+        case type::angler:
+            return angler::describe(state, c) + dead;
         case type::overseer:
             return overseer::describe(state, c) + dead;
         case type::snail:
@@ -669,6 +811,9 @@ namespace creature {
             case tmpl::miros_vulture:
             case tmpl::overseer:
             case tmpl::sky_whale:
+            case tmpl::batfly:
+            case tmpl::big_moth:
+            case tmpl::small_moth:
                 return true;
             default:
                 return false;
@@ -817,6 +962,61 @@ namespace creature {
                 if (viewed)
                     moth_grub_graphics::update(state, c, room);
                 return;
+            case type::big_eel:
+                big_eel::update(state, c, room);
+                if (viewed)
+                    big_eel_graphics::update(state, c, room);
+                return;
+            case type::inspector:
+                inspector::update(state, c, room);
+                if (viewed)
+                    inspector_graphics::update(state, c, room);
+                return;
+            case type::oracle:
+                oracle::update(state, c, room);
+                if (viewed)
+                    oracle_graphics::update(state, c, room);
+                return;
+            case type::moth:
+                moth::update(state, c, room);
+                if (viewed)
+                    moth_graphics::update(state, c, room);
+                return;
+            case type::frog:
+                frog::update(state, c, room);
+                if (viewed)
+                    frog_graphics::update(state, c, room);
+                return;
+            case type::batfly:
+                batfly::update(state, c, room);
+                if (viewed)
+                    batfly_graphics::update(state, c, room);
+                return;
+            case type::drill_crab:
+                drill_crab::update(state, c, room);
+                if (viewed)
+                    drill_crab_graphics::update(state, c, room);
+                return;
+            case type::stowaway:
+                stowaway::update(state, c, room);
+                if (viewed)
+                    stowaway_graphics::update(state, c, room);
+                return;
+            case type::big_spider:
+                big_spider::update(state, c, room);
+                if (viewed)
+                    big_spider_graphics::update(state, c, room);
+                return;
+            case type::spider:
+                spider::update(state, c, room);
+                if (viewed)
+                    spider_graphics::update(state, c, room);
+                return;
+            case type::angler:
+                angler::update(state, c, room);
+                if (viewed)
+                    angler_graphics::update(state, c, room);
+                return;
             case type::overseer:
                 overseer::update(state, c, room);
                 if (viewed)
@@ -877,6 +1077,18 @@ namespace creature {
             case type::lantern_mouse: return lantern_mouse::collides(state, c, t);
             case type::loach: return loach::collides(state, c, t);
             case type::moth_grub: return moth_grub::collides(state, c, t);
+            case type::big_eel: return big_eel::collides(state, c, t);
+            case type::inspector: return inspector::collides(state, c, t);
+            case type::oracle: return oracle::collides(state, c, t);
+            case type::moth: return moth::collides(state, c, t);
+            case type::frog: return frog::collides(state, c, t);
+            case type::batfly: return batfly::collides(state, c, t);
+            case type::drill_crab: return drill_crab::collides(state, c, t);
+            case type::stowaway: return stowaway::collides(state, c, t);
+            case type::big_spider: return big_spider::collides(state, c, t);
+            // a spider is in collision layer 0 (only spiders)
+            case type::spider: return false;
+            case type::angler: return angler::collides(state, c, t);
             case type::overseer: return overseer::collides(state, c, t);
             case type::snail: return snail::collides(state, c, t);
             case type::sky_whale: return sky_whale::collides(state, c, t);
@@ -911,6 +1123,17 @@ namespace creature {
             case type::lantern_mouse: lantern_mouse::collide(state, c, room, i, t, j); return;
             case type::loach: loach::collide(state, c, room, i, t, j); return;
             case type::moth_grub: moth_grub::collide(state, c, room, i, t, j); return;
+            case type::big_eel: big_eel::collide(state, c, room, i, t, j); return;
+            case type::inspector: inspector::collide(state, c, room, i, t, j); return;
+            case type::oracle: oracle::collide(state, c, room, i, t, j); return;
+            case type::moth: moth::collide(state, c, room, i, t, j); return;
+            case type::frog: frog::collide(state, c, room, i, t, j); return;
+            case type::batfly: batfly::collide(state, c, room, i, t, j); return;
+            case type::drill_crab: drill_crab::collide(state, c, room, i, t, j); return;
+            case type::stowaway: stowaway::collide(state, c, room, i, t, j); return;
+            case type::big_spider: big_spider::collide(state, c, room, i, t, j); return;
+            case type::spider: return;
+            case type::angler: angler::collide(state, c, room, i, t, j); return;
             case type::overseer: overseer::collide(state, c, room, i, t, j); return;
             case type::snail: snail::collide(state, c, room, i, t, j); return;
             case type::sky_whale: sky_whale::collide(state, c, room, i, t, j); return;
@@ -922,7 +1145,7 @@ namespace creature {
 
         // creatures of a kind push each other apart (daddies don't), and
         // react to it: their chunk `i` and the other's `j` touched
-        bool pushes_kin(type t) noexcept { return t != type::daddy; }
+        bool pushes_kin(type t) noexcept { return t != type::daddy && t != type::stowaway; }
         void collide_kin(sys::game_state& state, dcon::creature_id c, uint32_t i, dcon::creature_id other, uint32_t j) {
             switch (state.world.creature_get_type(c)) {
             case type::centipede: centipede::collide_kin(state, c, i, other, j); return;
@@ -932,6 +1155,8 @@ namespace creature {
             case type::egg_bug: egg_bug::collide_kin(state, c, i, other, j); return;
             case type::lantern_mouse: lantern_mouse::collide_kin(state, c, i, other, j); return;
             case type::snail: snail::collide_kin(state, c, i, other, j); return;
+            // (it runs both sides' Collide itself)
+            case type::big_spider: big_spider::collide_kin(state, c, i, other, j); return;
             case type::tube_worm:
                 tube_worm::collide(state, c);
                 tube_worm::collide(state, other);
@@ -968,13 +1193,25 @@ namespace creature {
             auto const& w = state.world;
             uint32_t const n = chunk_count(state, c);
             auto const t = w.creature_get_type(c);
-            // (overseers are in collision layer 0: they touch nothing, kin included)
-            if (t == type::leech || t == type::slugcat || t == type::overseer)
+            // the spiders' collision layer 0: spider against spider only
+            if (t == type::spider) {
+                spider::collide(state, c, room);
+                return;
+            }
+            // (overseers and batflies are in collision layer 0: they touch
+            // nothing, kin included)
+            if (t == type::leech || t == type::slugcat || t == type::overseer || t == type::batfly)
                 return;
             float const rc = reach(state, c, n);
             vec2 const oc = w.body_chunk_get_pos(chunk(state, c, 0));
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id other) {
                 auto const ot = w.creature_get_type(other);
+                // (frogs are in collision layer 0 with each other only)
+                if ((t == type::frog) != (ot == type::frog))
+                    return;
+                // a latched frog collides with nothing (Frog.setCollisions)
+                if (t == type::frog && (!frog::collides(state, c, other) || !frog::collides(state, other, c)))
+                    return;
                 if (ot == type::slugcat) {
                     // the slugcat's side has no Collide of its own
                     if (!collides(state, c, other, room.id))
@@ -988,7 +1225,7 @@ namespace creature {
                 }
                 if (other.index() <= c.index())
                     return;
-                if (ot == type::leech || ot == type::overseer || (ot == t && !pushes_kin(t)) || w.creature_get_away(other) != 0)
+                if (ot == type::leech || ot == type::spider || ot == type::overseer || ot == type::batfly || (ot == t && !pushes_kin(t)) || w.creature_get_away(other) != 0)
                     return;
                 uint32_t const m = chunk_count(state, other);
                 if (!custom::dist_less(oc, w.body_chunk_get_pos(chunk(state, other, 0)), rc + reach(state, other, m)))
@@ -1082,6 +1319,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse_graphics::reset_positions(state, c); return;
         case type::loach: loach_graphics::reset_positions(state, c); return;
         case type::moth_grub: moth_grub_graphics::reset_positions(state, c); return;
+        case type::big_eel: big_eel_graphics::reset_positions(state, c); return;
+        case type::inspector: inspector_graphics::reset_positions(state, c); return;
+        case type::oracle: oracle_graphics::reset_positions(state, c); return;
+        case type::moth: moth_graphics::reset_positions(state, c); return;
+        case type::frog: frog_graphics::reset_positions(state, c); return;
+        case type::batfly: batfly_graphics::reset_positions(state, c); return;
+        case type::drill_crab: drill_crab_graphics::reset_positions(state, c); return;
+        case type::stowaway: stowaway_graphics::reset_positions(state, c); return;
+        case type::big_spider: big_spider_graphics::reset_positions(state, c); return;
+        case type::spider: spider_graphics::reset_positions(state, c); return;
+        case type::angler: angler_graphics::reset_positions(state, c); return;
         case type::overseer: overseer_graphics::reset_positions(state, c); return;
         case type::snail: snail_graphics::reset_positions(state, c); return;
         case type::sky_whale: sky_whale_graphics::reset_positions(state, c); return;
@@ -1117,6 +1365,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse::place_in_room(state, c, room, at); break;
         case type::loach: loach::place_in_room(state, c, room, at); break;
         case type::moth_grub: moth_grub::place_in_room(state, c, room, at); break;
+        case type::big_eel: big_eel::place_in_room(state, c, room, at); break;
+        case type::inspector: inspector::place_in_room(state, c, room, at); break;
+        case type::oracle: oracle::place_in_room(state, c, room, at); break;
+        case type::moth: moth::place_in_room(state, c, room, at); break;
+        case type::frog: frog::place_in_room(state, c, room, at); break;
+        case type::batfly: batfly::place_in_room(state, c, room, at); break;
+        case type::drill_crab: drill_crab::place_in_room(state, c, room, at); break;
+        case type::stowaway: stowaway::place_in_room(state, c, room, at); break;
+        case type::big_spider: big_spider::place_in_room(state, c, room, at); break;
+        case type::spider: spider::place_in_room(state, c, room, at); break;
+        case type::angler: angler::place_in_room(state, c, room, at); break;
         case type::overseer: overseer::place_in_room(state, c, room, at); break;
         case type::snail: snail::place_in_room(state, c, room, at); break;
         case type::sky_whale: sky_whale::place_in_room(state, c, room, at); break;
@@ -1140,6 +1399,11 @@ namespace creature {
             player::stun(state, player_of(state, c), st);
             return;
         }
+        // StowawayBug.Stun: a sleeping one wakes instead
+        if (state.world.creature_get_type(c) == type::stowaway) {
+            stowaway::stun(state, c, st);
+            return;
+        }
         int32_t& s = state.world.creature_get_stun(c);
         s = std::max(s, st);
     }
@@ -1147,6 +1411,9 @@ namespace creature {
     void die(sys::game_state& state, dcon::creature_id c) {
         auto& w = state.world;
         if (w.creature_get_dead(c))
+            return;
+        // (an iterator isn't a creature: nothing kills it)
+        if (w.creature_get_type(c) == type::oracle)
             return;
         // (Player.Die: a dead slugcat keeps what it holds)
         if (is_slugcat(w, c)) {
@@ -1172,6 +1439,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse::died(state, c); break;
         case type::loach: loach::died(state, c); break;
         case type::moth_grub: moth_grub::died(state, c); break;
+        case type::big_eel: big_eel::died(state, c); break;
+        case type::inspector: inspector::died(state, c); break;
+        case type::oracle: oracle::died(state, c); break;
+        case type::moth: moth::died(state, c); break;
+        case type::frog: frog::died(state, c); break;
+        case type::batfly: batfly::died(state, c); break;
+        case type::drill_crab: drill_crab::died(state, c); break;
+        case type::stowaway: stowaway::died(state, c); break;
+        case type::big_spider: big_spider::died(state, c); break;
+        case type::spider: spider::died(state, c); break;
+        case type::angler: angler::died(state, c); break;
         case type::overseer: overseer::died(state, c); break;
         case type::snail: snail::died(state, c); break;
         case type::sky_whale: sky_whale::died(state, c); break;
@@ -1228,6 +1506,9 @@ namespace creature {
             // a garbage worm drawn into its hole (GarbageWorm.canBeHitByWeapons)
             if (w.creature_get_type(c) == type::garbage_worm && !garbage_worm::can_be_hit(state, c))
                 return;
+            // a latched frog (canBeHitByWeapons false)
+            if (w.creature_get_type(c) == type::frog && frog::attached_to(state, c))
+                return;
             // an overseer in its wall (Overseer.canBeHitByWeapons: extended > 0.2)
             if (w.creature_get_type(c) == type::overseer && !overseer::can_be_hit(state, c))
                 return;
@@ -1283,6 +1564,28 @@ namespace creature {
                 part = vp;
             }
         }
+        // an inspector's heads (IHaveAppendages) when closer
+        {
+            dcon::creature_id ih;
+            hit_part ip;
+            float iff = 2.f;
+            if (inspector::trace_appendages(state, room, from, to, thrown_by, ih, ip, iff) && iff < best) {
+                best = iff;
+                hit = ih;
+                part = ip;
+            }
+        }
+        // a drill crab's leg (IHaveAppendages) when closer
+        {
+            dcon::creature_id dh;
+            hit_part dp;
+            float df = 2.f;
+            if (drill_crab::trace_legs(state, room, from, to, thrown_by, dh, dp, df) && df < best) {
+                best = df;
+                hit = dh;
+                part = dp;
+            }
+        }
         dcon::creature_id th;
         hit_part tp;
         if (daddy::trace_tentacles(state, room, from, to, th, tp)) {
@@ -1330,6 +1633,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::loach: loach::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::moth_grub: moth_grub::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::big_eel: big_eel::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::inspector: inspector::violence(state, c, part, momentum, damage, stun_bonus, type); return;
+        case type::oracle: oracle::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::moth: moth::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::frog: frog::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::batfly: batfly::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::drill_crab: drill_crab::violence(state, c, part, momentum, damage, stun_bonus, type); return;
+        case type::stowaway: stowaway::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::big_spider: big_spider::violence(state, c, k, momentum, damage, stun_bonus, type); return;
+        case type::spider: spider::violence(state, c, momentum, damage, stun_bonus); return;
+        case type::angler: angler::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::overseer: overseer::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::snail: snail::violence(state, c, k, momentum, damage, stun_bonus, type); return;
         case type::sky_whale: sky_whale::violence(state, c, k, momentum, damage, stun_bonus, type); return;
@@ -1403,6 +1717,17 @@ namespace creature {
         case type::lantern_mouse: lantern_mouse::release(state, c, t); break;
         case type::loach: loach::release(state, c, t); break;
         case type::moth_grub: moth_grub::release(state, c, t); break;
+        case type::big_eel: big_eel::release(state, c, t); break;
+        case type::inspector: inspector::release(state, c, t); break;
+        case type::oracle: oracle::release(state, c, t); break;
+        case type::moth: moth::release(state, c, t); break;
+        case type::frog: frog::release(state, c, t); break;
+        case type::batfly: batfly::release(state, c, t); break;
+        case type::drill_crab: drill_crab::release(state, c, t); break;
+        case type::stowaway: stowaway::release(state, c, t); break;
+        case type::big_spider: big_spider::release(state, c, t); break;
+        case type::spider: spider::release(state, c, t); break;
+        case type::angler: angler::release(state, c, t); break;
         case type::overseer: overseer::release(state, c, t); break;
         case type::snail: snail::release(state, c, t); break;
         case type::sky_whale: sky_whale::release(state, c, t); break;
@@ -1437,5 +1762,6 @@ namespace creature {
         rooms::for_each_creature(state, room, type::egg_bug, [&](dcon::creature_id c) { egg_bug::flying_weapon(state, c, pos, vel); });
         rooms::for_each_creature(state, room, type::overseer, [&](dcon::creature_id c) { overseer::flying_weapon(state, c, pos, vel); });
         rooms::for_each_creature(state, room, type::yeek, [&](dcon::creature_id c) { yeek::flying_weapon(state, c, pos); });
+        rooms::for_each_creature(state, room, type::big_spider, [&](dcon::creature_id c) { big_spider::flying_weapon(state, c, pos, vel, thrown_pos); });
     }
 }

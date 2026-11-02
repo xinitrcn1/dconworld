@@ -63,8 +63,8 @@ namespace gates {
                         continue;
                     dcon::tile_id const t{dcon::tile_id::value_base_t(first + j * width + x0 + i)};
                     auto const want = j > door_top_y - rows ? world::terrain::solid : world::terrain::air;
-                    if (w.tile_get_terrain(t) != want) {
-                        w.tile_set_terrain(t, want);
+                    if (w.tile_get_bits(t).t() != want) {
+                        w.tile_get_bits(t).set_terrain(want);
                         changed = true;
                     }
                 }

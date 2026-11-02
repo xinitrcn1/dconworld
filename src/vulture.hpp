@@ -82,9 +82,8 @@ namespace vulture {
     // VultureState.mask
     bool has_mask(sys::game_state const& state, dcon::creature_id c) noexcept;
 
-    // The world files' OFFSCREEN vultures (no offscreen den here): a den
-    // of a room of `region` with open sky over it and room in front of the
-    // den's hole, rolled from `seed` (none: no such room); the spawn goes
-    // there like a den spawn
-    std::optional<std::pair<dcon::room_id, uint8_t>> offscreen_den(sys::game_state const& state, dcon::region_id region, int32_t seed);
+    // ShortcutHandler.FlyingCreatureArrivedInRealizedRoom + Creature.FlyIntoRoom:
+    // a vulture living off screen comes into `room` at `at` (high over a
+    // SkyExit, offscreen.hpp), heading `dir`
+    void fly_into_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, rw::vec2 at, rw::vec2 dir);
 }

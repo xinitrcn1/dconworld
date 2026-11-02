@@ -62,7 +62,7 @@ namespace npc {
         // the slugcats in each shelter (alive, out of the pipes), by room:
         // counted in update_world, read while the rooms think
         bool crowded(sys::game_state const& state, dcon::room_id r) {
-            return r && state.npc_buffers.shelter_crowd.get(r) > crowd_limit;
+            return r && state.npc_buffers.shelter_crowd.get(r) > int32_t(crowd_limit);
         }
 
         // a room's goals: its exits by node, its warps after them
@@ -565,7 +565,7 @@ namespace npc {
         uint8_t& tile_flags(sys::game_state& state, dcon::room_id room, ivec2 t) {
             auto& w = state.world;
             dcon::tile_id const id{dcon::tile_id::value_base_t(w.room_get_first_tile(room).id.index() + t.y * w.room_get_width(room) + t.x)};
-            return w.tile_get_flags(id);
+            return w.tile_get_bits(id).flags;
         }
 
         bool is_spear(sys::game_state const& state, dcon::item_id it) {
@@ -653,15 +653,12 @@ namespace npc {
                         was[i] = tile_flags(state, room.id, tiles[i]);
                         tile_flags(state, room.id, tiles[i]) |= uint8_t(world::tile_horizontal_beam);
                     }
-                ++w.room_get_geometry_version(room.id);
-                auto const view = world::get_room_view(state, room.id);
-                auto const ff = pathing::field_to(state, room.id, goal, walking());
-                bool const works = pathing::distance(state, ff, o.from) != pathing::unreachable;
+                // tried with the beam in place, the room's cached fields left
+                // alone (its geometry is back as it was right after)
+                bool const works = pathing::trial_distance(state, room.id, goal, walking(), o.from) != pathing::unreachable;
                 for (int i = 0; i < 2; ++i)
                     if (room.inside(tiles[i].x, tiles[i].y) && !room.get_tile(tiles[i]).solid())
                         tile_flags(state, room.id, tiles[i]) = was[i];
-                ++w.room_get_geometry_version(room.id);
-                (void)view;
                 if (works) {
                     found = o;
                     break;

@@ -66,6 +66,7 @@ namespace world {
         puff_ball,       // PuffBall: bursts into spores, rain deer eat it
         egg_bug_egg,     // EggBugEgg: an egg bug's egg, edible (2 bites, 1 pip)
         fire_egg,        // FireEgg: a fire bug's egg: edible, or tossed: sticks and blows up
+        dart_maggot,     // DartMaggot: a spitter spider's dart (not carryable)
         count
     };
 
@@ -290,6 +291,9 @@ namespace world {
         // SkyWhalePathfinding: a node of the sky whales' path (handle: the
         // line's other end, from pos)
         sky_whale_node,
+        // NoLeviathanStrandingZone: a leviathan's chunks in it are pushed
+        // along the handle (ResizableObjectData: handle the radius vector)
+        leviathan_zone,
     };
 
     // One entry of AbstractRoomNode.connectivity[template, node]
@@ -297,6 +301,23 @@ namespace world {
         int16_t distance = -1;
         int16_t second = -1;
     };
+
+    // A Room.Tile as the data container keeps it: two bytes, read with one
+    // load (room_view::get_tile). The flags byte as is (tile_flag), the
+    // other the terrain (bits 0-2) and the shortcut mark (bits 3-5). The
+    // water isn't kept: it follows from the row and the room's default
+    // water level (Room.Tile.waterInt is set from it once and never changes
+    // here, no WaterCutoff/AirPocket)
+    struct packed_tile {
+        uint8_t flags = 0;
+        uint8_t cell = 0;
+
+        constexpr terrain t() const noexcept { return terrain(cell & 0x7u); }
+        constexpr uint8_t shortcut() const noexcept { return uint8_t((cell >> 3) & 0x7u); }
+        constexpr void set_terrain(terrain v) noexcept { cell = uint8_t((cell & ~0x7u) | (uint8_t(v) & 0x7u)); }
+        constexpr void set_shortcut(uint8_t v) noexcept { cell = uint8_t((cell & ~0x38u) | ((v & 0x7u) << 3)); }
+    };
+    static_assert(sizeof(packed_tile) == 2);
 
     // By-value copy of a Room.Tile, assembled from the tile properties
     struct tile {

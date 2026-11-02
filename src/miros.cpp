@@ -1,7 +1,10 @@
 // MirosBird.cs (the body, its two BirdLegs and its Tentacle neck) and a
-// simpler MirosBirdAI. Each bird is on its own: vanilla's MirosBirdAbstractAI
-// moves a flock between rooms together; here a bird roams its room's floors
-// and changes rooms only as migrate.hpp moves every creature. It notices what
+// simpler MirosBirdAI. The world files' OFFSCREEN birds live off screen
+// (offscreen.hpp: MirosBirdAbstractAI's raids): one walks in at a side
+// exit of its raid's room, crosses it to the other side exit and walks off
+// (its rain and its prey send it out too). A bird living in a den (the
+// tests') roams its room's floors and changes rooms only as migrate.hpp
+// moves every creature. It notices what
 // it Eats (the relationship table) when it sees it, runs at it with its head
 // out and bites; the bite kills a slugcat (Violence 1.2 Bite) and the beak
 // holds what it bit, carried home to its den.
@@ -24,6 +27,7 @@
 #include "dens.hpp"
 #include "migrate.hpp"
 #include "miros_graphics.hpp"
+#include "offscreen.hpp"
 #include "particles.hpp"
 #include "pathing.hpp"
 #include "physics.hpp"
@@ -1065,6 +1069,14 @@ namespace miros {
             w.creature_set_current_utility(x.c, utility);
             switch (b) {
             case behavior::idle:
+                // living off screen: the raid's way across the room and out
+                if (offscreen::homed(x.state, x.c)) {
+                    if (auto const t = dens::home_tile(x.state, x.c, x.room))
+                        x.destination() = *t;
+                    else
+                        roam(x, from);
+                    break;
+                }
                 migrate::idle_roll(x.state, x.c, x.room);
                 if (auto const t = migrate::travel_tile(x.state, x.c, x.room)) {
                     x.destination() = *t;
@@ -1821,6 +1833,25 @@ namespace miros {
         ctx x{state, c, view, 2};
         set_up(x, at);
         w.miros_data_set_focus(x.d, dcon::creature_id{});
+    }
+
+    void walk_in(sys::game_state& state, dcon::creature_id c, dcon::room_id room, ivec2 floor, int32_t side) {
+        auto& w = state.world;
+        auto const view = world::get_room_view(state, room);
+        // standing over the exit's floor tile at the edge, facing in
+        vec2 const at = room_view::middle_of_tile(floor) + vec2{0.f, body_lift};
+        for (uint32_t i = 0; i < chunk_count; ++i) {
+            auto const k = chunk(state, c, i);
+            vec2 const p = at + vec2{float(side) * float(i) * 5.f, 0.f};
+            w.body_chunk_set_pos(k, p);
+            w.body_chunk_set_last_pos(k, p);
+            w.body_chunk_set_last_last_pos(k, p);
+            w.body_chunk_set_vel(k, vec2{-float(side) * 4.f, 0.f});
+        }
+        ctx x{state, c, view, 5};
+        set_up(x, at);
+        w.miros_data_set_focus(x.d, dcon::creature_id{});
+        w.creature_set_destination(c, floor);
     }
 
     std::string describe(sys::game_state const& state, dcon::creature_id c) {

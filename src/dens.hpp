@@ -21,6 +21,10 @@
 // its region's next cycle starts, the ones waiting it out get a fresh
 // count, like a new cycle's spawns.
 //
+// The world files' OFFSCREEN creatures live off screen (offscreen.hpp): a
+// fourth `away` state updated with their region's anchor room, their way
+// home a room border or a region transportation pipe.
+//
 // The vessels and the dens update with the room holding them (in
 // parallel); a creature coming out of a pipe, going into one or changing
 // rooms is a transaction (`game_state::defer`).
@@ -45,7 +49,9 @@ namespace dens {
         flag_alternate_form = 1 << 6, // superSizeMe
         flag_void_sea = 1 << 7,
     };
-    enum class where : uint8_t { room, shortcut, den };
+    // out in a room, in a pipe, in a den, or off screen (offscreen.hpp: the
+    // offscreen den, `away_room` its region's anchor room)
+    enum class where : uint8_t { room, shortcut, den, offscreen };
     inline constexpr uint8_t no_den = 0xFF;
 
     // the den a creature lives in (and the route home from anywhere)

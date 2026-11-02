@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <type_traits>
 
 #include <SDL3/SDL.h>
@@ -29,6 +30,17 @@
 #include "lantern_mouse_graphics.hpp"
 #include "loach_graphics.hpp"
 #include "moth_grub_graphics.hpp"
+#include "big_eel_graphics.hpp"
+#include "inspector_graphics.hpp"
+#include "oracle_graphics.hpp"
+#include "moth_graphics.hpp"
+#include "frog_graphics.hpp"
+#include "batfly_graphics.hpp"
+#include "drill_crab_graphics.hpp"
+#include "stowaway_graphics.hpp"
+#include "big_spider_graphics.hpp"
+#include "spider_graphics.hpp"
+#include "angler_graphics.hpp"
 #include "overseer_graphics.hpp"
 #include "snail_graphics.hpp"
 #include "sky_whale_graphics.hpp"
@@ -62,6 +74,7 @@
 #include "shortcuts.hpp"
 #include "reports.hpp"
 #include "rain.hpp"
+#include "hud.hpp"
 
 namespace render {
     using rw::vec2;
@@ -190,6 +203,11 @@ namespace render {
             glm::mat4 proj;
             uint32_t first; // the draw's first circle in the storage buffer
         };
+        struct sprite_uniforms {
+            glm::mat4 proj;
+            uint32_t first; // the draw's first instance in the storage buffer, in 16 byte words
+            int32_t textured;
+        };
         struct sand_uniforms {
             glm::mat4 proj;
             glm::vec2 screen;
@@ -212,11 +230,13 @@ namespace render {
             int32_t terrain_rows;
             float water_level;
             float pad;
+            glm::vec4 mud;       // rgb: colour, a: 1 drawing mud (draw_mud)
+            glm::vec4 mud_black; // the palette's black
             glm::vec4 later[max_later_cameras / 2];
             glm::vec4 light_color[16];
             glm::vec4 light_params[16];
         };
-        static_assert(offsetof(sand_uniforms, later) == 160 && sizeof(sand_uniforms) == 160 + 16 * 16 * 3 && sizeof(sand_uniforms) <= 1024);
+        static_assert(offsetof(sand_uniforms, later) == 192 && sizeof(sand_uniforms) == 192 + 16 * 16 * 3 && sizeof(sand_uniforms) <= 1024);
         struct sandstorm_uniforms {
             glm::mat4 proj;
             glm::vec2 screen;
@@ -535,30 +555,33 @@ namespace render {
             // the Watcher's own atlas out of the install's mods folder (its
             // lizards' heads among others), stacked under the Unity ones
             // (mods/ isn't a layer of the file system: read from the roots)
-            for (auto const& root : fs.roots) {
-                std::string const base = root.root + "/mods/watcher/atlases/rainworldwatcher";
-                std::string js;
-                if (std::FILE* f = std::fopen((base + ".txt").c_str(), "rb")) {
-                    char buf[65536];
-                    for (size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;)
-                        js.append(buf, n);
-                    std::fclose(f);
-                }
-                image png;
-                int n = 0;
-                if (!js.empty())
-                    png.px = stbi_load((base + ".png").c_str(), &png.w, &png.h, &n, 4);
-                if (png.px != nullptr) {
-                    unity::image im;
-                    im.name = "rainworldwatcher";
-                    im.width = png.w;
-                    im.height = png.h;
-                    im.rgba.assign(png.px, png.px + size_t(png.w) * size_t(png.h) * 4);
-                    width = std::max(width, im.width);
-                    height += im.height;
-                    images.push_back(std::move(im));
-                    sheets.push_back(std::move(js));
-                    break;
+            // (uispriteswatcher: the Watcher's HUD symbols, the ripple levels)
+            for (char const* wn : {"rainworldwatcher", "uispriteswatcher"}) {
+                for (auto const& root : fs.roots) {
+                    std::string const base = root.root + "/mods/watcher/atlases/" + wn;
+                    std::string js;
+                    if (std::FILE* f = std::fopen((base + ".txt").c_str(), "rb")) {
+                        char buf[65536];
+                        for (size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;)
+                            js.append(buf, n);
+                        std::fclose(f);
+                    }
+                    image png;
+                    int n = 0;
+                    if (!js.empty())
+                        png.px = stbi_load((base + ".png").c_str(), &png.w, &png.h, &n, 4);
+                    if (png.px != nullptr) {
+                        unity::image im;
+                        im.name = wn;
+                        im.width = png.w;
+                        im.height = png.h;
+                        im.rgba.assign(png.px, png.px + size_t(png.w) * size_t(png.h) * 4);
+                        width = std::max(width, im.width);
+                        height += im.height;
+                        images.push_back(std::move(im));
+                        sheets.push_back(std::move(js));
+                        break;
+                    }
                 }
             }
             std::vector<uint8_t> px(size_t(width) * size_t(height) * 4, 0);
@@ -723,6 +746,7 @@ namespace render {
         void clear_pulled(state& r) {
             r.rope_points.clear();
             r.circles.clear();
+            r.sprites.clear();
             r.pulled.clear();
         }
 
@@ -761,10 +785,17 @@ namespace render {
             ++d.count;
         }
 
+        // a sprite instance (sprite.vert/frag) at the batch's end
+        void pull_sprite(state& r, gpu::sprite_instance const& s) {
+            auto& d = pulled_at_end(r, gpu::pipeline::sprite, uint32_t(r.sprites.size()));
+            r.sprites.push_back(s);
+            ++d.count;
+        }
+
         // where upload_pulled put the pass's ropes and circles (in their own
-        // units) and the next pulled draw to make
+        // units) and sprites (in 16 byte words), and the next pulled draw to make
         struct pulled_upload {
-            uint32_t points = 0, circles = 0;
+            uint32_t points = 0, circles = 0, sprite_words = 0;
             size_t next = 0;
         };
         // the pass's ropes and circles into the storage buffer, both at once
@@ -775,19 +806,29 @@ namespace render {
             static std::vector<uint8_t> blob;
             size_t const points_bytes = r.rope_points.size() * sizeof(gpu::rope_point);
             size_t const circles_at = (points_bytes + sizeof(gpu::circle) - 1) / sizeof(gpu::circle) * sizeof(gpu::circle);
-            blob.assign(circles_at + r.circles.size() * sizeof(gpu::circle), 0);
+            // (the sprites read as uvec4s: 16 byte aligned, after the circles' 32)
+            size_t const sprites_at = circles_at + r.circles.size() * sizeof(gpu::circle);
+            blob.assign(sprites_at + r.sprites.size() * sizeof(gpu::sprite_instance), 0);
             if (points_bytes > 0)
                 std::memcpy(blob.data(), r.rope_points.data(), points_bytes);
             if (!r.circles.empty())
                 std::memcpy(blob.data() + circles_at, r.circles.data(), r.circles.size() * sizeof(gpu::circle));
+            if (!r.sprites.empty())
+                std::memcpy(blob.data() + sprites_at, r.sprites.data(), r.sprites.size() * sizeof(gpu::sprite_instance));
             size_t const at = gpu::upload_storage(*r.gpu, blob.data(), blob.size());
             u.points = uint32_t(at / sizeof(gpu::rope_point));
             u.circles = uint32_t((at + circles_at) / sizeof(gpu::circle));
+            u.sprite_words = uint32_t((at + sprites_at) / 16);
             return u;
         }
 
-        void draw_one_pulled(state& r, glm::mat4 const& proj, state::pulled_draw const& d, pulled_upload const& u) {
-            if (d.p == gpu::pipeline::rope) {
+        // (`tex`: the atlas the pass's sprite instances sample)
+        void draw_one_pulled(state& r, glm::mat4 const& proj, state::pulled_draw const& d, pulled_upload const& u, uint32_t tex) {
+            if (d.p == gpu::pipeline::sprite) {
+                constexpr uint32_t words = sizeof(gpu::sprite_instance) / 16;
+                sprite_uniforms const su{proj, u.sprite_words + d.first * words, tex != 0 ? 1 : 0};
+                gpu::draw_pulled(*r.gpu, gpu::pipeline::sprite, &su, sizeof(su), {tex}, size_t(d.count) * 6);
+            } else if (d.p == gpu::pipeline::rope) {
                 if (d.count < 4)
                     return;
                 uint32_t const steps = d.smooth ? rope_steps : 1u;
@@ -812,7 +853,7 @@ namespace render {
                 if (to > at)
                     draw_flat_range(r, proj, tex, at, to - at);
                 at = to;
-                draw_one_pulled(r, proj, d, u);
+                draw_one_pulled(r, proj, d, u, tex);
             }
             if (end > at)
                 draw_flat_range(r, proj, tex, at, end - at);
@@ -881,6 +922,16 @@ namespace render {
                     }
                     continue;
                 }
+                if (c.is_halo)
+                    continue; // (the slugcats' sprite instances draw it)
+                if (c.is_quad && c.untextured) {
+                    auto const corner = [&](int k) {
+                        uint32_t const col = to_rgba(rw::vec3{c.vcol[k].x, c.vcol[k].y, c.vcol[k].z}, c.vcol[k].w * vis);
+                        return vertex{c.quad[k].x, c.quad[k].y, col, white_uv.x, white_uv.y};
+                    };
+                    r.batch.insert(r.batch.end(), {corner(0), corner(1), corner(2), corner(0), corner(2), corner(3)});
+                    continue;
+                }
                 game_frame const* f = frame(c.spr.element);
                 if (f == nullptr)
                     continue;
@@ -927,6 +978,58 @@ namespace render {
                 vec2{1.f / float(r.game_width), 1.f / float(r.game_height)}, 1.f, strip, ropes);
         }
 
+        // A ported DrawSprites' commands as sprite instances (sprite.vert/frag,
+        // one each instead of six batch vertices): sprites, quads (textured
+        // or not) and triangles, and the Watcher's halo. The corners and uvs
+        // are emit_cmds', worked out on the GPU. (No strips, ropes or circles:
+        // PlayerGraphics makes none)
+        template<typename Find>
+        void pull_sprite_cmds(state& r, std::vector<sprites::draw_cmd> const& cmds, Find&& frame, float tw, float th, vec2 white_uv, float vis) {
+            auto const col4 = [&](rw::vec4 c) { return to_rgba(rw::vec3{c.x, c.y, c.z}, c.w * vis); };
+            for (auto const& c : cmds) {
+                gpu::sprite_instance s{};
+                if (c.is_halo) {
+                    s = gpu::sprite_instance{{c.spr.pos.x, c.spr.pos.y, c.halo[0], c.halo[1]}, {c.halo[2], 0.f, 0.f, 0.f}, {}, {to_rgba(c.color, vis), 0, 0, 0}, {2, 0, 0, 0}};
+                    pull_sprite(r, s);
+                    continue;
+                }
+                if (c.is_triangle || (c.is_quad && c.untextured)) {
+                    vec2 const q[4] = {c.is_triangle ? c.tri[0] : c.quad[0], c.is_triangle ? c.tri[1] : c.quad[1], c.is_triangle ? c.tri[2] : c.quad[2],
+                        c.is_triangle ? c.tri[2] : c.quad[3]};
+                    uint32_t col[4];
+                    for (int k = 0; k < 4; ++k)
+                        col[k] = c.vertex_colors ? col4(c.vcol[c.is_triangle ? std::min(k, 2) : k]) : to_rgba(c.color, vis);
+                    s = gpu::sprite_instance{{q[0].x, q[0].y, q[1].x, q[1].y}, {q[2].x, q[2].y, q[3].x, q[3].y},
+                        {white_uv.x, white_uv.y, white_uv.x, white_uv.y}, {col[0], col[1], col[2], col[3]}, {1, 0, 0, 0}};
+                    pull_sprite(r, s);
+                    continue;
+                }
+                if (c.is_strip || c.is_rope || c.is_circle)
+                    continue;
+                game_frame const* f = frame(c.spr.element);
+                if (f == nullptr)
+                    continue;
+                float const u0 = f->x / tw, u1 = (f->x + f->w) / tw;
+                float const v_top = f->y / th, v_bottom = (f->y + f->h) / th;
+                uint32_t col[4];
+                for (int k = 0; k < 4; ++k)
+                    col[k] = c.vertex_colors ? col4(c.vcol[k]) : to_rgba(c.spr.color, vis);
+                if (c.is_quad) {
+                    s = gpu::sprite_instance{{c.quad[0].x, c.quad[0].y, c.quad[1].x, c.quad[1].y}, {c.quad[2].x, c.quad[2].y, c.quad[3].x, c.quad[3].y},
+                        {u0, v_top, u1, v_bottom}, {col[0], col[1], col[2], col[3]}, {1, 0, 0, 0}};
+                } else {
+                    // FSprite.UpdateLocalVertices: the element's source rect around
+                    // the anchor, the packed (trimmed) part placed inside it
+                    float const x0 = -c.spr.anchor.x * f->source_w + f->trim_x;
+                    float const y0 = -c.spr.anchor.y * f->source_h + (f->source_h - f->trim_y - f->h);
+                    s = gpu::sprite_instance{{c.spr.pos.x, c.spr.pos.y, c.spr.rotation, 0.f},
+                        {x0 * c.spr.scale.x, y0 * c.spr.scale.y, (x0 + f->w) * c.spr.scale.x, (y0 + f->h) * c.spr.scale.y}, {u0, v_top, u1, v_bottom},
+                        {col[0], col[1], col[2], col[3]}, {0, 0, 0, 0}};
+                }
+                pull_sprite(r, s);
+            }
+        }
+
         // PlayerGraphics sprites through the slugcat atlas (textured batch)
         void build_slugcats(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             auto const& world = s.world;
@@ -947,7 +1050,8 @@ namespace render {
                 float const camo = mathf::lerp(world.player_get_last_camo_progress(pid), world.player_get_camo_progress(pid), alpha);
                 float const vis = 1.f - 0.88f * camo;
                 game_frame tmp;
-                emit_cmds(r, cmds, [&](std::string_view e) -> game_frame const* {
+                // one instance a sprite (every slugcat in the room one draw)
+                pull_sprite_cmds(r, cmds, [&](std::string_view e) -> game_frame const* {
                     auto const it = r.slugcat_frames.find(std::string{e});
                     if (it == r.slugcat_frames.end())
                         return nullptr;
@@ -1655,7 +1759,6 @@ namespace render {
             static std::vector<sprites::draw_cmd> cmds;
             rw::vec3 const black = palette_black(r, s, room.id);
             float const darkness = palette_darkness(r, s, room.id);
-            painter p{r.batch};
             rooms::for_each_creature(s, room.id, creature::type::centipede, [&](dcon::creature_id c) {
                 cmds.clear();
                 centipede_graphics::build(s, c, alpha, black, darkness, cmds);
@@ -1723,7 +1826,10 @@ namespace render {
                     }
                 } else if (cmd.is_triangle) {
                     p.tri(cmd.tri[0], cmd.tri[1], cmd.tri[2], cmd.vertex_colors ? vcol(cmd.vcol[0]) : to_rgba(cmd.color));
-                } else if (!cmd.is_quad) {
+                } else if (cmd.is_quad && cmd.untextured) {
+                    p.tri(cmd.quad[0], cmd.quad[1], cmd.quad[2], vcol(cmd.vcol[0]));
+                    p.tri(cmd.quad[0], cmd.quad[2], cmd.quad[3], vcol(cmd.vcol[0]));
+                } else if (!cmd.is_quad && !cmd.is_halo) {
                     float const rad = 4.f * mathf::max(std::fabs(cmd.spr.scale.x), std::fabs(cmd.spr.scale.y));
                     if (rad > 0.5f)
                         p.circle(cmd.spr.pos, mathf::min(rad, 40.f), cmd.vertex_colors ? vcol(cmd.vcol[0]) : to_rgba(cmd.spr.color));
@@ -2488,6 +2594,39 @@ namespace render {
                 case creature::type::moth_grub:
                     build_kind_sprites(r, s, room, t, alpha, atlas, moth_grub_graphics::build);
                     break;
+                case creature::type::big_eel:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, big_eel_graphics::build);
+                    break;
+                case creature::type::inspector:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, inspector_graphics::build);
+                    break;
+                case creature::type::oracle:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, oracle_graphics::build);
+                    break;
+                case creature::type::moth:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, moth_graphics::build);
+                    break;
+                case creature::type::frog:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, frog_graphics::build);
+                    break;
+                case creature::type::batfly:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, batfly_graphics::build);
+                    break;
+                case creature::type::drill_crab:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, drill_crab_graphics::build);
+                    break;
+                case creature::type::stowaway:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, stowaway_graphics::build);
+                    break;
+                case creature::type::big_spider:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, big_spider_graphics::build);
+                    break;
+                case creature::type::spider:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, spider_graphics::build);
+                    break;
+                case creature::type::angler:
+                    build_kind_sprites(r, s, room, t, alpha, atlas, angler_graphics::build);
+                    break;
                 case creature::type::overseer:
                     build_kind_sprites(r, s, room, t, alpha, atlas, overseer_graphics::build);
                     break;
@@ -2826,12 +2965,17 @@ namespace render {
             }
         }
 
-        // The karma meter (any slugcat) or the ripple meter (the Watcher) in
-        // the bottom left corner, screen space. Plain shapes: karma is a ring
-        // of ten notches lit up to the karma level, the cap's notches faint;
-        // the ripple level is a set of nested rings, half levels as half
-        // rings, with the camouflage charge left as an arc around them
-        void draw_meters(state& r, sys::game_state const& s) {
+        // The HUD's FoodMeter and KarmaMeter (hud.cpp) for the first
+        // player's slugcat, stepped once per game tick and drawn in Futile
+        // screen space (y up from the bottom left). Shown like vanilla's:
+        // with the HUD toggle (the map button) or in a shelter, and for a
+        // while after the food changes. Without the game's atlas (or the
+        // symbol's element) the symbol is a stand in of plain shapes: karma
+        // a ring of ten notches lit up to the karma level, the cap's notches
+        // faint; the ripple level a set of nested rings, half levels as half
+        // rings. The Watcher's camouflage charge is an arc around it (a
+        // stand in for the CamoMeter)
+        void draw_meters(state& r, sys::game_state const& s, float alpha) {
             auto const& w = s.world;
             dcon::player_id p0;
             w.for_each_player([&](dcon::player_id p) {
@@ -2840,45 +2984,94 @@ namespace render {
             });
             if (!p0)
                 return;
+            auto const name = w.player_get_stats(p0).name;
+            bool const watcher = warps::is_watcher(s, p0);
+            auto const room = w.physical_object_get_room_from_object_location(player::body(s, p0));
+            hud::input in;
+            in.karma = s.karma;
+            in.karma_cap = s.karma_cap;
+            in.ripple = watcher && s.ripple_level >= 1.f;
+            in.ripple_level = s.ripple_level;
+            in.food = w.player_get_food(p0);
+            in.quarter_food = w.player_get_quarter_food(p0);
+            in.max_food = player::max_food_pips(name);
+            in.food_to_hibernate = player::hibernate_food_pips(name);
+            in.in_shelter = room && w.room_get_is_shelter(room);
+            in.reveal = r.show_hud || in.in_shelter;
+            // (one HUD, kept across frames)
+            static hud::meter_state meters;
+            hud::advance(meters, in, s.tick);
+
+            bool const atlas = r.game_texture != 0;
+            auto const has = [&](std::string_view e) { return atlas && find_game_frame(r, e) != nullptr; };
+            hud::atlas_has h;
+            h.symbol = has(hud::symbol_element(in));
+            h.food_circles = has("FoodCircleA") && has("FoodCircleB");
+            h.quarter_pips = has("QuarterPips1") && has("QuarterPips2") && has("QuarterPips3");
+            h.reinforced_ring = has("smallKarmaRingReinforced");
+            static std::vector<sprites::draw_cmd> cmds;
+            cmds.clear();
+            hud::build(meters, in, alpha, h, cmds);
+            r.batch.clear();
+            if (atlas)
+                emit_game_cmds(r, cmds);
+            else
+                emit_cmds(r, cmds, [](std::string_view) -> game_frame const* { return nullptr; }, 1.f, 1.f, vec2{0.f, 0.f});
+            if (!r.batch.empty()) {
+                glm::mat4 const futile = glm::ortho(0.f, float(r.width), 0.f, float(r.height));
+                upload(r);
+                draw_flat_range(r, futile, atlas ? r.game_texture : 0, 0, r.batch.size());
+            }
+
+            // the stand ins, in screen pixels (y down)
+            auto const place = hud::karma_symbol_place(meters, alpha);
+            float const fade = mathf::clamp01(place.alpha);
+            float const camo = watcher ? w.player_get_camo_progress(p0) : 0.f;
+            if ((h.symbol || fade <= 0.f) && !(watcher && (fade > 0.f || camo > 0.f)))
+                return;
+            auto const faded = [fade](uint32_t c) { return (c & 0x00FFFFFFu) | (uint32_t(float(c >> 24) * fade + 0.5f) << 24); };
             r.batch.clear();
             painter p{r.batch};
-            vec2 const c{58.f, float(r.height) - 58.f};
-            p.glow(c, 46.f, rgba(0, 0, 0, 150), rgba(0, 0, 0, 0));
-            if (warps::is_watcher(s, p0)) {
+            vec2 const c{place.pos.x, float(r.height) - place.pos.y};
+            float const k = place.scale;
+            if (watcher) {
                 float const level = s.ripple_level;
-                bool const layer = warps::active_ripple_layer(s) == 1;
-                uint32_t const lit = layer ? rgba(255, 214, 120) : rgba(170, 156, 255);
-                uint32_t const dim = rgba(90, 84, 130, 110);
-                for (int i = 0; i < 5; ++i) {
-                    float const rad = 7.f + float(i) * 5.f;
-                    float const fill = mathf::clamp01(level - float(i));
-                    arc(p, c, rad, 2.f, 0.f, 6.2831853f, dim);
-                    if (fill > 0.f)
-                        arc(p, c, rad, 2.f, 0.f, 6.2831853f * fill, lit);
+                if (!h.symbol) {
+                    bool const layer = warps::active_ripple_layer(s) == 1;
+                    uint32_t const lit = faded(layer ? rgba(255, 214, 120) : rgba(170, 156, 255));
+                    uint32_t const dim = faded(rgba(90, 84, 130, 110));
+                    for (int i = 0; i < 5; ++i) {
+                        float const rad = (7.f + float(i) * 5.f) * k;
+                        float const fill = mathf::clamp01(level - float(i));
+                        arc(p, c, rad, 2.f, 0.f, 6.2831853f, dim);
+                        if (fill > 0.f)
+                            arc(p, c, rad, 2.f, 0.f, 6.2831853f * fill, lit);
+                    }
+                    p.circle(c, 3.f * k, level > 0.f ? lit : dim);
                 }
-                p.circle(c, 3.f, level > 0.f ? lit : dim);
                 // camouflage charge still available, and a glow while camouflaged
                 float const left = 1.f - w.player_get_camo_charge(p0) / (level >= 5.f ? 4800.f : level >= 4.f ? 3600.f : level >= 2.f ? 2400.f : 1600.f);
-                arc(p, c, 36.f, 3.f, 0.f, 6.2831853f * mathf::clamp01(left), rgba(220, 220, 240, 170));
-                float const camo = w.player_get_camo_progress(p0);
+                arc(p, c, 36.f * k, 3.f, 0.f, 6.2831853f * mathf::clamp01(left), faded(rgba(220, 220, 240, 170)));
                 if (camo > 0.f)
                     p.glow(c, 44.f, to_rgba(rw::vec3{0.65f, 0.6f, 1.f}, 0.35f * camo), to_rgba(rw::vec3{0.65f, 0.6f, 1.f}, 0.f));
             } else {
                 for (int i = 0; i < 10; ++i) {
                     float const a = float(i) / 10.f * 6.2831853f;
                     vec2 const d{std::sin(a), -std::cos(a)};
-                    uint32_t const col = i <= s.karma ? rgba(240, 236, 220) : i <= s.karma_cap ? rgba(140, 136, 128, 170) : rgba(70, 68, 64, 90);
-                    float const len = i <= s.karma ? 12.f : 8.f;
-                    p.line(c + d * 18.f, c + d * (18.f + len), 3.f, col);
+                    uint32_t const col = faded(i <= s.karma ? rgba(240, 236, 220) : i <= s.karma_cap ? rgba(140, 136, 128, 170) : rgba(70, 68, 64, 90));
+                    float const len = (i <= s.karma ? 12.f : 8.f) * k;
+                    p.line(c + d * 18.f * k, c + d * (18.f * k + len), 3.f, col);
                 }
-                arc(p, c, 14.f, 2.f, 0.f, 6.2831853f, rgba(240, 236, 220, 200));
+                arc(p, c, 14.f * k, 2.f, 0.f, 6.2831853f, faded(rgba(240, 236, 220, 200)));
                 // the level itself: as many dots as karma above the first
                 for (int i = 0; i < s.karma; ++i) {
                     float const a = float(i) / float(std::max(1, s.karma)) * 6.2831853f;
-                    p.circle(c + vec2{std::sin(a), -std::cos(a)} * 7.f, 1.6f, rgba(240, 236, 220));
+                    p.circle(c + vec2{std::sin(a), -std::cos(a)} * 7.f * k, 1.6f, faded(rgba(240, 236, 220)));
                 }
-                p.circle(c, 2.5f, rgba(240, 236, 220));
+                p.circle(c, 2.5f * k, faded(rgba(240, 236, 220)));
             }
+            if (r.batch.empty())
+                return;
             glm::mat4 const proj = glm::ortho(0.f, float(r.width), float(r.height), 0.f);
             upload(r);
             draw_flat_range(r, proj, 0, 0, r.batch.size());
@@ -3275,6 +3468,17 @@ namespace render {
                 if (lantern_mouse_graphics::light_of(s, c, alpha, darkness, l))
                     out.source(l.pos, l.rad, l.alpha * darkness, l.color, 1, false, false);
             });
+            // AnglerGraphics: the lure's LightSource (affectedByPaletteDarkness
+            // 0.5) and its two Water container sprites (FlatLightBehindTerrain,
+            // LightSource) at the bulb
+            rooms::for_each_creature(s, room.id, creature::type::angler, [&](dcon::creature_id c) {
+                angler_graphics::light l;
+                if (!angler_graphics::light_of(s, c, alpha, l))
+                    return;
+                out.source(l.source_pos, l.source_rad, l.source_alpha * mathf::lerp(1.f, darkness, 0.5f), l.color, 1, false, false);
+                out.sprite(l.tip, l.flat_half, 1.f, l.color, true);
+                out.sprite(l.tip, l.glow_half, 1.f, l.color, false);
+            });
             // CentipedeGraphics' shock flash (affectedByPaletteDarkness 0) and
             // the aquapede's Glower (submersible)
             rooms::for_each_creature(s, room.id, creature::type::centipede, [&](dcon::creature_id c) {
@@ -3327,6 +3531,13 @@ namespace render {
                 float counter = 0.f;
                 if (vulture_graphics::laser_light(s, c, alpha, at, counter))
                     out.source(at, counter, darkness, rw::vec3{(200.f - counter) / 200.f, counter / 200.f, 0.1f}, 1, false, false);
+            });
+            // Inspector.myLight, mySuperGlow, headlights
+            rooms::for_each_creature(s, room.id, creature::type::inspector, [&](dcon::creature_id c) {
+                inspector_graphics::light ls[inspector_graphics::max_lights];
+                uint32_t const n = inspector_graphics::lights(s, c, alpha, ls);
+                for (uint32_t i = 0; i < n; ++i)
+                    out.source(ls[i].pos, ls[i].rad, ls[i].alpha * darkness, ls[i].color, 1, ls[i].flat, false);
             });
             // WarpTear (affectedByPaletteDarkness 0.5)
             w.room_for_each_warp_point_location(room.id, [&](dcon::warp_point_location_id l) {
@@ -3607,6 +3818,104 @@ namespace render {
                 u.cam_origin = cams[c];
                 u.later_count = later_cameras(cams, c, u.later);
                 gpu::draw(*r.gpu, gpu::pipeline::sand, &u, sizeof(u), {r.room_texture, r.palette_texarray, tp ? tp->texture : 0u, f.mask}, 0, r.batch.size());
+            }
+        }
+
+        // MudPit lit like the sand (sand.frag's mud mode): the pits' heaving
+        // surface as a front face with a thin top going back, in the region's
+        // mudColor shaded towards the palette's black, under the sun, the
+        // clouds' and sprites' shadows, the fog and the room's LightSources.
+        // Drawn over the sprites (what sank into it is hidden)
+        void draw_mud(state& r, sys::game_state const& s, world::room_view const& room, level_frame const& f, light_list const& lights, float seconds) {
+            auto const& w = s.world;
+            auto const& cams = *f.cams;
+            if (cams.empty())
+                return;
+            constexpr float step = 4.f;
+            constexpr float front_depth = 6.f / 30.f;
+            auto const enc = [](float v) { return uint8_t(mathf::clamp01(v * 0.5f + 0.5f) * 255.f + 0.5f); };
+            r.batch.clear();
+            vec2 lo{std::numeric_limits<float>::max(), std::numeric_limits<float>::max()}, hi{std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+            w.room_for_each_thing_location(room.id, [&](dcon::thing_location_id l) {
+                auto const t = w.thing_location_get_thing(l);
+                if (w.placed_thing_get_kind(t) != world::thing_kind::mud_pit)
+                    return;
+                vec2 const pos = w.placed_thing_get_pos(t);
+                vec2 const size = w.placed_thing_get_handle(t);
+                float const top = pos.y + size.y;
+                float const bottom = pos.y - mathf::max(10.f, w.placed_thing_get_extra(t));
+                float const xa = mathf::min(pos.x, pos.x + size.x), xb = mathf::max(pos.x, pos.x + size.x);
+                auto const surf = [&](float xx) { return top + std::sin(xx * 0.05f + seconds * 0.7f) * 1.5f + std::sin(xx * 0.13f - seconds * 0.4f) * 0.8f; };
+                auto const normal_at = [&](float xx) {
+                    vec2 const n = rw::normalized(vec2{-(surf(xx + 2.f) - surf(xx - 2.f)) / 4.f, 1.f});
+                    return rgba(enc(n.x), enc(n.y), 128, 255);
+                };
+                for (float x = xa; x < xb; x += step) {
+                    float const xe = mathf::min(x + step, xb);
+                    float const ha = surf(x), hb = surf(xe);
+                    uint32_t const na = normal_at(x), nb = normal_at(xe);
+                    // the front face, then a thin top going back
+                    vertex const fa{x, ha, na, 0.f, front_depth}, fb{xe, hb, nb, 0.f, front_depth};
+                    vertex const ba{x, bottom, na, -(ha - bottom), front_depth}, bb{xe, bottom, nb, -(hb - bottom), front_depth};
+                    r.batch.insert(r.batch.end(), {fa, fb, bb, fa, bb, ba});
+                    vertex const ka{x, ha + 5.f, na, 0.3f, front_depth + 0.05f}, kb{xe, hb + 5.f, nb, 0.3f, front_depth + 0.05f};
+                    r.batch.insert(r.batch.end(), {fa, fb, kb, fa, kb, ka});
+                }
+                lo = vec2{mathf::min(lo.x, xa), mathf::min(lo.y, bottom)};
+                hi = vec2{mathf::max(hi.x, xb), mathf::max(hi.y, top + 8.f)};
+            });
+            if (r.batch.empty())
+                return;
+            upload(r);
+            sand_uniforms u{};
+            u.proj = f.proj;
+            u.screen = f.screen;
+            u.view_pos = f.view_pos;
+            u.light_dir = f.light_dir;
+            u.zoom = f.zoom;
+            u.night_time = f.night_time;
+            u.rain = f.rain;
+            u.light = f.light;
+            u.clouds_speed = 1.f;
+            u.index = f.palette;
+            u.terrain_light = w.room_get_terrain_light(room.id);
+            u.terrain_grain = 0.f;
+            u.edge_radius = 6.f;
+            u.sky_fade = 0.f;
+            u.water_level = room.water ? room.float_water_level : -1.0e9f;
+            u.terrain_rows = 0;
+            rw::vec3 mud{0.31f, 0.19f, 0.13f};
+            if (auto const region = w.room_get_region_from_region_membership(room.id)) {
+                rw::vec3 const c = w.region_get_mud_color(region);
+                if (c.x + c.y + c.z > 0.f)
+                    mud = c;
+            }
+            rw::vec3 const black = palette_black(r, s, room.id);
+            u.mud = glm::vec4{mud.x, mud.y, mud.z, 1.f};
+            u.mud_black = glm::vec4{black.x, black.y, black.z, 1.f};
+            // the point lights near the pits (as the sand takes them)
+            for (auto const& l : lights.sprites) {
+                if (u.light_count >= 16)
+                    break;
+                if (l.kind != 0 || l.water || l.env_pos.x < lo.x - l.rad || l.env_pos.x > hi.x + l.rad || l.env_pos.y < lo.y - l.rad || l.env_pos.y > hi.y + l.rad)
+                    continue;
+                rw::vec3 c = l.color_mode == 0 ? rw::vec3{1.f, 1.f, 1.f} : l.color;
+                float const m = mathf::max(c.x, mathf::max(c.y, c.z));
+                if (m <= 0.f)
+                    continue;
+                if (l.color_mode != 2)
+                    c /= m;
+                u.light_color[u.light_count] = glm::vec4{c.x, c.y, c.z, l.alpha};
+                u.light_params[u.light_count] = glm::vec4{l.env_pos.x, l.env_pos.y, l.rad, 0.f};
+                ++u.light_count;
+            }
+            for (size_t c = 0; c < cams.size(); ++c) {
+                if (!camera_touches(cams[c], lo, hi))
+                    continue;
+                u.camera_index = int32_t(c);
+                u.cam_origin = cams[c];
+                u.later_count = later_cameras(cams, c, u.later);
+                gpu::draw(*r.gpu, gpu::pipeline::sand, &u, sizeof(u), {r.room_texture, r.palette_texarray, 0u, f.mask}, 0, r.batch.size());
             }
         }
 
@@ -4188,8 +4497,12 @@ namespace render {
         // most of the rot sits over the level's foreground (vanilla's Water container)
         draw_flat([&] { build_rot(r, s, room, alpha, true); });
 
-        // mud over whatever sank into it
-        draw_flat([&] { build_mud(r, s, room, seconds); });
+        // mud over whatever sank into it: lit like the sand in a textured
+        // room (draw_mud), flat browns without the level images
+        if (textured_room)
+            draw_mud(r, s, room, lf, lights, seconds);
+        else
+            draw_flat([&] { build_mud(r, s, room, seconds); });
         // drops, sparks, dust and bubbles, then shortcuts over the level, then
         // the water over everything below its surface
         draw_flat([&] {
@@ -4206,8 +4519,8 @@ namespace render {
         draw_flat([&] { build_ripple_rings(r, s, room); });
         draw_warp_screen(r, s, room, alpha, cam, proj, seconds);
 
-        if (r.show_hud)
-            draw_meters(r, s);
+        // the HUD's meters (shown with the HUD toggle, in shelters and when the food changes)
+        draw_meters(r, s, alpha);
         if (r.show_hud && r.font_texture != 0 && !hud.empty())
             draw_hud(r, hud);
     }

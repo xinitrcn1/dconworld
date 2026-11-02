@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "terrain.hpp"
+#include "ve_utils.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "rooms.hpp"
@@ -221,9 +222,16 @@ namespace terrain {
                 // the wind drifts the dunes along, smoothing them towards its own shape
                 s.phase += 0.0004f;
                 constexpr float tau = 6.2831853f;
+                // (the wind's shape for every column at once: ve::sin)
+                static thread_local std::vector<float> wave;
+                wave.resize(s.h.size());
                 for (size_t i = 0; i < s.h.size(); ++i) {
                     float const x = s.x0 + float(i) * s.spacing;
-                    float const target = s.mean + s.amplitude * std::sin(tau * x / dune_length + s.phase);
+                    wave[i] = tau * x / dune_length + s.phase;
+                }
+                ve::transform(wave.data(), wave.size(), [](ve::fp_vector v) { return ve::sin(v); });
+                for (size_t i = 0; i < s.h.size(); ++i) {
+                    float const target = s.mean + s.amplitude * wave[i];
                     s.h[i] += (target - s.h[i]) * storm_rate;
                 }
                 // and blows sand through the air

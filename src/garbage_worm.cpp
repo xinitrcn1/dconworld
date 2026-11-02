@@ -61,11 +61,11 @@ namespace garbage_worm {
         std::vector<ivec2> const& garbage_holes(room_view const& room) {
             auto& out = holes_buffer();
             out.clear();
-            if (!room.flags)
+            if (!room.tiles)
                 return out;
             for (int32_t x = 0; x < room.width; ++x)
                 for (int32_t y = room.height - 1; y >= 0; --y)
-                    if (room.flags[size_t(y) * size_t(room.width) + size_t(x)] & world::tile_garbage_hole)
+                    if (room.flags_at(x, y) & world::tile_garbage_hole)
                         out.push_back(ivec2{x, y});
             return out;
         }
@@ -1074,9 +1074,9 @@ namespace garbage_worm {
     }
 
     bool spawn_spot(room_view const& room, ivec2 tile) {
-        if (!room.inside(tile.x, tile.y) || !room.flags)
+        if (!room.inside(tile.x, tile.y) || !room.tiles)
             return false;
-        return (room.flags[size_t(tile.y) * size_t(room.width) + size_t(tile.x)] & world::tile_garbage_hole) != 0;
+        return (room.flags_at(tile.x, tile.y) & world::tile_garbage_hole) != 0;
     }
 
     bool can_be_hit(sys::game_state const& state, dcon::creature_id c) noexcept { return pl(state, c).can_be_hit != 0; }

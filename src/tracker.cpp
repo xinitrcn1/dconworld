@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "tracker.hpp"
+#include "ve_utils.hpp"
 #include "pathing.hpp"
 #include "rooms.hpp"
 
@@ -112,9 +113,11 @@ namespace tracker {
             }
         };
 
-        // ArtificialIntelligence.TrackerToDiscardDeadCreature
-        bool discard_dead(ctx const& x, tracked const& r) {
-            return x.p.discard_dead_always || r.rel.type != rel::eats;
+        // ArtificialIntelligence.TrackerToDiscardDeadCreature (not vanilla:
+        // no kind discards dead prey, CentipedeAI's always included, see
+        // DIVERGENCES: corpses are eaten)
+        bool discard_dead(ctx const&, tracked const& r) {
+            return r.rel.type != rel::eats;
         }
 
         // TrackedPrey.Reachable
@@ -159,6 +162,117 @@ namespace tracker {
         // ThreatCreature.CurrentThreat
         float current_threat(tracked const& r, int32_t see_around_corners) {
             return mathf::inverse_lerp(0.05f, 0.5f, mathf::pow(chance_of_finding(r, see_around_corners), 0.75f) * r.rel.intensity);
+        }
+
+        // ---- the threat passes in ve:: lanes (ve_utils.hpp): the same sums in
+        // the same order, ve::exp and ve::pow for std::'s (within an ulp)
+
+        // clamp01 as mathf's (NaN stays NaN)
+        ve::fp_vector clamp01(ve::fp_vector v) noexcept {
+            ve::fp_vector const zero{0.f}, one{1.f};
+            return ve::select(v < zero, zero, ve::select(v > one, one, v));
+        }
+
+        // current_threat of each of the reps [0, n) (n <= max_tracked)
+        void current_threats(tracked const* reps, uint32_t n, int32_t see_around_corners, float* out) noexcept {
+            constexpr uint32_t lanes = uint32_t(ve::vector_size);
+            alignas(64) float ticks[lanes], visual[lanes], intensity[lanes], res[lanes];
+            for (uint32_t base = 0; base < n; base += lanes) {
+                for (uint32_t k = 0; k < lanes; ++k) {
+                    tracked const& r = reps[std::min(base + k, n - 1)];
+                    // TicksSinceSeen counts from seeAroundCorners on
+                    ticks[k] = float(r.ticks_since_seen < see_around_corners ? 0 : r.ticks_since_seen - see_around_corners);
+                    visual[k] = r.visual ? 1.f : 0.f;
+                    intensity[k] = r.rel.intensity;
+                }
+                using tags = ve::contiguous_tags<int32_t>;
+                ve::fp_vector const num = (ve::fp_vector{10.f} + ve::load(tags{0}, ticks)) / ve::fp_vector{4.f};
+                // ChanceOfFindingCreature
+                ve::fp_vector const near =
+                    clamp01(ve::fp_vector{1.f} / -(ve::fp_vector{1.f} + ve::exp(-(num / ve::fp_vector{12.f} - ve::fp_vector{5.f}))) + ve::fp_vector{1.007f});
+                ve::fp_vector const far = ve::fp_vector{1.f} / (num - ve::fp_vector{7.f}) * ve::fp_vector{30.f};
+                ve::fp_vector chance = ve::select(num < ve::fp_vector{45.f}, near, far);
+                chance = ve::select(ve::load(tags{0}, visual) != ve::fp_vector{0.f}, ve::fp_vector{1.f}, chance);
+                ve::fp_vector const v = ve::pow(chance, ve::fp_vector{0.75f}) * ve::load(tags{0}, intensity);
+                ve::store(tags{0}, res, clamp01((v - ve::fp_vector{0.05f}) / ve::fp_vector{0.5f - 0.05f}));
+                for (uint32_t k = 0; k < lanes && base + k < n; ++k)
+                    out[base + k] = res[k];
+            }
+        }
+
+        // the ThreatPoints at the threat reps' best guesses, with their
+        // severity: pow(CurrentThreat, 1.5) * 10
+        struct threat_points {
+            uint32_t n = 0;
+            float x[creature::max_tracked], y[creature::max_tracked], w[creature::max_tracked];
+        };
+        threat_points threat_points_of(tracker_state const& s, int32_t see_around_corners) noexcept {
+            threat_points tp;
+            float t[creature::max_tracked];
+            if (s.count > 0)
+                current_threats(s.reps, s.count, see_around_corners, t);
+            for (uint32_t i = 0; i < s.count; ++i) {
+                if (s.reps[i].module != track_module::threat)
+                    continue;
+                ivec2 const g = best_guess(s.reps[i]);
+                tp.x[tp.n] = float(g.x);
+                tp.y[tp.n] = float(g.y);
+                tp.w[tp.n] = t[i];
+                ++tp.n;
+            }
+            // (one ve::pow for them all)
+            constexpr uint32_t lanes = uint32_t(ve::vector_size);
+            alignas(64) float buf[lanes];
+            using tags = ve::contiguous_tags<int32_t>;
+            for (uint32_t base = 0; base < tp.n; base += lanes) {
+                for (uint32_t k = 0; k < lanes; ++k)
+                    buf[k] = tp.w[std::min(base + k, tp.n - 1)];
+                ve::store(tags{0}, buf, ve::pow(ve::load(tags{0}, buf), ve::fp_vector{1.5f}) * ve::fp_vector{10.f});
+                for (uint32_t k = 0; k < lanes && base + k < tp.n; ++k)
+                    tp.w[base + k] = buf[k];
+            }
+            return tp;
+        }
+
+        // ThreatOfTile for the tiles [0, n), a lane a tile: each the points'
+        // w / max(1, pow(distance, 1.25)) summed in their order
+        void threat_of_tiles(threat_points const& tp, ivec2 const* tiles, uint32_t n, float* out) noexcept {
+            constexpr uint32_t lanes = uint32_t(ve::vector_size);
+            alignas(64) float xs[lanes], ys[lanes], res[lanes];
+            using tags = ve::contiguous_tags<int32_t>;
+            for (uint32_t base = 0; base < n; base += lanes) {
+                for (uint32_t k = 0; k < lanes; ++k) {
+                    ivec2 const t = tiles[std::min(base + k, n - 1)];
+                    xs[k] = float(t.x);
+                    ys[k] = float(t.y);
+                }
+                ve::fp_vector const x = ve::load(tags{0}, xs), y = ve::load(tags{0}, ys);
+                ve::fp_vector acc{0.f};
+                for (uint32_t i = 0; i < tp.n; ++i) {
+                    ve::fp_vector const dx = x - ve::fp_vector{tp.x[i]}, dy = y - ve::fp_vector{tp.y[i]};
+                    ve::fp_vector const d = ve::pow(ve::sqrt(dx * dx + dy * dy), ve::fp_vector{1.25f});
+                    acc = acc + ve::fp_vector{tp.w[i]} / ve::max(ve::fp_vector{1.f}, d);
+                }
+                ve::store(tags{0}, res, acc);
+                for (uint32_t k = 0; k < lanes && base + k < n; ++k)
+                    out[base + k] = res[k];
+            }
+        }
+        float threat_of_tile(threat_points const& tp, ivec2 tile) noexcept {
+            float v;
+            threat_of_tiles(tp, &tile, 1, &v);
+            return v;
+        }
+        float threat_of_area(threat_points const& tp, ivec2 tile) noexcept {
+            ivec2 tiles[9];
+            float v[9];
+            for (size_t i = 0; i < 9; ++i)
+                tiles[i] = tile + custom::eight_directions_and_zero[i];
+            threat_of_tiles(tp, tiles, 9, v);
+            float num = 0.f;
+            for (float const x : v)
+                num += x;
+            return num / 9.f;
         }
 
         // a representation sorted into a module (SortCreatureIntoModule),
@@ -221,7 +335,7 @@ namespace tracker {
         tracked* notice(ctx& x, dcon::creature_id t) {
             auto& w = x.state.world;
             relationship const st = creature::static_relationship(x.state, x.c, t);
-            if (creature::dead(x.state, t) && (x.p.discard_dead_always || st.type != rel::eats))
+            if (creature::dead(x.state, t) && st.type != rel::eats)
                 return nullptr;
             bool const holding = creature::holds(w, x.c, t);
             tracked r;
@@ -399,7 +513,7 @@ namespace tracker {
         // ThreatTracker.Update
         void threat_update(ctx& x) {
             auto& s = x.s;
-            s.current_threat = threat_of_area(s, x.at, x.p.see_around_corners);
+            s.current_threat = threat_of_area(threat_points_of(s, x.p.see_around_corners), x.at);
             if (s.current_threat <= 0.f)
                 ++s.threat_reset_counter;
             else
@@ -412,12 +526,15 @@ namespace tracker {
             if (s.threat_reset_counter < 200) {
                 float num = 0.f;
                 s.threat = dcon::creature_id{};
+                float threats[creature::max_tracked];
+                if (s.count > 0)
+                    current_threats(s.reps, s.count, x.p.see_around_corners, threats);
                 for (int32_t i = int32_t(s.count) - 1; i >= 0; --i) {
                     auto& r = s.reps[i];
                     if (r.module != track_module::threat)
                         continue;
                     r.forget_counter = 0;
-                    if (float const t = current_threat(r, x.p.see_around_corners); t > num) {
+                    if (float const t = threats[i]; t > num) {
                         num = t;
                         s.threat = r.who;
                     }
@@ -542,34 +659,27 @@ namespace tracker {
         return mathf::clamp(mathf::lerp(-0.01f, 1.01f, s.current_threat), 0.f, 1.f);
     }
 
+    // the ThreatPoints at the best guesses, with the CurrentThreat as their
+    // severity (the threat creature's accessibility and the tile's
+    // visibility aren't mapped)
     float threat_of_tile(tracker_state const& s, ivec2 tile, int32_t see_around_corners) noexcept {
-        float num = 0.f;
-        for (uint32_t i = 0; i < s.count; ++i) {
-            auto const& r = s.reps[i];
-            if (r.module != track_module::threat)
-                continue;
-            // the ThreatPoint at the best guess, with the CurrentThreat as
-            // its severity (the threat creature's accessibility and the
-            // tile's visibility aren't mapped)
-            float d = rw::magnitude(rw::to_vec2(tile - best_guess(r)));
-            d = mathf::pow(d, 1.25f);
-            num += mathf::pow(current_threat(r, see_around_corners), 1.5f) * 10.f / mathf::max(1.f, d);
-        }
-        return num;
+        return threat_of_tile(threat_points_of(s, see_around_corners), tile);
     }
 
     float threat_of_area(tracker_state const& s, ivec2 tile, int32_t see_around_corners) noexcept {
-        float num = 0.f;
-        for (auto const d : custom::eight_directions_and_zero)
-            num += threat_of_tile(s, tile + d, see_around_corners);
-        return num / 9.f;
+        return threat_of_area(threat_points_of(s, see_around_corners), tile);
     }
 
     ivec2 flee_to(sys::game_state& state, dcon::creature_id c, room_view const& room, ivec2 at, int32_t reevaluations, int32_t max_distance, params const& p,
         hooks const& h) {
         auto& s = of(state, c);
         auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
-        int32_t const sac = p.see_around_corners;
+        // the threat points once (the reps don't change in here), every
+        // tile's threat from them in ve:: lanes
+        threat_points const tp = threat_points_of(s, p.see_around_corners);
+        float const here_area = threat_of_area(tp, at);
+        static thread_local std::vector<ivec2> line;
+        static thread_local std::vector<float> line_threat;
         // EvaluateFlightDestThreat over the straight line there (vanilla
         // takes it when every tile on it is accessible, a QuickPath else)
         auto const evaluate = [&](ivec2 dest) {
@@ -578,17 +688,22 @@ namespace tracker {
             if (h.reach && !h.reach(h.user, dest))
                 return std::numeric_limits<float>::max();
             int32_t const n = std::max(std::abs(dest.x - at.x), std::abs(dest.y - at.y)) + 1;
-            float num = 0.f;
+            line.resize(size_t(n));
+            line_threat.resize(size_t(n));
             for (int32_t i = 0; i < n; ++i) {
                 float const f = n > 1 ? float(i) / float(n - 1) : 0.f;
-                ivec2 const t{at.x + int32_t(std::lround(float(dest.x - at.x) * f)), at.y + int32_t(std::lround(float(dest.y - at.y) * f))};
-                num += threat_of_tile(s, t, sac);
+                line[size_t(i)] = ivec2{at.x + int32_t(std::lround(float(dest.x - at.x) * f)), at.y + int32_t(std::lround(float(dest.y - at.y) * f))};
             }
-            if (n < 2 && threat_of_tile(s, dest, sac) < 0.5f)
+            threat_of_tiles(tp, line.data(), uint32_t(n), line_threat.data());
+            float num = 0.f;
+            for (int32_t i = 0; i < n; ++i)
+                num += line_threat[size_t(i)];
+            if (n < 2 && threat_of_tile(tp, dest) < 0.5f)
                 num += 100.f;
-            if (threat_of_area(s, dest, sac) > threat_of_area(s, at, sac))
+            float const dest_area = threat_of_area(tp, dest);
+            if (dest_area > here_area)
                 num += 1000.f;
-            return num / float(n) + threat_of_area(s, dest, sac);
+            return num / float(n) + dest_area;
         };
         ivec2 test = s.flee_dest;
         float best = evaluate(test);

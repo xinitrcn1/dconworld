@@ -56,6 +56,11 @@ namespace pathing {
     // The field to `goal`, built if no fresh one exists. An inaccessible goal
     // (a slugcat in mid air) is approached through the accessible tiles near it
     field_id field_to(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement const& m);
+    // the travel cost from `from` to `goal` over the room's tiles as they are
+    // now, built from scratch and kept nowhere: for trying a change to the
+    // tiles out (a spear's beam) without bumping the room's geometry_version,
+    // which would throw away every cached field and map of the room
+    uint16_t trial_distance(sys::game_state& state, dcon::room_id room, rw::ivec2 goal, movement const& m, rw::ivec2 from);
     // forgets the room's fields nobody asked for in a while (before the
     // room's update: field ids stay valid through it)
     void trim(sys::game_state& state, dcon::room_id room);

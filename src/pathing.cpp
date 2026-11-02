@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "pathing.hpp"
+#include "curved_slope.hpp"
 
 namespace pathing {
     using rw::ivec2;
@@ -1013,6 +1014,15 @@ namespace pathing {
     }
 
     access tile_access(room_view const& room, ivec2 t) noexcept {
+        // AImapper with a TerrainManager: tiles the curved slopes cover are
+        // solid, the open tile over one a (curved) floor
+        if (room.s != nullptr) {
+            switch (curved_slope::tile_access(*room.s, room.id, t.x, t.y, room.get_tile(t).t == terrain::solid)) {
+            case curved_slope::tile_override::solid: return access::solid;
+            case curved_slope::tile_override::curved_floor: return access::floor; // AItile.CurvedFloor
+            case curved_slope::tile_override::none: break;
+            }
+        }
         auto const at = [&](int32_t dx, int32_t dy) { return room.get_tile(t + ivec2{dx, dy}); };
         auto const sol = [&](int32_t dx, int32_t dy) { return at(dx, dy).t == terrain::solid; };
         auto const tile = at(0, 0);
@@ -1110,6 +1120,30 @@ namespace pathing {
         pf.geometry_version = version;
         pf.last_used = state.tick;
         return make_id(room, f);
+    }
+
+    uint16_t trial_distance(sys::game_state& state, dcon::room_id room, ivec2 goal, movement const& m, ivec2 from) {
+        auto const view = world::get_room_view(state, room);
+        if (!view.inside(from.x, from.y))
+            return unreachable;
+        static thread_local std::vector<uint8_t> acc;
+        static thread_local std::vector<jump> jumps;
+        static thread_local std::vector<uint16_t> dist;
+        acc.resize(size_t(view.width) * size_t(view.height));
+        for (int32_t y = 0; y < view.height; ++y)
+            for (int32_t x = 0; x < view.width; ++x)
+                acc[size_t(y) * size_t(view.width) + size_t(x)] = uint8_t(tile_access(view, ivec2{x, y}));
+        // (the terrain proximity follows the solid tiles only: the cached map holds)
+        auto const* proximity = m.open_air != 0 || m.mid_air != 0 ? &proximity_map(state, room) : nullptr;
+        if (m.slugcat != 0) {
+            find_jumps(state, view, acc, jumps);
+            build_slugcat(view, acc, jumps, goal, dist, m.slugcat == artificer.slugcat);
+        } else {
+            build(view, acc, m, goal, dist, proximity);
+        }
+        build_count.fetch_add(1, std::memory_order_relaxed);
+        size_t const i = size_t(from.y) * size_t(view.width) + size_t(from.x);
+        return i < dist.size() ? dist[i] : unreachable;
     }
 
     void trim(sys::game_state& state, dcon::room_id room) {

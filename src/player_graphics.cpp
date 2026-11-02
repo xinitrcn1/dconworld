@@ -16,6 +16,8 @@
 #include "player.hpp"
 #include "rot.hpp"
 #include "tube_worm.hpp"
+#include "batfly.hpp"
+#include "frog.hpp"
 #include "deer.hpp"
 
 namespace player_graphics {
@@ -371,7 +373,8 @@ namespace player_graphics {
                 h.quickness = 1.f;
                 flag = false;
             }
-            if (flag && (items::held(state, p, uint32_t(limb)) || tube_worm::held_in_hand(state, p, uint32_t(limb)))) {
+            if (flag && (items::held(state, p, uint32_t(limb)) || tube_worm::held_in_hand(state, p, uint32_t(limb))
+                         || batfly::held_in_hand(state, p, uint32_t(limb)) || frog::held_in_hand(state, p, uint32_t(limb)))) {
                 // holding something (a grapple worm too): out to the side,
                 // spears swinging along while walking
                 h.mode = limb_mode::hunt_relative_position;
@@ -706,19 +709,12 @@ namespace player_graphics {
                 width = r;
                 base = sp;
             }
-            static constexpr int tris[13][3] = {
-                {0, 1, 2}, {1, 2, 3}, {4, 5, 6}, {5, 6, 7}, {8, 9, 10}, {9, 10, 11}, {12, 13, 14},
-                {2, 3, 4}, {3, 4, 5}, {6, 7, 8}, {7, 8, 9}, {10, 11, 12}, {11, 12, 13},
-            };
-            for (auto const& t : tris) {
-                draw_cmd c;
-                c.is_triangle = true;
-                c.tri[0] = verts[t[0]];
-                c.tri[1] = verts[t[1]];
-                c.tri[2] = verts[t[2]];
-                c.color = body_color;
-                out.push_back(c);
-            }
+            // the mesh's triangles (k, k + 1, k + 2), paired into quads: (2i,
+            // 2i + 1, 2i + 2) and (2i + 1, 2i + 2, 2i + 3) are quad (2i + 1,
+            // 2i + 3, 2i + 2, 2i)'s two; the last one alone
+            for (int i = 0; i < 6; ++i)
+                sprites::add_flat_quad(out, {verts[2 * i + 1], verts[2 * i + 3], verts[2 * i + 2], verts[2 * i]}, body_color);
+            sprites::add_flat_quad(out, {verts[12], verts[13], verts[14], verts[14]}, body_color);
         }
 
         // head direction picks one of the 18 rotated head elements
@@ -910,15 +906,9 @@ namespace player_graphics {
                         vec2 side = custom::perpendicular_vector(sd.dir);
                         if (side.y > 0.35f)
                             side = -side;
-                        draw_cmd c;
-                        c.is_triangle = true;
                         vec2 const tip = at + side * (prog * 0.5f * 44.f);
                         vec2 const n = custom::perpendicular_vector(side) * 1.f;
-                        c.tri[0] = at + n;
-                        c.tri[1] = at - n;
-                        c.tri[2] = tip;
-                        c.color = rw::vec3{1.f, 1.f, 1.f};
-                        out.push_back(c);
+                        sprites::add_flat_quad(out, {at + n, at - n, tip, tip}, rw::vec3{1.f, 1.f, 1.f});
                     }
                 }
             }
@@ -959,17 +949,9 @@ namespace player_graphics {
                     vec2 const t0 = b0 + up * len;
                     vec2 const m0 = b0 + up * (len * 0.45f) + across * (half * (sp > 0.f ? 1.f : -1.f));
                     vec2 const m1 = b0 + up * (len * 0.45f) - across * (half * 0.4f * (sp > 0.f ? 1.f : -1.f));
-                    for (auto const& tri : {std::array<vec2, 3>{b0, m0, t0}, std::array<vec2, 3>{b0, t0, m1}}) {
-                        draw_cmd c;
-                        c.is_triangle = true;
-                        c.vertex_colors = true;
-                        for (int k = 0; k < 3; ++k) {
-                            c.tri[k] = tri[size_t(k)];
-                            float const t = mathf::clamp01(rw::dot(tri[size_t(k)] - b0, up) / mathf::max(len, 0.01f));
-                            c.vcol[k] = base + (tip - base) * t;
-                        }
-                        out.push_back(c);
-                    }
+                    // its two triangles (b0 m0 t0, b0 t0 m1) as one quad
+                    auto const col = [&](vec2 q) { return base + (tip - base) * mathf::clamp01(rw::dot(q - b0, up) / mathf::max(len, 0.01f)); };
+                    sprites::add_flat_quad(out, {b0, m0, t0, m1}, {col(b0), col(m0), col(t0), col(m1)});
                 }
             }
             // the halo: three rings (10, 25, 50px) around the head, the middle one glowing
@@ -978,39 +960,16 @@ namespace player_graphics {
             float n12 = std::sin(t * 0.1f * 6.2831f + 1.7f) * 0.8f;
             n12 = mathf::pow(std::fabs(n12), 0.75f) * mathf::sign(n12);
             float const strength = 0.55f * g.halo_flux;
-            vec2 const hp = lerp_part(g.head);
-            rw::vec3 const sat{1.f, 0.73f, 0.368f};
-            constexpr int divs = 64;
-            for (int k = 0; k < divs; ++k) {
-                auto const ring = [&](int kk, float rad) {
-                    float const a = float(kk) / float(divs) * 6.2831855f;
-                    return hp + vec2{std::cos(-a), std::sin(-a)} * rad;
-                };
-                // WeaverGlow's banding: eight soft lobes around the ring
-                auto const band = [&](int kk) {
-                    float const u = float(kk % divs) / float(divs) * 8.f;
-                    float const pp = u - 2.f * std::floor(u / 2.f);
-                    float const ping = pp > 1.f ? 2.f - pp : pp;
-                    return mathf::clamp01(0.55f + mathf::pow(ping, 2.f + n12) * (0.45f + n11 * 0.2f));
-                };
-                for (int layer = 0; layer < 2; ++layer) {
-                    float const r0 = layer == 0 ? 10.f : 25.f, r1 = layer == 0 ? 25.f : 50.f;
-                    float const a0 = layer == 0 ? 0.f : 1.f, a1 = layer == 0 ? 1.f : 0.f;
-                    vec2 const p00 = ring(k, r0), p01 = ring(k, r1), p10 = ring(k + 1, r0), p11 = ring(k + 1, r1);
-                    float const s0 = band(k) * strength, s1 = band(k + 1) * strength;
-                    rw::vec4 const c00{sat.x, sat.y, sat.z, a0 * s0}, c01{sat.x, sat.y, sat.z, a1 * s0};
-                    rw::vec4 const c10{sat.x, sat.y, sat.z, a0 * s1}, c11{sat.x, sat.y, sat.z, a1 * s1};
-                    draw_cmd c;
-                    c.is_triangle = true;
-                    c.vertex_colors = true;
-                    c.tri[0] = p00; c.tri[1] = p01; c.tri[2] = p10;
-                    c.vcol[0] = c00; c.vcol[1] = c01; c.vcol[2] = c10;
-                    out.push_back(c);
-                    c.tri[0] = p10; c.tri[1] = p01; c.tri[2] = p11;
-                    c.vcol[0] = c10; c.vcol[1] = c01; c.vcol[2] = c11;
-                    out.push_back(c);
-                }
-            }
+            // one command: the renderer's sprite pipeline makes the glow per
+            // pixel (it was a 64 sided ring of 256 triangles)
+            draw_cmd c;
+            c.is_halo = true;
+            c.spr.pos = lerp_part(g.head);
+            c.color = rw::vec3{1.f, 0.73f, 0.368f};
+            c.halo[0] = strength;
+            c.halo[1] = n11;
+            c.halo[2] = n12;
+            out.push_back(c);
         }
     }
 }

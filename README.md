@@ -336,7 +336,7 @@ CREATURES (and the CREATURES lines of every root's
 adds to the vanilla regions) are read like `WorldLoader`: den spawns with
 their counts and spawn data, lineages (a fresh save's first step, NONE
 spawning nothing), `(White,Yellow)` and `(X-...)` campaign filters for
-`story_slugcat`, OFFSCREEN (nothing ported lives there). At world load every
+`story_slugcat`, OFFSCREEN (vultures, miros birds and scavengers live in the offscreen den, src/offscreen.*; sky whales above their region). At world load every
 spawn of a ported kind is made in its den with an EntityID-like number as its
 seed (`{Seed:N}` instead when given) and out in 100 to 1000 ticks. The type
 names map to the ported kinds (the lizard breeds, the centipede and leech
@@ -462,6 +462,17 @@ come.
 | `src/daddy_tentacle.cpp` | `Tentacle`/`DaddyTentacle`: tile segments, grab paths (`FindTentaclePath`), pulling, growing, chunks on `Rope`s, climbing, hunting, grabbing, examining noises |
 | `src/daddy_graphics.*` | `DaddyGraphics`: leg graphics (`RopeGraphic`), dead legs, danglers, bumps, the eyes, the Hunter's dummy, `DrawSprites` with the game's elements |
 | `src/rot.*` | `DaddyCorruption`: rot bulbs, little legs, tendrils, climbable rot vines (`Rope`), eating creatures; `ClimbableVinesSystem` |
+| `src/angler.*` | the Watcher's `Angler`: the lure in the dark water, stalking, the jaws |
+| `src/spider.*` | coalescipedes (`Spider`): crawling away from the light, hunting chains, swarming prey |
+| `src/big_spider.*`, `src/dart_maggot.*` | `BigSpider`, `SpitterSpider`, `MotherSpider` (her young); the spitter's `DartMaggot` darts |
+| `src/stowaway.*` | Downpour's `StowawayBug`: hanging from the ceiling, three stinging heads, feelers, swallowing |
+| `src/drill_crab.*` | the Watcher's `DrillCrab` and `TowerCrab`: legs, hiding in the shell, the drill |
+| `src/batfly.*` | batflies (`Fly`, `FliesRoomAI`, `FliesWorldAI`): swarm rooms, hives, flocks, migration; caught and eaten by the slugcat |
+| `src/frog.*` | the Watcher's `Frog`: hopping, latching on and draining food, blood banks |
+| `src/moth.*` | the Watcher's `BigMoth` and `SmallMoth`: flying, legs, the drinking tongue |
+| `src/oracle.*` | the iterators (`Oracle`: Five Pebbles, Looks to the Moon, Downpour's DM, CL and RM ones) in their chambers: body, arm, idle/meditating/sitting movement and `OracleGraphics`; no dialogue |
+| `src/inspector.*` | Downpour's `Inspector`: flying, three heads that grab and fling |
+| `src/big_eel.*` | leviathans (`BigEel`): jaws, swallowing, living at sea (like the sky whales) and swimming into rooms with sea exits |
 | `src/pathing.*` | on demand distance fields, cached per room |
 | `src/render.*` | renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/gpu.*` | the Vulkan 1.3 layer under it: textures, the pipelines of `src/shaders/`, a frame drawn offscreen (read back, copied for the effects, blitted to the swapchain) |

@@ -164,6 +164,19 @@ namespace sound {
             "Tube_Worm_Detach_Tongue_Terrain",
             "Tube_Worm_Detatch_Tongue_Creature",
             "Tube_Worm_Inch_Along_Tongue_LOOP",
+            "Bat_Detatch_From_Chain",
+            "Bat_Startled",
+            "Bat_Attatch_To_Chain",
+            "Bat_Dive_Into_Grass",
+            "Bat_Afraid_Flying_Sounds",
+            "Bat_Idle_Flying_Sounds",
+            "Fly_Wing_Flap",
+            "Bat_Emerge_From_Grass",
+            "Fly_Caught",
+            "Fly_Caught_Dead",
+            "Slugcat_Bite_Fly",
+            "Slugcat_Final_Bite_Fly",
+            "Bat_Hover_Fly_LOOP",
         };
         static_assert(sizeof(names) / sizeof(names[0]) == size_t(sound_id::count));
         return id < sound_id::count ? names[size_t(id)] : "?";

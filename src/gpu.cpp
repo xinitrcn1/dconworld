@@ -27,6 +27,8 @@
 #include "shaders/circle_frag.h"
 #include "shaders/circle_vert.h"
 #include "shaders/rope_frag.h"
+#include "shaders/sprite_vert.h"
+#include "shaders/sprite_frag.h"
 #include "shaders/rope_vert.h"
 #include "shaders/room_frag.h"
 #include "shaders/room_vert.h"
@@ -494,6 +496,7 @@ namespace gpu {
                 {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{sand_frag_spv, sand_frag_spv_size}},
                 {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{sandstorm_frag_spv, sandstorm_frag_spv_size}},
                 {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{spores_frag_spv, spores_frag_spv_size}},
+                {spirv{sprite_vert_spv, sprite_vert_spv_size}, spirv{sprite_frag_spv, sprite_frag_spv_size}},
             }};
             for (size_t i = 0; i < sources.size(); ++i) {
                 VkShaderModule const vs = make_module(c, sources[i][0]);
@@ -510,7 +513,7 @@ namespace gpu {
                 pi.pNext = &ri;
                 pi.stageCount = 2;
                 pi.pStages = stages;
-                bool const pulled = i == size_t(pipeline::rope) || i == size_t(pipeline::circle);
+                bool const pulled = i == size_t(pipeline::rope) || i == size_t(pipeline::circle) || i == size_t(pipeline::sprite);
                 pi.pVertexInputState = pulled ? &no_input : &vi;
                 pi.pInputAssemblyState = &ia;
                 pi.pViewportState = &vp;

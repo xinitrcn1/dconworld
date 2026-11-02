@@ -6,6 +6,9 @@
 #include <tbb/parallel_for.h>
 
 #include "simulation.hpp"
+#include "gravity.hpp"
+#include "batfly.hpp"
+#include "oracle.hpp"
 #include "creature.hpp"
 #include "dens.hpp"
 #include "migrate.hpp"
@@ -109,7 +112,9 @@ namespace simulation {
             items::spawn_room_items(state, r);
             rot::spawn_room(state, r);
             worm_grass::spawn_room(state, r);
+            batfly::spawn_room(state, r);
             warps::spawn_room(state, r);
+            oracle::spawn_room(state, r);
             state.runtime(r).populated = true;
         }
         // ...the sand height maps only touch their own room
@@ -132,6 +137,10 @@ namespace simulation {
             auto const r = spawns::spawn_world(state);
             if (game_world)
                 reports::add_log(spawns::to_string(r));
+            // FliesWorldAI: the swarm rooms' batflies
+            uint32_t const bats = batfly::spawn_world(state);
+            if (game_world)
+                reports::add_log(std::to_string(bats) + " batflies in the swarm rooms");
             // WorldLoader.GeneratePopulation's overseers and the player guide
             uint32_t const overseers = overseer::spawn_world(state);
             if (game_world)
@@ -247,6 +256,8 @@ namespace simulation {
             piggyback::update_room(state, view);
             // the vessels in the room's pipes and the creatures in its dens
             dens::update_room(state, view);
+            // FliesRoomAI: hive flies emerge (deferred)
+            batfly::update_room(state, view);
             creature::update_room(state, view);
             outposts::update_room(state, view);
             items::update_room(state, view);
@@ -273,6 +284,9 @@ namespace simulation {
         populate(state);
         // the loops are kept up tick by tick: this tick's start empty
         state.loops.clear();
+        // every room's gravity for the tick (AntiGravity, the regions'
+        // broken anti gravity cycles), before anything reads it
+        gravity::update_world(state);
         // a pipeline stage (docs/PIPELINE.md): every region's rain cycle (the
         // den creatures' spawn counters), the NPC slugcats' packs (the
         // slugcats' creatures) and the rot bulbs' eyes (their light and
@@ -368,6 +382,9 @@ namespace simulation {
                 f(state);
             rt.deferred.clear();
         }
+        // FliesWorldAI (migration, swarm behaviours, restocking): serially,
+        // it creates creatures
+        batfly::update_world(state);
         for (auto& rt : state.rooms) {
             for (auto const& s : rt.sounds)
                 if (state.sounds.size() < 256)

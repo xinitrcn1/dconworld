@@ -84,6 +84,16 @@ TEMPLATES = [
     [("snail", "Snail")],
     [("sky_whale", "SkyWhale")],
     [("yeek", "Yeek")],
+    [("rot_loach", "RotLoach"), ("angler", "Angler")],
+    [("spider", "Spider")],
+    [("big_spider", "BigSpider"), ("spitter_spider", "SpitterSpider"), ("mother_spider", "MotherSpider")],
+    [("stowaway_bug", "StowawayBug")],
+    [("drill_crab", "DrillCrab"), ("tower_crab", "TowerCrab")],
+    [("batfly", "Fly")],
+    [("frog", "Frog")],
+    [("big_moth", "BigMoth"), ("small_moth", "SmallMoth")],
+    [("inspector", "Inspector")],
+    [("big_eel", "BigEel")],
 ]
 
 # ModManager flags: Downpour and the Watcher on, Remix and the rest off

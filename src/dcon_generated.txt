@@ -5,7 +5,7 @@
 // for Downpour/Watcher content:
 //   regions 14 (+2 pseudo), +31 Watcher, +10 Downpour -> 128
 //   rooms 760                 -> 2048
-//   tiles 3264886             -> 8388608 (2^23)
+//   tiles 3264886 (~15.7M with Downpour and the Watcher) -> 16777216 (2^24), 2 bytes each (world::packed_tile)
 //   room cameras 1714         -> 4096
 //   placed items 511          -> 1024
 //   shortcuts 6266            -> 16384
@@ -84,6 +84,17 @@ include{"garbage_worm_types.hpp"}
 include{"lantern_mouse_types.hpp"}
 include{"loach_types.hpp"}
 include{"moth_grub_types.hpp"}
+include{"angler_types.hpp"}
+include{"spider_types.hpp"}
+include{"big_spider_types.hpp"}
+include{"stowaway_types.hpp"}
+include{"drill_crab_types.hpp"}
+include{"batfly_types.hpp"}
+include{"frog_types.hpp"}
+include{"moth_types.hpp"}
+include{"oracle_types.hpp"}
+include{"inspector_types.hpp"}
+include{"big_eel_types.hpp"}
 include{"overseer_types.hpp"}
 include{"snail_types.hpp"}
 include{"sky_whale_types.hpp"}
@@ -95,7 +106,9 @@ include{"daddy_types.hpp"}
 include{"creature_types.hpp"}
 include{"item_types.hpp"}
 include{"rain_types.hpp"}
+include{"gravity_types.hpp"}
 include{"npc_types.hpp"}
+include{"offscreen_types.hpp"}
 
 make_index{text_key}{uint32_t}
 
@@ -133,6 +146,8 @@ object{
 	property{ name{player_guide_overseer_spawn_chance} type{float} }
 	property{ name{corruption_effect_color} type{rw::vec3} }
 	property{ name{corruption_eye_color} type{rw::vec3} }
+	// RegionParams.mudColor: MudPit's colour
+	property{ name{mud_color} type{rw::vec3} }
 	property{ name{albinos} type{bitfield} }
 	// pseudo regions group the gate and shared shelter rooms
 	property{ name{is_pseudo} type{bitfield} }
@@ -143,6 +158,9 @@ object{
 	property{ name{rain} type{rain::cycle} }
 	property{ name{rain_leader} type{region_id} }
 	property{ name{never_rains} type{bitfield} }
+	// AntiGravity.BrokenAntiGravity: the region's flickering anti gravity
+	// (gravity.hpp), made the first tick a room of it has BrokenZeroG
+	property{ name{broken_anti_gravity} type{gravity::broken_cycle} }
 }
 
 object{
@@ -196,6 +214,9 @@ object{
 	property{ name{terrain_sky_fade} type{float} }
 	// the SurfaceSandstorm effect's amount (the Effects line)
 	property{ name{surface_sandstorm} type{float} }
+	// the ZeroG and BrokenZeroG effects' amounts (the Effects line, 0: none)
+	property{ name{zero_g} type{float} }
+	property{ name{broken_zero_g} type{float} }
 	property{ name{room_specific_script_active} type{bitfield} }
 	property{ name{wet_terrain} type{bitfield} }
 	// room gravity multiplier (Room.gravity)
@@ -203,6 +224,11 @@ object{
 	// world file attributes
 	property{ name{is_shelter} type{bitfield} }
 	property{ name{is_gate} type{bitfield} }
+	// the world file's SWARMROOM (batfly.hpp); FliesWorldAI.swarmRoomBehaviors
+	// (batfly.cpp's swarm_behavior) and migrationTargets of a swarm room
+	property{ name{is_swarm_room} type{bitfield} }
+	property{ name{swarm_behavior} type{uint8_t} }
+	property{ name{swarm_migration_target} type{room_id} }
 	// Room.abstractRoom.firstTimeRealized: items get spawned on the first visit
 	property{ name{items_spawned} type{bitfield} }
 	// the rot (DaddyCorruption) was grown on the first visit
@@ -239,10 +265,9 @@ object{
 	storage_type{contiguous}
 	size{16777216}
 	tag{scenario}
-	property{ name{terrain} type{world::terrain} }
-	property{ name{flags} type{uint8_t} }
-	property{ name{shortcut} type{uint8_t} }
-	property{ name{water} type{uint8_t} }
+	// (terrain, flags and shortcut packed: one load a tile; the water
+	// follows from the room's water level, see world::packed_tile)
+	property{ name{bits} type{world::packed_tile} }
 }
 
 // Room.cameraPositions, already converted to room space
@@ -572,6 +597,31 @@ relationship{
 	primary_key{thing}
 }
 
+// CurvedSlope / SuperSlope / LocalTerrain (curved_slope.hpp), in file order.
+// kind: curved_slope::kind; pos2: SuperSlope's other end; thickness:
+// CurvedSlope/SuperSlope thickness, LocalTerrain's bottom y; points: the
+// collisionPoints' y every ~5 px from start_x to end_x
+object{
+	name{terrain_slope}
+	storage_type{contiguous}
+	size{1024}
+	tag{scenario}
+	property{ name{kind} type{uint8_t} }
+	property{ name{pos} type{rw::vec2} }
+	property{ name{pos2} type{rw::vec2} }
+	property{ name{thickness} type{float} }
+	property{ name{start_x} type{float} }
+	property{ name{end_x} type{float} }
+	property{ name{points} type{vector_pool{131072}{float}} }
+}
+relationship{
+	name{slope_location}
+	tag{scenario}
+	link{ object{terrain_slope} name{slope} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{slope}
+}
+
 // AbstractRoomNode as serialised on the connectivity line of the room file
 object{
 	name{room_node}
@@ -640,6 +690,8 @@ object{
 	property{ name{contact_point} type{rw::ivec2} }
 	property{ name{last_contact_point} type{rw::ivec2} }
 	property{ name{on_slope} type{int8_t} }
+	// BodyChunk.terrainCurveNormal: the curve it rests on (curved_slope.hpp), zero off them
+	property{ name{terrain_curve_normal} type{rw::vec2} }
 	property{ name{collide_with_terrain} type{uint8_t} }
 	property{ name{collide_with_slopes} type{uint8_t} }
 	property{ name{go_through_floors} type{uint8_t} }
@@ -1059,7 +1111,7 @@ relationship{
 object{
 	name{creature}
 	storage_type{erasable}
-	size{16384}
+	size{32000}
 	tag{save}
 	property{ name{type} type{::creature::type} }
 	// Creature / HealthState
@@ -1115,6 +1167,9 @@ object{
 	property{ name{killed_by} type{uint8_t} }
 	property{ name{rooms_changed} type{uint16_t} }
 	property{ name{regions_changed} type{uint16_t} }
+	// living off screen (offscreen.hpp): its timers, the room it goes into
+	// next, its raid or squad (zero for every other creature)
+	property{ name{offscreen} type{::offscreen::state} }
 }
 relationship{
 	name{creature_body}
@@ -1629,6 +1684,25 @@ object{
 	property{ name{grab_path} type{vector_pool{1048576}{rw::ivec2}} }
 }
 
+// Angler (Watcher's Angler.cs + AnglerAI + AnglerGraphics)
+object{
+	name{angler_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// AnglerGraphics' constructor rolls (teeth, lure arm, eye, rudder, cone)
+	property{ name{looks} type{::angler::looks} }
+	// AnglerGraphics.lightPos/lastLightPos/lightVel: the lure (Angler.GlowPos), simulated
+	property{ name{lure} type{::angler::lure_state} }
+	// AnglerAI.floatGoalPos, exploreCoordinate
+	property{ name{float_goal} type{std::optional<rw::vec2>} }
+	property{ name{explore} type{std::optional<rw::ivec2>} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::angler::graphics_state} }
+}
+
 // Moth grub (Watcher's MothGrub.cs + MothGrubAI)
 object{
 	name{moth_grub_data}
@@ -1641,6 +1715,235 @@ object{
 	property{ name{ai} type{::moth_grub::ai_state} }
 	// the graphics module (purely cosmetic): the body wrapping, the limbs
 	property{ name{graphics} type{::moth_grub::graphics_state} }
+}
+
+// Coalescipedes (Spider.cs + SpiderGraphics): a spider's random path, the
+// Centipede (chain) it keeps when it is its chain's keeper, the graphics
+object{
+	name{spider_data}
+	storage_type{erasable}
+	size{8192}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// path, last connection followed, last pipe it came out of
+	property{ name{crawl} type{::spider::crawl_state} }
+	// Spider.Centipede (valid while payload.chain is its own index)
+	property{ name{chain} type{::spider::chain_state} }
+	// the graphics module (purely cosmetic): the eight Limbs, bodyDir
+	property{ name{graphics} type{::spider::graphics_state} }
+}
+
+// Big spiders, spitter spiders, mother spiders (BigSpider.cs + BigSpiderAI +
+// BigSpiderGraphics): two chunks, the head (mainBodyChunk) and the body
+object{
+	name{big_spider_data}
+	storage_type{erasable}
+	size{2048}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed (yellowCol, the graphics' layout)
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality.dominance
+	property{ name{dominance} type{float} }
+	// BigSpider.yellowCol
+	property{ name{yellow_col} type{rw::vec3} }
+	// BigSpider's movement and fighting state (grabChunks, revivingBuddy, spitPos...)
+	property{ name{move} type{::big_spider::move_state} }
+	// BigSpiderAI: idling, the SpiderTrackStates, otherSpiders, reviveBuddy
+	property{ name{ai} type{::big_spider::ai_state} }
+	// SpiderSpitModule (the spitter's)
+	property{ name{spit} type{::big_spider::spit_state} }
+	// the graphics module (purely cosmetic)
+	property{ name{graphics} type{::big_spider::graphics_state} }
+}
+
+// DartMaggot: a spitter's dart, for every dart_maggot item
+object{
+	name{dart_maggot_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	property{ name{s} type{::big_spider::maggot_state} }
+}
+relationship{
+	name{dart_maggot_of}
+	tag{save}
+	link{ object{dart_maggot_data} name{data} type{unique} }
+	link{ object{item} name{item} type{unique} }
+	primary_key{data}
+}
+
+// Stowaways (Downpour's StowawayBug.cs + StowawayBugAI + StowawayBugState)
+object{
+	name{stowaway_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// the placement, the heads' Tentacle scalars, the eat list, the third grasp
+	property{ name{body} type{::stowaway::body_state} }
+	// the heads' TentacleChunks (3 x 12) and tile segments (the heads' one after the other)
+	property{ name{chunks} type{vector_pool{16384}{::stowaway::tentacle_chunk}} }
+	property{ name{segments} type{vector_pool{65536}{rw::ivec2}} }
+	// the feelers' points (tentacles[i][j, 0..2]), the feelers one after the other
+	property{ name{feelers} type{vector_pool{131072}{::stowaway::feeler_point}} }
+	// StowawayBugGraphics: its scalars, the three rope graphics' segments (3 x 40)
+	property{ name{graphics} type{::stowaway::graphics_state} }
+	property{ name{rope} type{vector_pool{32768}{::stowaway::rope_segment}} }
+}
+
+// Drill crab (Watcher's DrillCrab.cs + DrillCrabAI + DrillCrabGraphics; the
+// tower crab too): two chunks, six legs that are creature_parts
+// (drill_crab_leg) whose segments are kept here. ~1.7 KB each
+object{
+	name{drill_crab_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// AbstractCreature.personality, DrillCrab.IndividualVariations
+	property{ name{personality} type{::drill_crab::personality} }
+	property{ name{ivars} type{::drill_crab::individual_variations} }
+	// DrillCrabAI, its CreatureLooker, UtilityComparer smoothing, StuckTracker
+	property{ name{ai} type{::drill_crab::ai_state} }
+	// the legs' segments, the eyes, moveTarget, nextStepPos, idealHeight
+	property{ name{body} type{::drill_crab::body_state} }
+	// the graphics module (purely cosmetic): the drill's rotation
+	property{ name{graphics} type{::drill_crab::graphics_state} }
+}
+
+// Frog (Watcher's Frog.cs + FrogAI + FrogGraphics)
+object{
+	name{frog_data}
+	storage_type{erasable}
+	size{4096}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed (the looks)
+	property{ name{seed} type{int32_t} }
+	// Frog's movement and latching state the payload has no room for
+	property{ name{move} type{::frog::move_state} }
+	// FrogAI: fear, hunger, idling, the pack leader
+	property{ name{ai} type{::frog::ai_state} }
+	// FrogGraphics' colours and horns, rolled from the seed
+	property{ name{looks} type{::frog::looks} }
+	// the graphics module (purely cosmetic): limbs, looker, the umbilical
+	property{ name{graphics} type{::frog::graphics_state} }
+}
+
+// Big and small moths (Watcher's BigMoth.cs + BigMothAI + BigMothGraphics)
+object{
+	name{moth_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// IndividualVariations, the personality, the leg tag
+	property{ name{ivars} type{::moth::ivars} }
+	// BigMoth's fields: legs, wing pairs, tongue, foodStored
+	property{ name{body} type{::moth::body_state} }
+	// BigMothAI's fields: focus, idle/cliff/baby spots, stuck tracker, social memory
+	property{ name{ai} type{::moth::ai_state} }
+	// the graphics module (purely cosmetic): head, tongue, antennas, legs, wings
+	property{ name{graphics} type{::moth::graphics_state} }
+}
+
+// Oracles (Oracle.cs + the movement of its OracleBehavior + OracleArm +
+// OracleGraphics): one per oracle chamber
+object{
+	name{oracle_data}
+	storage_type{erasable}
+	size{16}
+	tag{save}
+	// health, stun, the behaviour's movement and path state
+	property{ name{body} type{::oracle::body_state} }
+	// Oracle.OracleArm (simulation state; the graphics read it)
+	property{ name{arm} type{::oracle::arm_state} }
+	// OracleGraphics (purely cosmetic)
+	property{ name{graphics} type{::oracle::graphics_state} }
+}
+
+// Inspector (Downpour's Inspector.cs + InspectorAI + InspectorGraphics): one
+// chunk; its three heads are creature_parts with an inspector_head each
+object{
+	name{inspector_data}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// InspectorAI (with its CreatureLooker)
+	property{ name{ai} type{::inspector::ai_state} }
+	// InspectorAI.AllHeadGoals (at most 560 each)
+	property{ name{head_goals} type{vector_pool{262144}{rw::vec2}} }
+	// the graphics module (purely cosmetic): wings, mycelia; the mycelia's
+	// points, max_mycelium_points per mycelium
+	property{ name{graphics} type{::inspector::graphics_state} }
+	property{ name{mycelium_points} type{vector_pool{262144}{::inspector::mycelium_point}} }
+}
+
+// An Inspector's head (Tentacle): its scalars and chunks, tile segments,
+// grab path, and its InspectorHeadRopeGraphics
+object{
+	name{inspector_head}
+	storage_type{erasable}
+	size{1024}
+	tag{save}
+	property{ name{t} type{::inspector::head} }
+	property{ name{segments} type{vector_pool{65536}{rw::ivec2}} }
+	property{ name{grab_path} type{vector_pool{65536}{rw::ivec2}} }
+	property{ name{graphics} type{::inspector::head_graphics} }
+}
+
+// Leviathans (BigEel.cs + BigEelAI + BigEelGraphics): twenty chunks, the
+// head first (mainBodyChunk 0). Few of them: the world spawns ~30
+object{
+	name{big_eel_data}
+	storage_type{erasable}
+	size{256}
+	tag{save}
+	// AbstractCreature.ID.RandomSeed
+	property{ name{seed} type{int32_t} }
+	// BigEel.IndividualVariations (GenerateIVars)
+	property{ name{ivars} type{::big_eel::individual_variations} }
+	// BigEel.clampedObjects: what is caught in its jaws
+	property{ name{clamped} type{::big_eel::clamped_list} }
+	// BigEelAI.focusCreature, the roaming and the way out to sea
+	property{ name{ai} type{::big_eel::ai_state} }
+	// the graphics module's constructor layout and its moving parts
+	// (purely cosmetic; the simulation never reads them)
+	property{ name{layout} type{::big_eel::graphics_layout} }
+	property{ name{graphics} type{::big_eel::graphics_state} }
+}
+
+// Batflies (Fly.cs + FlyAI + FlyGraphics): the AI and the graphics module;
+// the rest is the payload (batfly_types.hpp)
+object{
+	name{batfly_data}
+	storage_type{erasable}
+	size{8192}
+	tag{save}
+	property{ name{ai} type{::batfly::ai_state} }
+	property{ name{graphics} type{::batfly::graphics_state} }
+}
+
+// Room.hives: a room's hive grass tiles, one object per hive (AddHiveTile's
+// grouping), made on the room's first visit (batfly::spawn_room)
+object{
+	name{bat_hive}
+	storage_type{contiguous}
+	size{4096}
+	tag{save}
+	property{ name{tiles} type{vector_pool{131072}{rw::ivec2}} }
+}
+relationship{
+	name{bat_hive_location}
+	tag{save}
+	link{ object{bat_hive} name{hive} type{unique} }
+	link{ object{room} name{room} type{many} index_storage{array} }
+	primary_key{hive}
 }
 
 // Overseers (Overseer.cs + OverseerAI + the parts of OverseerAbstractAI a

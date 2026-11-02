@@ -298,7 +298,7 @@ namespace egg_bug {
             auto& w = state.world;
             w.creature_set_destination(c, tracker::best_guess(target));
             auto const t = target.who;
-            if (!creature::here(state, t, room.id) || creature::dead(state, t) || creature::grasped_object(w, c, 0))
+            if (!creature::here(state, t, room.id) || creature::grasped_object(w, c, 0))
                 return;
             vec2 const main = pos(state, c, 0);
             vec2 const mouth = main + custom::dir_vec(pos(state, c, 1), main) * 20.f;
@@ -388,7 +388,12 @@ namespace egg_bug {
                 b = behavior::flee;
             } else if (best == top::rain) {
                 b = behavior::escape_rain;
-            } else if (no_eggs && prey_rep && creature::live(state, prey_rep->who) && !creature::dead(state, prey_rep->who) && !grasped(state, c)) {
+            } else if (fb && grasped(state, c) && creature::dead(state, grasped(state, c))
+                && creature::static_relationship(state, c, grasped(state, c)).type == creature::rel::eats) {
+                // not vanilla (DIVERGENCES): what it killed, or found dead,
+                // goes home with it to be eaten (dens.hpp)
+                b = behavior::return_prey;
+            } else if (no_eggs && prey_rep && creature::live(state, prey_rep->who) && !grasped(state, c)) {
                 b = behavior::kill;
             }
             if (!no_eggs && utility < 0.02f)
@@ -797,7 +802,9 @@ namespace egg_bug {
                     ++fs.stab_count;
                 }
             }
-            if (creature::live(state, t) && creature::dead(state, t) && ++fs.overdead_ticker > 180) {
+            // (one it eats is kept, and taken home: not vanilla)
+            if (creature::live(state, t) && creature::dead(state, t) && creature::static_relationship(state, c, t).type != creature::rel::eats
+                && ++fs.overdead_ticker > 180) {
                 lose_all_grasps(state, c);
                 fs.overdead_ticker = 0;
             }

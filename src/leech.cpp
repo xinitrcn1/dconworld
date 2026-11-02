@@ -532,7 +532,7 @@ namespace leech {
                     int32_t const first = rng.range(0, int32_t(count) - 1);
                     for (uint32_t i = 0; i < 5 && count > 0; ++i) {
                         auto const p = all[(i + uint32_t(first)) % count];
-                        if (p == c || creature::dead(state, p) || !here(state, p, room.id)
+                        if (p == c || !here(state, p, room.id)
                         || creature::static_relationship(state, c, p).type != creature::rel::eats)
                             continue;
                         bool done = false;

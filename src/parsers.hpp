@@ -89,6 +89,7 @@ namespace parsers {
         std::vector<std::string> subregions;
         color_3f corruption_effect_color{0.f, 0.f, 1.f};
         color_3f corruption_eye_color{0.f, 0.f, 1.f};
+        color_3f mud_color{0.31f, 0.19f, 0.13f}; // RegionParams.mudColor (MudPit)
         uint32_t palette = 0;
         uint32_t bat_deplete_cycles_min = 2;
         uint32_t bat_deplete_cycles_max = 7;
@@ -138,6 +139,7 @@ namespace parsers {
         std::optional<float> terrain_grain;
         std::optional<float> terrain_edge_radius;
         std::optional<float> terrain_sky_fade;
+        std::optional<float> terrain_depth;
         // "AmbientSounds:", read by world.cpp (not the generated parser)
         std::vector<world::ambient_sound_desc> ambient_sounds;
 

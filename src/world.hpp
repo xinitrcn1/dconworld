@@ -32,10 +32,7 @@ namespace world {
         dcon::room_id id;
         int32_t width = 0;
         int32_t height = 0;
-        terrain const* terrains = nullptr;
-        uint8_t const* flags = nullptr;
-        uint8_t const* shortcuts = nullptr;
-        uint8_t const* waters = nullptr;
+        packed_tile const* tiles = nullptr;
         bool water = false;
         int32_t default_water_level = -1;
         float float_water_level = std::numeric_limits<float>::lowest();
@@ -57,17 +54,25 @@ namespace world {
             return x >= 0 && y >= 0 && x < width && y < height;
         }
 
+        // Room.Tile.waterInt of row y: 1 under the default water level, 2 at
+        // it, 0 above (or without water)
+        uint8_t water_at(int32_t y) const noexcept {
+            return uint8_t((y <= default_water_level ? 1 : 0) + (y == default_water_level ? 1 : 0));
+        }
+        // the flags of an inside tile (garbage holes and the like)
+        uint8_t flags_at(int32_t x, int32_t y) const noexcept { return tiles[size_t(y) * size_t(width) + size_t(x)].flags; }
+
         // Room.GetTile: out of bounds clamps to the border, with shortcut
         // entrances turned solid and shortcut paths removed
         tile get_tile(int32_t x, int32_t y) const noexcept {
             if (inside(x, y)) {
-                size_t const i = size_t(y) * size_t(width) + size_t(x);
-                return tile{terrains[i], flags[i], shortcuts[i], waters[i]};
+                packed_tile const p = tiles[size_t(y) * size_t(width) + size_t(x)];
+                return tile{p.t(), p.flags, p.shortcut(), water_at(y)};
             }
             int32_t const cx = rw::custom::int_clamp(x, 0, width - 1);
             int32_t const cy = rw::custom::int_clamp(y, 0, height - 1);
-            size_t const i = size_t(cy) * size_t(width) + size_t(cx);
-            tile t{terrains[i], flags[i], shortcuts[i], waters[i]};
+            packed_tile const p = tiles[size_t(cy) * size_t(width) + size_t(cx)];
+            tile t{p.t(), p.flags, p.shortcut(), water_at(cy)};
             if (t.t == terrain::shortcut_entrance)
                 t.t = terrain::solid;
             t.shortcut = 0;

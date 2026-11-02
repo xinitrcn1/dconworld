@@ -35,9 +35,6 @@ namespace tracker {
         int32_t see_around_corners = 10;
         int32_t frames_to_remember = -1;
         int32_t ghost_dismissal_range = 10;
-        // TrackerToDiscardDeadCreature always (CentipedeAI), else the
-        // default (unless it eats it)
-        bool discard_dead_always = false;
         // PreyTracker(maxRememberedCreatures, persistanceBias,
         // sureToGetPreyDistance, sureToLosePreyDistance); giveUpOnUnreachablePrey
         int32_t prey_max = 5;

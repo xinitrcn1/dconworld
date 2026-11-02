@@ -11,7 +11,9 @@
 #include "daddy.hpp"
 #include "garbage_worm.hpp"
 #include "sky_whale.hpp"
+#include "big_eel.hpp"
 #include "vulture.hpp"
+#include "offscreen.hpp"
 #include "leech.hpp"
 #include "lizard.hpp"
 #include "reports.hpp"
@@ -281,10 +283,38 @@ namespace spawns {
             return make(type::lantern_mouse, 0);
         if (t == "loach")
             return make(type::loach, uint8_t(loach::variant::loach));
-        if (t == "rotloach")
+        if (t == "rotloach" || t == "rotbehemoth" || t == "rbehemoth" || t == "behemoth" || t == "bigrot")
             return make(type::loach, uint8_t(loach::variant::rot));
+        if (t == "angler" || t == "anglerfish")
+            return make(type::angler, 0);
         if (t == "mothgrub")
             return make(type::moth_grub, 0);
+        if (t == "spider" || t == "coalescipede")
+            return make(type::spider, 0);
+        if (t == "bigspider")
+            return make(type::big_spider, uint8_t(big_spider::variant::big));
+        if (t == "spitterspider")
+            return make(type::big_spider, uint8_t(big_spider::variant::spitter));
+        if (t == "motherspider")
+            return make(type::big_spider, uint8_t(big_spider::variant::mother));
+        if (t == "stowawaybug" || t == "stowaway")
+            return make(type::stowaway, 0);
+        if (t == "drillcrab")
+            return make(type::drill_crab, uint8_t(drill_crab::variant::drill));
+        if (t == "towercrab")
+            return make(type::drill_crab, uint8_t(drill_crab::variant::tower));
+        if (t == "fly" || t == "batfly")
+            return make(type::batfly, 0);
+        if (t == "frog")
+            return make(type::frog, 0);
+        if (t == "bigmoth")
+            return make(type::moth, uint8_t(moth::variant::big));
+        if (t == "smallmoth")
+            return make(type::moth, uint8_t(moth::variant::small));
+        if (t == "inspector")
+            return make(type::inspector, 0);
+        if (t == "leviathan" || t == "bigeel" || t == "lev")
+            return make(type::big_eel, 0);
         if (t == "overseer")
             return make(type::overseer, 0);
         if (t == "snail")
@@ -447,8 +477,9 @@ namespace spawns {
             // AbstractCreature's constructor: out of the den in 100 to 1000 ticks
             dens::put_in_den(state, c, rw::random(state.seed, 0, uint32_t(c.value)).range(100, 1000));
             // (the plants' remainInDenCounter is 0: out at once, a pole
-            // plant to stand as a pole, a monster kelp to root)
-            if (d.kind == creature::type::pole_mimic || d.kind == creature::type::tentacle_plant)
+            // plant to stand as a pole, a monster kelp to root; a stowaway,
+            // doesNotUseDens, to hang at the den's hole)
+            if (d.kind == creature::type::pole_mimic || d.kind == creature::type::tentacle_plant || d.kind == creature::type::stowaway)
                 w.creature_set_remain_in_den(c, 0);
             ++made;
             std::string key = creature::to_string(d.kind);
@@ -498,27 +529,22 @@ namespace spawns {
                         ++r.lineages;
                 }
                 if (s.room == "OFFSCREEN") {
-                    // the offscreen den (there is none here)
+                    // the offscreen den (offscreen.hpp)
                     auto const k = kind_of(s.type);
                     if (k && k->kind == creature::type::sky_whale) {
                         // the Watcher's sky whales live off screen and fly into
                         // the region's rooms with SkyWhalePathfinding nodes
                         sky_whale::spawn_offscreen(state, region, s, r);
-                    } else if (k && k->kind == creature::type::vulture) {
-                        // a vulture gets a den of a room of its region with
-                        // open sky over it
-                        int32_t const n = std::max(1, s.count);
-                        for (int32_t i = 0; i < n; ++i) {
-                            if (auto const den = vulture::offscreen_den(state, region, state.next_issued_id + 1 + i * 7919)) {
-                                auto one = s;
-                                one.room = std::string{state.to_string_view(w.room_get_name(den->first))};
-                                one.den = den->second;
-                                one.count = 1;
-                                spawn_in_den(state, den->first, one, r);
-                            } else {
-                                ++r.no_room;
-                            }
-                        }
+                    } else if (k && k->kind == creature::type::big_eel) {
+                        // leviathans live at sea and swim into the region's
+                        // rooms with deep water open at a side
+                        big_eel::spawn_offscreen(state, region, s, r);
+                    } else if (k && offscreen::lives_offscreen(k->kind)) {
+                        // vultures, miros birds and scavengers live in the
+                        // offscreen den and come into the region's rooms
+                        // over their borders and out of region
+                        // transportation pipes (offscreen.hpp)
+                        offscreen::spawn(state, region, s, r);
                     } else if (k) {
                         // the other ported kinds that live there are left out
                         ++r.no_room;

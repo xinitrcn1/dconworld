@@ -4,10 +4,16 @@
 // payload's variant). The tentacles are vulture_tentacle.cpp, the king's
 // harpoons vulture_tusks.cpp.
 //
-// Not vanilla: there are no sky exits and no abstract layer here. A vulture
-// roams the open air of its room and changes rooms only as migrate.hpp moves
-// every creature (through the pipes); taking prey home, it flies off over
-// the top of the room when the room has open sky (the prey is eaten up
+// The world files' OFFSCREEN vultures live off screen (offscreen.hpp): they
+// fly in from high over a room's SkyExit, idle there 620 ticks
+// (VultureAbstractAI's check room) and fly off over the top of the room
+// (AccessSkyGate), as they do taking prey home (eaten off screen), when
+// disencouraged or fleeing the rain.
+//
+// Not vanilla, for a vulture living in a den (a den spawn, the tests'): it
+// roams the open air of its room and changes rooms only as migrate.hpp
+// moves every creature (through the pipes); taking prey home, it flies off
+// over the top of the room when the room has open sky (the prey is eaten up
 // there, like in a den) and hovers out of sight for a while before it comes
 // back down, else it carries the prey into its den. Fleeing the rain it
 // heads for its den (the sky without one).
@@ -25,6 +31,7 @@
 #include "explosions.hpp"
 #include "items.hpp"
 #include "migrate.hpp"
+#include "offscreen.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 #include "player.hpp"
@@ -438,8 +445,9 @@ namespace vulture {
             if (custom::manhattan_distance(from, ai.idle_pos) < 3 && ai.idle_counter > 160)
                 ai.idle_counter = x.rng.range(20, 160);
             if (ai.idle_counter <= 0 || !x.accessible(ai.idle_pos)) {
-                // now and then off to the sky a while
-                if (ai.idle_counter <= 0 && x.rng.value() < 0.15f && sky_column(x.room, custom::int_clamp(from.x, 0, x.room.width - 1)) >= 0) {
+                // now and then off to the sky a while (one living off
+                // screen goes there for good, offscreen.hpp)
+                if (ai.idle_counter <= 0 && !offscreen::homed(x.state, x.c) && x.rng.value() < 0.15f && sky_column(x.room, custom::int_clamp(from.x, 0, x.room.width - 1)) >= 0) {
                     ai.sky_x = -1;
                     ai.sky_counter = x.rng.range(400, 1600);
                     ai.idle_counter = x.rng.range(200, 800);
@@ -537,6 +545,11 @@ namespace vulture {
             // what it carries in its beak and eats goes home
             if (auto const held = x.grasped(); held && creature::static_relationship(x.state, x.c, held).type == creature::rel::eats)
                 b = behavior::return_prey;
+            // VultureAbstractAI: its check room done, one living off screen
+            // flies off over the top (AccessSkyGate)
+            bool const off_home = offscreen::homed(x.state, x.c);
+            if (off_home && b == behavior::idle && offscreen::vulture_idle(x.state, x.c))
+                b = behavior::sky;
             // up over the room a while (not vanilla)
             if (b == behavior::idle && ai.sky_counter > 0)
                 b = behavior::sky;
@@ -546,7 +559,9 @@ namespace vulture {
             switch (b) {
             case behavior::idle:
                 ai.focus = dcon::creature_id{};
-                migrate::idle_roll(x.state, x.c, x.room);
+                // (one living off screen changes rooms through the sky)
+                if (!off_home)
+                    migrate::idle_roll(x.state, x.c, x.room);
                 if (auto const tt = migrate::travel_tile(x.state, x.c, x.room)) {
                     x.set_destination(*tt);
                     break;
@@ -557,7 +572,11 @@ namespace vulture {
                 --ai.sky_counter;
                 if (!go_to_sky(x)) {
                     ai.sky_counter = 0;
-                    roam(x, from);
+                    // (no sky here: off screen by the way to a room with one)
+                    if (auto const tt = off_home ? dens::home_tile(x.state, x.c, x.room) : std::nullopt)
+                        x.set_destination(*tt);
+                    else
+                        roam(x, from);
                 }
                 break;
             case behavior::return_prey:
@@ -573,6 +592,9 @@ namespace vulture {
                 break;
             case behavior::escape_rain:
                 ai.focus = dcon::creature_id{};
+                // living off screen: the sky, else the way to it
+                if (off_home && go_to_sky(x))
+                    break;
                 // the den, else the sky
                 if (auto const tt = dens::home_tile(x.state, x.c, x.room))
                     x.set_destination(*tt);
@@ -1354,16 +1376,6 @@ namespace vulture {
                 return true;
             return chunk_i != head || x.dead() || !x.p.mask || rw::dot(rw::normalized(dir), custom::dir_vec(x.neck.tip().pos, x.pos(head))) >= -0.88f;
         }
-
-        // rooms with open sky over them and a den with room in front
-        // (an OFFSCREEN vulture's home here)
-        bool sky_den(sys::game_state const& state, room_view const& room, uint8_t node) {
-            auto const e = dens::den_entrance(state, room.id, node);
-            if (!e)
-                return false;
-            ivec2 const front = *e + room.shortcut_entrance_hole_direction(*e) * 2;
-            return room.inside(front.x, front.y) && pathing::terrain_proximity(room, front, 3) >= 2;
-        }
     }
 
     //
@@ -1427,6 +1439,17 @@ namespace vulture {
         if (x.king())
             tusks_update(x);
         take_prey_to_sky(x);
+        // living off screen, high over the room on its way up: it is off
+        // (Vulture.AccessSkyGate), what it caught to be eaten there
+        if (offscreen::homed(state, c) && x.awake() && !x.grasped() && w.creature_get_entering_shortcut(c).x < 0
+            && x.pos(0).y > room.pixel_height() + 200.f) {
+            auto const b = behavior(w.creature_get_behavior(c));
+            if (b == behavior::sky || b == behavior::return_prey || b == behavior::escape_rain || b == behavior::disencouraged) {
+                int32_t const meal = x.ai.sky_counter;
+                x.ai.sky_counter = 0;
+                offscreen::take_flight(state, c, room, meal);
+            }
+        }
         store(x);
     }
 
@@ -1724,22 +1747,25 @@ namespace vulture {
 
     bool has_mask(sys::game_state const& state, dcon::creature_id c) noexcept { return state.world.creature_get_payload(c).vulture.mask != 0; }
 
-    std::optional<std::pair<dcon::room_id, uint8_t>> offscreen_den(sys::game_state const& state, dcon::region_id region, int32_t seed) {
-        auto const& w = state.world;
-        std::vector<std::pair<dcon::room_id, uint8_t>> found;
-        w.for_each_room([&](dcon::room_id r) {
-            if (w.room_get_region_from_region_membership(r) != region || w.room_get_is_shelter(r) || w.room_get_is_gate(r))
-                return;
-            auto const view = world::get_room_view(state, r);
-            if (view.width <= 0 || view.height <= 0 || sky_column(view, view.width / 2) < 0)
-                return;
-            for (uint32_t node = 0; node < 64; ++node)
-                if (sky_den(state, view, uint8_t(node)))
-                    found.push_back({r, uint8_t(node)});
-        });
-        if (found.empty())
-            return std::nullopt;
-        uint32_t const h = uint32_t(seed) * 2654435761u;
-        return found[h % uint32_t(found.size())];
+    void fly_into_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, vec2 at, vec2 dir) {
+        auto& w = state.world;
+        auto const view = world::get_room_view(state, room);
+        auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
+        for (uint32_t i = 0; i < chunk_count; ++i) {
+            auto const k = chunk(state, c, i);
+            vec2 const p = at + custom::deg_to_vec(rng.value() * 360.f) * 5.f;
+            w.body_chunk_set_pos(k, p);
+            w.body_chunk_set_last_pos(k, p);
+            w.body_chunk_set_last_last_pos(k, p);
+            w.body_chunk_set_vel(k, dir * 5.f);
+        }
+        ctx x{state, c, view};
+        load(x);
+        set_up(x, x.pos(0));
+        x.p.move_direction = dir;
+        x.ai.sky_counter = 0;
+        store(x);
+        // Creature.FlyIntoRoom
+        w.creature_set_shortcut_delay(c, 360);
     }
 }

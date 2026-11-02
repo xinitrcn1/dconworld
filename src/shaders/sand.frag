@@ -8,6 +8,11 @@
 // per camera image it overlaps, after the sprites: sprites stay in front of
 // it, nearer level geometry hides it.
 //
+// Mud (MudPit, u_mud.a 1): the same light on the mud pits, their colour the
+// region's mudColor shaded towards the palette's black (MudPit.ApplyPalette)
+// instead of the terrain palette's, no grain, and in front of the sprites
+// that sank into it (it isn't kept behind them like the sand).
+//
 // The dunes: v_uv.x is vanilla's clr.r, below 0 the pixels down the front
 // face, 0..1 across the top going back; v_uv.y the depth (0..1 of the 30
 // layers); v_color.rg the surface normal's x and y.
@@ -43,6 +48,8 @@ layout(set = 0, binding = 0, std140) uniform sand_uniforms {
     int u_terrain_rows;   // the terrain palette's rows (0: no terrain palette)
     float u_water_level;  // room pixels
     float u_pad;
+    vec4 u_mud;           // rgb: the mud's colour, a: 1 drawing mud
+    vec4 u_mud_black;     // rgb: the palette's black
     vec4 u_later[16];
     vec4 u_light_color[16];  // rgb: LightSource.color, a: its alpha
     vec4 u_light_params[16]; // x, y, radius
@@ -79,6 +86,12 @@ vec3 terrain_texel(float x, float row_up) {
 
 // PaletteSurfaceColor
 vec3 surface_color(float lightness, float depth, float sunlit, level_px behind) {
+    if (u_mud.a > 0.5) {
+        // the mud in its colour, the shade going towards the palette's black
+        vec3 shade = mix(u_mud_black.rgb, u_mud.rgb, 0.45);
+        vec3 lit = u_mud.rgb * mix(1.0, 1.25, sunlit);
+        return mix(shade, lit, clamp(lightness, 0.0, 1.0));
+    }
     if (u_terrain_rows < 3) {
         // (no terrain palette: the level palette's lit and shaded colours)
         int d = clamp(int(depth * 30.0), 0, 29);
@@ -92,6 +105,8 @@ vec3 surface_color(float lightness, float depth, float sunlit, level_px behind) 
 }
 
 vec3 terrain_misc(int x) {
+    if (u_mud.a > 0.5)
+        return x == 1 ? vec3(1.0) : vec3(0.0);
     if (u_terrain_rows < 3)
         return x == 1 ? vec3(1.0) : vec3(0.0);
     return terrain_texel((float(x) + 0.5) / 32.0, 0.5);
@@ -108,9 +123,9 @@ void main() {
         discard;
     if (shown_by_later_camera(room))
         discard;
-    // sprites stay in front of it
+    // sprites stay in front of the sand (the mud covers what sank into it)
     vec2 frame_uv = (room - u_view_pos) * u_zoom / u_screen;
-    if (level_sprite_at(u_mask, frame_uv))
+    if (u_mud.a < 0.5 && level_sprite_at(u_mask, frame_uv))
         discard;
     float e = v_uv.x;
     float dpth = v_uv.y;
@@ -190,5 +205,8 @@ void main() {
         added += u_light_color[j].rgb * u_light_color[j].a * amount;
     }
     col += added * tint * clamp(1.0 - e, 0.0, 1.0);
+    // the mud is wet: a soft shine where the sun catches it
+    if (u_mud.a > 0.5)
+        col += vec3(0.35) * specular * sunlight * fade;
     o_color = vec4(col, 1.0);
 }

@@ -51,6 +51,17 @@
 #include "sky_whale_types.hpp"
 #include "yeek_types.hpp"
 #include "vulture_types.hpp"
+#include "big_eel_types.hpp"
+#include "inspector_types.hpp"
+#include "oracle_types.hpp"
+#include "moth_types.hpp"
+#include "frog_types.hpp"
+#include "batfly_types.hpp"
+#include "drill_crab_types.hpp"
+#include "stowaway_types.hpp"
+#include "big_spider_types.hpp"
+#include "spider_types.hpp"
+#include "angler_types.hpp"
 
 namespace creature {
     // CreatureTemplate.Type of the ported creatures. The order is the update
@@ -95,13 +106,35 @@ namespace creature {
         yeek,
         // Vulture, KingVulture, MirosVulture (the payload's variant)
         vulture,
+        // the Watcher's angler
+        angler,
+        // coalescipedes (Spider: the payload, chains kept in spider_data)
+        spider,
+        // BigSpider, SpitterSpider, Downpour's MotherSpider (the payload's variant)
+        big_spider,
+        // Downpour's stowaway (StowawayBug)
+        stowaway,
+        // the Watcher's drill crab (DrillCrab, TowerCrab: the payload's variant)
+        drill_crab,
+        // batflies (Fly)
+        batfly,
+        // the Watcher's frog
+        frog,
+        // the Watcher's big moth and small moth (BigMoth, SmallMoth: the payload's variant)
+        moth,
+        // the iterators (Oracle.cs; a PhysicalObject in vanilla)
+        oracle,
+        // Downpour's Inspector
+        inspector,
+        // leviathan (BigEel)
+        big_eel,
         count
     };
     inline constexpr uint32_t type_count = uint32_t(type::count);
     inline constexpr type all_types[type_count] = {type::slugcat, type::centipede, type::dropbug, type::cicada, type::lizard, type::daddy, type::leech, type::tube_worm,
         type::needle_worm, type::pole_mimic, type::tentacle_plant, type::jetfish, type::scavenger, type::deer, type::miros,
         type::barnacle, type::egg_bug, type::garbage_worm, type::lantern_mouse, type::loach, type::moth_grub, type::overseer, type::snail,
-        type::sky_whale, type::yeek, type::vulture};
+        type::sky_whale, type::yeek, type::vulture, type::angler, type::spider, type::big_spider, type::stowaway, type::drill_crab, type::batfly, type::frog, type::moth, type::oracle, type::inspector, type::big_eel};
 
     // Creature.DamageType, as far as the ports tell them apart
     enum class damage_type : uint8_t {
@@ -146,6 +179,21 @@ namespace creature {
         snail,
         sky_whale,
         yeek,
+        rot_loach,
+        angler,
+        spider,
+        big_spider,
+        spitter_spider,
+        mother_spider,
+        stowaway_bug,
+        drill_crab,
+        tower_crab,
+        batfly,
+        frog,
+        big_moth,
+        small_moth,
+        inspector,
+        big_eel,
         count
     };
     inline constexpr uint32_t tmpl_count = uint32_t(tmpl::count);
@@ -856,6 +904,114 @@ namespace creature {
         uint16_t data;
     };
 
+    // Angler: the struct is angler_types.hpp's
+    using angler_payload = ::angler::payload;
+
+    // Spider: the struct is spider_types.hpp's
+    using spider_payload = ::spider::payload;
+
+    struct big_spider_payload {
+        // BigSpider.charging, mandiblesCharged, jumpStamina, runSpeed,
+        // runCycle, stuckShake, deathConvulsions, travelDir
+        float charging;
+        float mandibles_charged;
+        float jump_stamina;
+        float run_speed;
+        float run_cycle;
+        float stuck_shake;
+        float death_convulsions;
+        rw::vec2 travel_dir;
+        // footingCounter, outOfWaterFooting, specialMoveCounter, canBite,
+        // canCling, grabbedCounter, borrowedTime (-1: never revived)
+        int16_t footing_counter;
+        int16_t out_of_water_footing;
+        int16_t special_move_counter;
+        int16_t can_bite;
+        int16_t can_cling;
+        int16_t grabbed_counter;
+        int16_t borrowed_time;
+        // the template (BigSpider, SpitterSpider, MotherSpider)
+        big_spider::variant variant;
+        // jumping, sitting, offGround
+        uint8_t jumping;
+        uint8_t sitting;
+        uint8_t off_ground;
+        // big_spider_data
+        uint16_t data;
+    };
+
+    struct stowaway_payload {
+        // StowawayBug.sleepScale, tentaclesWithdrawn; StowawayBugGraphics'
+        // mouthOpen, biting, digestPrey (the simulation's here: it reads them)
+        float sleep_scale;
+        float tentacles_withdrawn;
+        float mouth_open;
+        float biting;
+        float digest_prey;
+        // spitCooldown, huntDelay
+        int32_t spit_cooldown;
+        int32_t hunt_delay;
+        // mawOpen, anyTentaclePulled, AI.activeThisCycle, biteIsKiller
+        uint8_t maw_open;
+        uint8_t any_tentacle_pulled;
+        uint8_t active_this_cycle;
+        uint8_t bite_is_killer;
+        // the rain cycle count it last rolled AwakeThisCycle for
+        uint32_t cycle_seen;
+        // AI.focusCreature
+        dcon::creature_id focus;
+        // stowaway_data
+        uint16_t data;
+    };
+
+    struct drill_crab_payload {
+        // DrillCrab.spinUp, eyesHidden, lastEyesHidden, flip, lastFlip,
+        // targetFlip, speed, squeezeFactor, walkAnim
+        float spin_up;
+        float eyes_hidden;
+        float last_eyes_hidden;
+        float flip;
+        float last_flip;
+        float target_flip;
+        float speed;
+        float squeeze_factor;
+        float walk_anim;
+        // hideTimer, spinOutTimer
+        int16_t hide_timer;
+        int16_t spin_out_timer;
+        // sparkDelay, objectHitDelay, stepCounter, legToMove, squeeze, moveTargetAge
+        uint8_t spark_delay;
+        uint8_t object_hit_delay;
+        uint8_t step_counter;
+        uint8_t leg_to_move;
+        uint8_t squeeze;
+        uint8_t move_target_age;
+        // DrillCrab or TowerCrab
+        drill_crab::variant variant;
+        // drill_crab_data
+        uint16_t data;
+    };
+
+    // Fly: its own fields (batfly_types.hpp), with the batfly_data index
+    using batfly_payload = ::batfly::body_state;
+
+    using frog_payload = ::frog::payload;
+
+    struct moth_payload {
+        // BigMoth or SmallMoth
+        moth::variant variant;
+        // BigMoth.scale (0.3 for a small moth, times its individual size), flip
+        float scale;
+        float flip;
+        // moth_data
+        uint16_t data;
+    };
+
+    // Oracle: the struct is oracle_types.hpp's (its oracle_data, which one)
+    using oracle_payload = ::oracle::payload;
+
+    using inspector_payload = ::inspector::body_payload;
+
     // creature.payload: the struct of the creature's type
     union payload {
         slugcat_payload slugcat;
@@ -884,6 +1040,17 @@ namespace creature {
         sky_whale_payload sky_whale;
         yeek_payload yeek;
         vulture_payload vulture;
+        angler_payload angler;
+        spider_payload spider;
+        big_spider_payload big_spider;
+        stowaway_payload stowaway;
+        drill_crab_payload drill_crab;
+        batfly_payload batfly;
+        frog_payload frog;
+        moth_payload moth;
+        oracle_payload oracle;
+        inspector_payload inspector;
+        big_eel_payload big_eel;
 
         // all zero, like a fresh property of the data container
         payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
@@ -909,6 +1076,17 @@ namespace creature {
     static_assert(sizeof(lantern_mouse_payload) <= 64);
     static_assert(sizeof(loach_payload) <= 64);
     static_assert(sizeof(moth_grub_payload) <= 64);
+    static_assert(sizeof(big_eel_payload) <= 64);
+    static_assert(sizeof(inspector_payload) <= 64);
+    static_assert(sizeof(oracle_payload) <= 64);
+    static_assert(sizeof(moth_payload) <= 64);
+    static_assert(sizeof(frog_payload) <= 64);
+    static_assert(sizeof(batfly_payload) <= 64);
+    static_assert(sizeof(drill_crab_payload) <= 64);
+    static_assert(sizeof(stowaway_payload) <= 64);
+    static_assert(sizeof(big_spider_payload) <= 64);
+    static_assert(sizeof(spider_payload) <= 64);
+    static_assert(sizeof(angler_payload) <= 64);
     static_assert(sizeof(overseer_payload) <= 64);
     static_assert(sizeof(snail_payload) <= 64);
     static_assert(sizeof(sky_whale_payload) <= 64);
@@ -931,6 +1109,12 @@ namespace creature {
         loach_tentacle,
         // VultureTentacle (Tentacle): a vulture's wing, its vulture_wing data object
         vulture_wing,
+        // DrillCrab.Leg (SmallLeg / TowerLeg): its segments are in the
+        // crab's drill_crab_data (body.segments[index]); health is
+        // DrillCrabState.legHealths
+        drill_crab_leg,
+        // an Inspector's head (Tentacle): its inspector_head data object
+        inspector_head,
     };
 
     struct daddy_tentacle_payload {
@@ -968,12 +1152,30 @@ namespace creature {
         uint16_t data;
     };
 
+    struct drill_crab_leg_payload {
+        // DrillCrab.Leg.targetPos, anchor, lastAnchor, scanFrom
+        rw::vec2 target_pos;
+        rw::vec2 anchor;
+        rw::vec2 last_anchor;
+        rw::vec2 scan_from;
+        float flatten;
+        int16_t scan_time;
+        int16_t time_spent_retracting;
+        drill_crab::leg_mode mode;
+        uint8_t segments_retracted;
+        uint8_t supporting;
+    };
+
+    using inspector_head_payload = ::inspector::head_payload;
+
     union part_payload {
         daddy_tentacle_payload daddy_tentacle;
         daddy_tube_payload daddy_tube;
         deer_leg_payload deer_leg;
         loach_limb_payload loach_limb;
         vulture_wing_payload vulture_wing;
+        drill_crab_leg_payload drill_crab_leg;
+        inspector_head_payload inspector_head;
 
         part_payload() noexcept { std::memset(static_cast<void*>(this), 0, sizeof *this); }
     };
@@ -982,6 +1184,8 @@ namespace creature {
     static_assert(sizeof(deer_leg_payload) <= 64);
     static_assert(sizeof(loach_limb_payload) <= 64);
     static_assert(sizeof(vulture_wing_payload) <= 64);
+    static_assert(sizeof(drill_crab_leg_payload) <= 64);
+    static_assert(sizeof(inspector_head_payload) <= 64);
     static_assert(sizeof(part_payload) <= 64);
     static_assert(std::is_trivially_copyable_v<part_payload>);
 }

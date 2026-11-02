@@ -13,6 +13,8 @@
 #include "tube_worm.hpp"
 #include "needle_worm.hpp"
 #include "barnacle.hpp"
+#include "batfly.hpp"
+#include "frog.hpp"
 #include "lantern_mouse.hpp"
 #include "moth_grub.hpp"
 #include "snail.hpp"
@@ -59,6 +61,8 @@ namespace shortcuts {
             tube_worm::follow_player(state, p, room, false);
             needle_worm::follow_player(state, p, room, false);
             barnacle::follow_player(state, p, room, false);
+            batfly::follow_player(state, p, room, false);
+            frog::follow_player(state, p, room, false);
             // the slugcat on its back (and on that one's) comes along
             if (auto const r = piggyback::rider(state, p))
                 move_to_room(state, r, room);
@@ -89,6 +93,8 @@ namespace shortcuts {
             tube_worm::follow_player(state, p, room.id, true);
             needle_worm::follow_player(state, p, room.id, true);
             barnacle::follow_player(state, p, room.id, true);
+            batfly::follow_player(state, p, room.id, true);
+            frog::follow_player(state, p, room.id, true);
             if (auto const r = piggyback::rider(state, p))
                 spit_out(state, r, tile);
         }

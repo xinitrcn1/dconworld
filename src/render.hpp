@@ -112,12 +112,14 @@ namespace render {
         struct pulled_draw {
             size_t at = 0;
             gpu::pipeline p = gpu::pipeline::rope;
-            uint32_t first = 0; // in rope_points or circles
-            uint32_t count = 0; // points (padding included) or circles
+            uint32_t first = 0; // in rope_points, circles or sprites
+            uint32_t count = 0; // points (padding included), circles or sprites
             bool smooth = true; // a rope's Bezier curves
         };
         std::vector<gpu::rope_point> rope_points;
         std::vector<gpu::circle> circles;
+        // (gpu::pipeline::sprite: the slugcats' sprites, one instance each)
+        std::vector<gpu::sprite_instance> sprites;
         std::vector<pulled_draw> pulled;
     };
 

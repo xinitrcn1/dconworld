@@ -194,6 +194,47 @@ namespace loach {
         float angle_factor = 0.f;
     };
 
+    // The RotLoach's (the Rot Behemoth's) rot: LoachGraphics.Eyes, fifteen
+    // DaddyGraphics.Eye bulbs along the front of the body (with their
+    // LoachGraphics.EyeData), and LoachTentacleGraphic.circles, 8 to 10
+    // growths along each mouth tentacle plus as many eyes on them at most
+    inline constexpr uint32_t rot_eye_count = 15;
+    inline constexpr uint32_t max_tentacle_circles = 20;
+
+    // DaddyGraphics.Eye (the loach's: RotSizeClass, no HD mode) with its
+    // LoachGraphics.EyeData (where along the body it sits, its own drift)
+    struct rot_eye {
+        rw::vec2 dir{0.f, 0.f};
+        rw::vec2 last_dir{0.f, 0.f};
+        float rad = 1.f;
+        float rotats[2] = {0.f, 0.f};
+        float focus = 0.f;
+        float last_focus = 0.f;
+        float get_to_focus = 0.f;
+        float closed = 0.f;
+        float last_closed = 0.f;
+        float light = 0.f;
+        float flash = 0.f;
+        int16_t eyes_closed_delay = 0;
+        // creatureRep (the tracked creature it looks at)
+        dcon::creature_id creature_seen;
+        // the JaggedCircle's rim, rolled once (the shader's noise)
+        uint32_t jag_seed = 0;
+        // EyeData
+        float along_body = 0.f;
+        float perp_offset = 0.f;
+        rw::vec2 pos{0.f, 0.f};
+        rw::vec2 last_pos{0.f, 0.f};
+        rw::vec2 vel{0.f, 0.f};
+    };
+
+    // LoachTentacleGraphic.CircleData
+    struct tentacle_circle {
+        rw::vec2 offset{0.f, 0.f};
+        float radius = 1.f;
+        uint8_t eye = 0;
+    };
+
     // the graphics module's state (purely cosmetic)
     struct graphics_state {
         float body_length = 0.f;
@@ -214,5 +255,15 @@ namespace loach {
         spot spots[spot_count];
         // LoachTentacleGraphic: RopeGraphic(15) per tentacle
         daddy::rope_segment tentacle_segments[tentacle_count][tentacle_graphic_segments];
+        // Loach.effectColor and eyeColor (a RotLoach's: its region's
+        // corruption colours)
+        rw::vec3 effect_color{0.5f, 0.5f, 0.5f};
+        rw::vec3 eye_color{0.5f, 0.5f, 0.5f};
+        // the rot (a RotLoach's only: none on a Loach)
+        int32_t reaction_timer = 0;
+        uint8_t eye_count = 0;
+        uint8_t circle_count[tentacle_count] = {};
+        rot_eye eyes[rot_eye_count];
+        tentacle_circle circles[tentacle_count][max_tentacle_circles];
     };
 }

@@ -352,6 +352,29 @@ namespace ve {
         out = select(b < fp_vector{0.f} && !whole, detail::quiet_nan(), out);
         return select(e == fp_vector{0.f} || b == fp_vector{1.f}, fp_vector{1.f}, out);
     }
+
+    // --- arrays ---------------------------------------------------------
+
+    // out[i] = f(in[i]) for i in [0, n), ve::vector_size at a time (the last
+    // lanes repeat in[n - 1]: every element goes through the same vector
+    // code, wherever the lanes' boundaries fall). `in` and `out` may alias
+    template<typename F>
+    inline void transform(float const* in, float* out, size_t n, F&& f) {
+        constexpr size_t lanes = size_t(vector_size);
+        alignas(64) float buf[lanes];
+        for (size_t base = 0; base < n; base += lanes) {
+            for (size_t k = 0; k < lanes; ++k)
+                buf[k] = in[base + k < n ? base + k : n - 1];
+            store(contiguous_tags<int32_t>{0}, buf, fp_vector{f(load(contiguous_tags<int32_t>{0}, buf))});
+            for (size_t k = 0; k < lanes && base + k < n; ++k)
+                out[base + k] = buf[k];
+        }
+    }
+    // the same, in place
+    template<typename F>
+    inline void transform(float* values, size_t n, F&& f) {
+        transform(values, values, n, f);
+    }
 }
 
 #undef VE_UTILS_INLINE

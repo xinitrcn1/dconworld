@@ -17,6 +17,7 @@
 #include "support.hpp"
 #include "startup.hpp"
 #include "keyed_random.hpp"
+#include "curved_slope.hpp"
 #include "tracker.hpp"
 #include "gates.hpp"
 #include "audio.hpp"
@@ -354,6 +355,32 @@ namespace selftest {
         }
 
         auto const flat = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
+        {
+            // a CurvedSlope valley over open air: the curve's height is the
+            // Bezier's, a rock dropped on its flank comes to rest on it (24
+            // degrees there: only steeper than 45 slides), a slugcat stands
+            // on it (contact -1, a curve normal)
+            auto& w = gs.world;
+            auto const room = make_room(gs, region, box(60, 24, [](int32_t, int32_t y) { return y < 2 ? '#' : ' '; }));
+            // from (200, 250) to (800, 250), handles 150 px down at each end: 112.5 px deep in the middle
+            curved_slope::add(w, room, curved_slope::kind::curved, vec2{200.f, 250.f}, "40~600^0~150^-150~450^-150~", 0.f);
+            vec2 n;
+            // (a circle of radius 5: the points are 600 / 119 px apart, a
+            // zero radius can fall between two)
+            float const mid = curved_slope::snap_to_terrain(gs, room, vec2{500.f, 400.f}, 5.f, n).y; // ~137.5 + 5
+            auto const rock = items::create_rock(gs, room, vec2{300.f, 300.f});
+            sim s(gs, room, vec2{560.f, 300.f});
+            s.run(300);
+            auto const rc = items::chunk(gs, rock);
+            vec2 const rp = w.body_chunk_get_pos(rc);
+            // (from above it: a snap to where it already is counts as none)
+            float const on = curved_slope::snap_to_terrain(gs, room, rp + vec2{0.f, 20.f}, w.body_chunk_get_rad(rc), n).y;
+            bool const rock_rests = std::fabs(rp.y - on) < 2.f && rw::magnitude(w.body_chunk_get_vel(rc)) < 0.5f;
+            bool const stands = s.contact(1).y == -1 && s.pos(1).y > 130.f && w.body_chunk_get_terrain_curve_normal(s.chunk(1)) != vec2{0.f, 0.f};
+            char d[160];
+            std::snprintf(d, sizeof(d), " mid=%.1f rock=(%.0f,%.0f) on=%.0f feet=(%.0f,%.0f) stands=%d", mid, rp.x, rp.y, on, s.pos(1).x, s.pos(1).y, int(stands));
+            r.check("curved slope", std::fabs(mid - 142.5f) < 2.f && rock_rests && stands, s.describe() + d);
+        }
         float const floor_y = 20.f; // top of the y=0 solid row
         if (npc::debug().measure) {
             // off a pole (x 5, 1..25, head at y 15) onto a ledge `d` right whose top is `dy` over the head's tile,
@@ -712,13 +739,19 @@ namespace selftest {
             auto const pit = make_room(gs, region, box(40, 20, [](int32_t, int32_t) { return ' '; }));
             sim s(gs, pit, feet_at(18, 1));
             auto const c = centipede::create(gs, pit, feet_at(23, 1), 0.f);
-            s.run(60);
-            bool const flees = world::centipede_behavior(gs.world.creature_get_behavior(c)) == world::centipede_behavior::flee;
+            // (most of the ticks: the tracker forgets the slugcat for a few
+            // ticks now and then, CentipedeAI's sight alternating ends)
+            int flee_ticks = 0;
+            for (int i = 0; i < 60; ++i) {
+                s.run(1);
+                flee_ticks += world::centipede_behavior(gs.world.creature_get_behavior(c)) == world::centipede_behavior::flee;
+            }
+            bool const flees = flee_ticks > 30;
             // a spear's worth of damage (a rock barely stuns a healthy one)
             centipede::violence(gs, c, 0, vec2{0.f, 0.f}, 1.f, 0.f);
             bool const stunned = gs.world.creature_get_stun(c) > 0;
             char d[64];
-            std::snprintf(d, sizeof(d), " flees=%d stunned=%d", int(flees), int(stunned));
+            std::snprintf(d, sizeof(d), " flee_ticks=%d/60 stunned=%d", flee_ticks, int(stunned));
             r.check("small centipede flees, spears stun", flees && stunned && !s.dead(), s.describe() + d);
             centipede::destroy(gs, c);
         }
@@ -1160,7 +1193,7 @@ namespace selftest {
                 daddy::destroy(gs, d);
             }
             using T = creature::tmpl;
-            for (auto const t : {T::loach, T::deer, T::vulture, T::king_vulture, T::miros_vulture, T::miros_bird})
+            for (auto const t : {T::loach, T::rot_loach, T::deer, T::vulture, T::king_vulture, T::miros_vulture, T::miros_bird})
                 all_big = all_big && creature::is_big_creature(t);
             bool const small_ok = !creature::is_big_creature(T::slugcat) && !creature::is_big_creature(T::pink_lizard);
             r.check("long legs and the big creatures are big", all_big && small_ok, bad);
@@ -1839,6 +1872,8 @@ namespace selftest {
         {
             // a rock thrown at a wall throws sparks
             sim s(gs, flat, feet_at(10, 1));
+            // (the sparks come from the hit's sound: room in the queue)
+            gs.sounds.clear();
             gs.particles.clear();
             auto const rock = items::create_rock(gs, flat, feet_at(35, 3));
             gs.world.body_chunk_set_vel(items::chunk(gs, rock), vec2{20.f, 0.f});
@@ -2321,7 +2356,7 @@ namespace selftest {
             auto const open = make_room(st, rgn, box(40, 20, [](int32_t x, int32_t y) { return y == 1 || (y > 12 && x > 25) ? '#' : ' '; }));
             // (a room with nothing over its floor but the room's top border)
             for (int32_t x = 1; x < 39; ++x)
-                st.world.tile_set_terrain(dcon::tile_id{dcon::tile_id::value_base_t(st.world.room_get_first_tile(open).id.index() + 19 * 40 + x)}, world::terrain::air);
+                st.world.tile_get_bits(dcon::tile_id{dcon::tile_id::value_base_t(st.world.room_get_first_tile(open).id.index() + 19 * 40 + x)}).set_terrain(world::terrain::air);
             auto const shelter = make_room(st, rgn, box(20, 10, [](int32_t, int32_t) { return ' '; }));
             w.room_set_is_shelter(shelter, true);
             st.spawn_dens = false;
@@ -2469,6 +2504,33 @@ namespace selftest {
             std::snprintf(d, sizeof(d), " hunted=%d bit=%d killed=%d carried=%d in_den=%d eaten=%d", int(hunted), int(bit), int(killed), int(carried),
                 int(home), int(!w.creature_is_valid(c)));
             r.check("lizard kills, takes prey home", hunted && bit && killed && carried && home, d);
+        }
+        {
+            // a dead slugcat is food (not vanilla, DIVERGENCES): a centipede
+            // (whose tracker used to drop every corpse) grabs it, takes it
+            // into its den and it is eaten
+            auto [st_ptr, rgn] = fight_world("corpse_eaten");
+            auto& st = *st_ptr;
+            auto& w = st.world;
+            auto const room = make_room(st, rgn, pipe_room(34, 0, [](int32_t, int32_t y) { return y > 5 ? '#' : ' '; }));
+            simulation::populate(st);
+            rain::new_cycle(st, rgn);
+            rw::rng rng{0xC0A5u};
+            auto const p = npc::create(st, room, feet_at(8, 2), rng, {}, player::slugcat_name::white);
+            player::die(st, p);
+            auto const c = spawn(st, room, 30, 2, creature::type::centipede, uint8_t(centipede::variant::centipede), 0.8f);
+            dens::set_home(st, c, room, 0);
+            bool noticed = false, grabbed = false, eaten = false;
+            for (uint32_t t = 0; t < 4000 && !eaten; ++t) {
+                tick_world(st, 1);
+                auto const pc = player::creature_of(st, p);
+                noticed = noticed || (w.creature_is_valid(c) && tracker::find(tracker::of(st, c), pc));
+                grabbed = grabbed || (w.creature_is_valid(c) && (creature::grasped(w, c, 0) == pc || creature::grasped(w, c, 1) == pc));
+                eaten = w.player_get_eaten(p) != 0;
+            }
+            char d[96];
+            std::snprintf(d, sizeof(d), " noticed=%d grabbed=%d eaten=%d", int(noticed), int(grabbed), int(eaten));
+            r.check("dead slugcat eaten by a centipede", noticed && grabbed && eaten, d);
         }
         {
             // two pink lizards in one room: rivals (AgressiveRival), they

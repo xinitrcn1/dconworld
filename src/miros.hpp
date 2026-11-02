@@ -1,6 +1,7 @@
 #pragma once
 
-// Miros birds (MirosBird, a simpler MirosBirdAI, no flocks): a tall body
+// Miros birds (MirosBird, a simpler MirosBirdAI; the flock's raids are
+// offscreen.hpp's): a tall body
 // walking on two long legs, a long neck and a beak that snaps at what it
 // eats. See miros.cpp.
 
@@ -33,6 +34,10 @@ namespace miros {
     void died(sys::game_state& state, dcon::creature_id c);
     // out of a pipe in `room` at `at`
     void place_in_room(sys::game_state& state, dcon::creature_id c, dcon::room_id room, rw::vec2 at);
+    // ShortcutHandler.FlyingCreatureArrivedInRealizedRoom for a bird living
+    // off screen (offscreen.hpp): in at the side exit whose floor tile is
+    // `floor`, on the room's `side` edge (-1 left)
+    void walk_in(sys::game_state& state, dcon::creature_id c, dcon::room_id room, rw::ivec2 floor, int32_t side);
     // a line for the log
     std::string describe(sys::game_state const& state, dcon::creature_id c);
     // where the tests' spawns may put one (--fuzz, --bench)

@@ -50,3 +50,15 @@ bench's runs). They are built in `simulation::populate`, where scenario
 objects come in. The game populates once before its first tick; the
 selftests add rooms between scenarios, always followed by a `populate`
 (every tick starts with one), never inside a tick.
+
+## Object counts (dcon_generated.txt `size{}`)
+
+Fixed capacities that the world files can approach:
+
+- `creature`: 32000 alive at once, the slugcats included (raised from 16384
+  for the coalescipedes, ~1500 from the world files, and the batflies; kept
+  under 32767 so `creature_id` stays 16 bits and the payloads that hold one fit).
+- `spider_data` 8192, `batfly_data` 8192 (flies alive at once, all regions),
+  `bat_hive` 4096 hives with 131072 hive tiles, `big_spider_data` 2048 (about
+  5 KB each, the hair), `dart_maggot_data` 4096, `drill_crab_data` 4096,
+  `stowaway_data` 1024.

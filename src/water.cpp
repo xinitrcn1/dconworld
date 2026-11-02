@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "water.hpp"
+#include "ve_utils.hpp"
 #include "particles.hpp"
 #include "physics.hpp"
 
@@ -202,16 +203,25 @@ namespace water {
 
     void disturb(sys::game_state& state, dcon::room_id room, float x, float strength, float width) {
         surface_t* s = find(state, room);
-        if (s == nullptr || width <= 0.f)
+        // (off screen the surface stands still: nothing to disturb)
+        if (s == nullptr || width <= 0.f || !state.viewed(room))
             return;
         int32_t const c = int32_t((x - s->x0) / s->spacing);
         int32_t const r = int32_t(std::ceil(width / s->spacing));
-        for (int32_t i = std::max(0, c - r); i <= std::min(int32_t(s->nx) - 1, c + r); ++i) {
+        int32_t const lo = std::max(0, c - r), hi = std::min(int32_t(s->nx) - 1, c + r);
+        if (hi < lo)
+            return;
+        // the falloff over the columns at once (ve::exp), then the pushes
+        static thread_local std::vector<float> fall;
+        fall.resize(size_t(hi - lo + 1));
+        for (int32_t i = lo; i <= hi; ++i) {
             float const d = (s->x0 + float(i) * s->spacing - x) / width;
-            float const fall = std::exp(-d * d * 2.5f);
-            for (uint32_t z = 0; z < 3; ++z)
-                s->v[at(*s, uint32_t(i), z)] -= strength * fall * (1.f - 0.3f * float(z)) * 0.35f;
+            fall[size_t(i - lo)] = -d * d * 2.5f;
         }
+        ve::transform(fall.data(), fall.size(), [](ve::fp_vector v) { return ve::exp(v); });
+        for (int32_t i = lo; i <= hi; ++i)
+            for (uint32_t z = 0; z < 3; ++z)
+                s->v[at(*s, uint32_t(i), z)] -= strength * fall[size_t(i - lo)] * (1.f - 0.3f * float(z)) * 0.35f;
     }
 
     void update_room(sys::game_state& state, room_view const& room) {
@@ -240,6 +250,11 @@ namespace water {
         r.pos = vec2{0.f, s->level - 30.f};
         r.rect_max = vec2{room.pixel_width(), s->level - 10.f};
         state.play_loop(r);
+        // the surface is cosmetic (drawing and particles read it, the
+        // simulation doesn't): it only moves while a camera looks at the room
+        // (docs/DIVERGENCES.md); off screen it waits where it was
+        if (!state.viewed(room.id))
+            return;
         s->time += 1.f;
         s->last_h = s->h;
         step(*s);

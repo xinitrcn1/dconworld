@@ -177,6 +177,20 @@ namespace sound {
         tube_worm_detach_tongue_terrain,
         tube_worm_detatch_tongue_creature,
         tube_worm_inch_along_tongue_loop,
+        // batflies
+        bat_detatch_from_chain,
+        bat_startled,
+        bat_attatch_to_chain,
+        bat_dive_into_grass,
+        bat_afraid_flying_sounds,
+        bat_idle_flying_sounds,
+        fly_wing_flap,
+        bat_emerge_from_grass,
+        fly_caught,
+        fly_caught_dead,
+        slugcat_bite_fly,
+        slugcat_final_bite_fly,
+        bat_hover_fly_loop,
         count
     };
     char const* to_string(sound_id id) noexcept;

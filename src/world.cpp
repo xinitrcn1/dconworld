@@ -12,6 +12,7 @@
 #include <tbb/parallel_for.h>
 
 #include "world.hpp"
+#include "curved_slope.hpp"
 #include "parser_defs_generated.hpp"
 #include "reports.hpp"
 #include "text.hpp"
@@ -114,10 +115,7 @@ namespace world {
         v.width = dc.room_get_width(rid);
         v.height = dc.room_get_height(rid);
         auto const first = dc.room_get_first_tile(rid).id;
-        v.terrains = &dc.tile_get_terrain(first);
-        v.flags = &dc.tile_get_flags(first);
-        v.shortcuts = &dc.tile_get_shortcut(first);
-        v.waters = &dc.tile_get_water(first);
+        v.tiles = &dc.tile_get_bits(first);
         v.default_water_level = dc.room_get_water_level(rid);
         v.water = v.default_water_level != -1;
         if (v.water)
@@ -217,6 +215,13 @@ namespace world {
             uint8_t type = 0;
             int16_t seed = 0;
         };
+        // CurvedSlope / SuperSlope / LocalTerrain: built with the settings
+        // resolved (LocalTerrain needs TerrainDepth)
+        struct parsed_slope {
+            curved_slope::kind kind = curved_slope::kind::curved;
+            rw::vec2 pos{0.f, 0.f};
+            std::string data;
+        };
         struct parsed_thing {
             thing_kind kind = thing_kind::dangle_fruit;
             rw::vec2 pos{0.f, 0.f};
@@ -253,10 +258,7 @@ namespace world {
             std::vector<parsed_item> items;
             std::vector<parsed_node> nodes;
             std::vector<node_connectivity> connectivity; // nodes * templates * nodes
-            std::vector<terrain> terrains;
-            std::vector<uint8_t> flags;
-            std::vector<uint8_t> shortcut_marks;
-            std::vector<uint8_t> waters;
+            std::vector<packed_tile> tiles;
             std::vector<rw::ivec2> exits;
             std::vector<parsed_shortcut> shortcuts;
 
@@ -273,16 +275,17 @@ namespace world {
             float day_night = 0.f;
             float water_lights = 0.f;
             float surface_sandstorm = 0.f;
+            float zero_g = 0.f;
+            float broken_zero_g = 0.f;
             std::vector<parsed_thing> things;
+            std::vector<parsed_slope> slopes;
 
             room_view view() const noexcept {
                 room_view v;
                 v.width = width;
                 v.height = height;
-                v.terrains = terrains.data();
-                v.flags = flags.data();
-                v.shortcuts = shortcut_marks.data();
-                v.waters = waters.data();
+                v.tiles = tiles.data();
+                v.default_water_level = water_level;
                 return v;
             }
         };
@@ -508,15 +511,8 @@ namespace world {
             int32_t const w = r.width;
             int32_t const h = r.height;
             size_t const total = size_t(w) * size_t(h);
-            r.terrains.assign(total, terrain::air);
-            r.flags.assign(total, 0);
-            r.shortcut_marks.assign(total, 0);
-            r.waters.assign(total, 0);
-            // every tile starts as air with the default water level applied
-            for (int32_t y = 0; y < h; ++y) {
-                uint8_t const wv = uint8_t((y <= r.water_level ? 1 : 0) + (y == r.water_level ? 1 : 0));
-                std::memset(r.waters.data() + size_t(y) * size_t(w), wv, size_t(w));
-            }
+            // every tile starts as air (the water follows from the level)
+            r.tiles.assign(total, packed_tile{});
 
             // Column major, starting at the top left; every entry is terminated
             // by '|' (vanilla ignores whatever follows the last one)
@@ -539,7 +535,7 @@ namespace world {
                     r.err.add_error("bad terrain value at tile " + std::to_string(x) + "," + std::to_string(y));
                     value = 0;
                 }
-                r.terrains[i] = terrain(value);
+                r.tiles[i].set_terrain(terrain(value));
                 uint8_t flags = 0;
                 uint8_t shortcut = 0;
                 while (e.eat(',')) {
@@ -563,8 +559,8 @@ namespace world {
                     default: break;                                  // ignored by vanilla too
                     }
                 }
-                r.flags[i] = flags;
-                r.shortcut_marks[i] = shortcut;
+                r.tiles[i].flags = flags;
+                r.tiles[i].set_shortcut(shortcut);
                 ++parsed;
                 if (--y < 0) {
                     ++x;
@@ -697,13 +693,10 @@ namespace world {
 
             // tiles: one contiguous block, filled straight into the property arrays
             uint32_t const first = dc.tile_size();
-            uint32_t const count = uint32_t(r.terrains.size());
+            uint32_t const count = uint32_t(r.tiles.size());
             dc.tile_resize(first + count);
             dcon::tile_id const first_id{dcon::tile_id::value_base_t(first)};
-            std::memcpy(&dc.tile_get_terrain(first_id), r.terrains.data(), count * sizeof(terrain));
-            std::memcpy(&dc.tile_get_flags(first_id), r.flags.data(), count);
-            std::memcpy(&dc.tile_get_shortcut(first_id), r.shortcut_marks.data(), count);
-            std::memcpy(&dc.tile_get_water(first_id), r.waters.data(), count);
+            std::memcpy(&dc.tile_get_bits(first_id), r.tiles.data(), count * sizeof(packed_tile));
             dc.room_set_first_tile(rid, first_id);
 
             for (auto const c : r.cameras) {
@@ -777,6 +770,8 @@ namespace world {
                     dc.placed_thing_set_name(tid, s.add_text(o.name));
                 dc.try_create_thing_location(tid, rid);
             }
+            for (auto const& o : r.slopes)
+                curved_slope::add(dc, rid, o.kind, o.pos, o.data, r.settings.terrain_depth.value_or(0.f));
             for (auto const& o : r.decals) {
                 auto const did = dc.create_decal_placed();
                 dc.decal_placed_set_pos(did, o.pos);
@@ -816,6 +811,8 @@ namespace world {
             dc.room_set_day_night(rid, r.day_night);
             dc.room_set_water_lights(rid, r.water_lights);
             dc.room_set_surface_sandstorm(rid, r.surface_sandstorm);
+            dc.room_set_zero_g(rid, r.zero_g);
+            dc.room_set_broken_zero_g(rid, r.broken_zero_g);
             for (auto const& o : r.warp_targets) {
                 auto const tid = dc.create_warp_target();
                 dc.warp_target_set_pos(tid, o.pos);
@@ -1080,6 +1077,7 @@ namespace world {
             dc.region_set_corruption_effect_color(region, rw::vec3{props.corruption_effect_color.r, props.corruption_effect_color.g, props.corruption_effect_color.b});
             dc.region_set_corruption_eye_color(region, rw::vec3{props.corruption_eye_color.r, props.corruption_eye_color.g, props.corruption_eye_color.b});
             dc.region_set_albinos(region, props.albinos);
+            dc.region_set_mud_color(region, rw::vec3{props.mud_color.r, props.mud_color.g, props.mud_color.b});
             for (auto const& tname : props.room_setting_templates) {
                 auto const lname = text::to_lowercase_native(tname);
                 auto const tf = dir.get_single_file(name + "_settingstemplate_" + lname + ".txt");
@@ -1205,6 +1203,10 @@ namespace world {
                     r.water_lights = amount;
                 else if (name == "SurfaceSandstorm")
                     r.surface_sandstorm = amount;
+                else if (name == "ZeroG")
+                    r.zero_g = amount;
+                else if (name == "BrokenZeroG")
+                    r.broken_zero_g = amount;
             }
         }
 
@@ -1283,6 +1285,11 @@ namespace world {
                     r.warps.push_back(std::move(w));
                     continue;
                 }
+                // CurvedSlope / SuperSlope / LocalTerrain (curved_slope.hpp)
+                if (auto const k = curved_slope::kind_of(parts[0]); k && parts.size() > 3) {
+                    r.slopes.push_back({*k, rw::vec2{num(parts[1]), num(parts[2])}, std::string{parts[3]}});
+                    continue;
+                }
                 {
                     // food, weapons, pearls, plants, mud and terrain handles
                     static constexpr std::pair<std::string_view, thing_kind> kinds[] = {
@@ -1297,6 +1304,7 @@ namespace world {
                         {"ReliableSpear", thing_kind::reliable_spear}, {"MultiplayerItem", thing_kind::multiplayer_item},
                         {"PuffBall", thing_kind::puff_ball},
                         {"SkyWhalePathfinding", thing_kind::sky_whale_node},
+                        {"NoLeviathanStrandingZone", thing_kind::leviathan_zone},
                     };
                     auto const it = std::find_if(std::begin(kinds), std::end(kinds), [&](auto const& k) { return k.first == parts[0]; });
                     if (it != std::end(kinds)) {
@@ -1522,6 +1530,8 @@ namespace world {
                             dc.room_set_is_shelter(rid, true);
                         else if (parts[i] == "GATE")
                             dc.room_set_is_gate(rid, true);
+                        else if (parts[i] == "SWARMROOM")
+                            dc.room_set_is_swarm_room(rid, true);
                     }
                     // the room's exits, in exitAndDenIndex order
                     std::vector<dcon::room_exit_id> exits;

@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "physics.hpp"
+#include "curved_slope.hpp"
 #include "terrain.hpp"
 
 namespace physics {
@@ -116,6 +117,9 @@ namespace physics {
             return true;
         if (t == terrain::floor && ry < 0 && !state.world.body_chunk_get_go_through_floors(c))
             return true;
+        // PhysicalObject.IsTileSolid: the room's curved slopes
+        if (curved_slope::is_tile_solid(state, room.id, state.world.body_chunk_get_pos(c), state.world.body_chunk_get_rad(c), rx, ry))
+            return true;
         return false;
     }
 
@@ -186,7 +190,8 @@ namespace physics {
         };
     }
 
-    // BodyChunk.CheckVerticalCollision (TerrainManager/sand terrain not ported)
+    // BodyChunk.CheckVerticalCollision, the curved slopes' TerrainManager
+    // included (the Watcher's sand is terrain.cpp's own)
     static void check_vertical_collision(chunk_ref& ch, room_view const& room, impact_sink const& impact) {
         auto& state = ch.state;
         float const tr = terrain_rad(state, ch.c);
@@ -197,6 +202,9 @@ namespace physics {
         ivec2 const tile_pos = room_view::get_tile_position(ch.last_pos);
         bool const last_in_solid = room.get_tile(ch.last_pos).t == terrain::solid;
         int32_t num = 0;
+        // TerrainManager: out of the room's curved slopes first (vanilla's `flag`)
+        vec2 curve_normal{0.f, 0.f};
+        bool on_curve = curved_slope::snap_chunk(state, room.id, ch.pos, tr, curve_normal);
         if (ch.pos.y > ch.last_pos.y) {
             int32_t const y_to = room_view::get_tile_position(vec2{0.f, ch.pos.y + tr + 0.01f}).y;
             int32_t const y_from = room_view::get_tile_position(vec2{0.f, ch.last_pos.y + tr}).y;
@@ -211,6 +219,7 @@ namespace physics {
                         if (ch.vel.y > threshold)
                             impact(state, ch.c, ivec2{0, 1}, std::fabs(ch.vel.y), ch.last_contact.y < 1);
                         ch.contact.y = 1;
+                        on_curve = false;
                         ch.vel.y = -std::fabs(ch.vel.y) * bounce;
                         if (std::fabs(ch.vel.y) < 1.f + 9.f * (1.f - bounce))
                             ch.vel.y = 0.f;
@@ -235,6 +244,7 @@ namespace physics {
                         if (ch.vel.y < -threshold)
                             impact(state, ch.c, ivec2{0, -1}, std::fabs(ch.vel.y), ch.last_contact.y > -1);
                         ch.contact.y = -1;
+                        on_curve = false;
                         ch.vel.y = std::fabs(ch.vel.y) * bounce;
                         if (ch.vel.y < gravity(state, ch.o, room) || ch.vel.y < 1.f + 9.f * (1.f - bounce))
                             ch.vel.y = 0.f;
@@ -245,6 +255,13 @@ namespace physics {
                         hit = true;
                 }
             }
+        }
+        if (on_curve) {
+            state.world.body_chunk_set_terrain_curve_normal(ch.c, curve_normal);
+            float const speed = curved_slope::impact_speed(curve_normal, ch.vel);
+            if (speed > threshold)
+                impact(state, ch.c, ivec2{0, -1}, speed, ch.last_contact.y > -1);
+            curved_slope::respond(curve_normal, ch.vel, ch.contact, bounce, state.world.physical_object_get_surface_friction(ch.o), gravity(state, ch.o, room));
         }
     }
 
@@ -410,7 +427,10 @@ namespace physics {
 
         state.world.body_chunk_set_last_last_pos(c, ch.last_pos);
         ch.last_pos = ch.pos;
-        ch.pos += ch.vel;
+        // on a curve last tick only |normal.y| of the x speed carries (BodyChunk.Update)
+        vec2& curve_normal = state.world.body_chunk_get_terrain_curve_normal(c);
+        ch.pos = curved_slope::move(ch.pos, ch.vel, curve_normal);
+        curve_normal = vec2{0.f, 0.f};
 
         state.world.body_chunk_set_on_slope(c, 0);
         state.world.body_chunk_set_slope_rad(c, terrain_rad(state, c));

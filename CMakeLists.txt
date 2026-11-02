@@ -68,6 +68,7 @@ set(SHADERS
     warp.vert warp_tear.frag warp_screen.frag water.frag
     rope.vert rope.frag
     circle.vert circle.frag
+    sprite.vert sprite.frag
 )
 # #included by the shaders above
 set(SHADER_INCLUDES "${SHADER_DIR}/warp_common.glsl" "${SHADER_DIR}/level_common.glsl")
@@ -99,6 +100,7 @@ add_library(rwcpp_core OBJECT
     src/player.cpp
     src/player_graphics.cpp
     src/render.cpp
+    src/hud.cpp
     src/gpu.cpp
     src/shortcuts.cpp
     src/items.cpp
@@ -108,8 +110,11 @@ add_library(rwcpp_core OBJECT
     src/piggyback.cpp
     src/simulation.cpp
     src/rain.cpp
+    src/gravity.cpp
     src/dens.cpp
     src/spawns.cpp
+    src/offscreen.cpp
+    src/borders.cpp
     src/pathing.cpp
     src/body_parts.cpp
     src/creature.cpp
@@ -162,6 +167,29 @@ add_library(rwcpp_core OBJECT
     src/loach_graphics.cpp
     src/moth_grub.cpp
     src/moth_grub_graphics.cpp
+    src/big_eel.cpp
+    src/big_eel_graphics.cpp
+    src/inspector.cpp
+    src/inspector_graphics.cpp
+    src/oracle.cpp
+    src/oracle_graphics.cpp
+    src/moth.cpp
+    src/moth_graphics.cpp
+    src/frog.cpp
+    src/frog_graphics.cpp
+    src/batfly.cpp
+    src/batfly_graphics.cpp
+    src/drill_crab.cpp
+    src/drill_crab_graphics.cpp
+    src/stowaway.cpp
+    src/stowaway_graphics.cpp
+    src/big_spider.cpp
+    src/big_spider_graphics.cpp
+    src/dart_maggot.cpp
+    src/spider.cpp
+    src/spider_graphics.cpp
+    src/angler.cpp
+    src/angler_graphics.cpp
     src/overseer.cpp
     src/overseer_graphics.cpp
     src/snail.cpp
@@ -182,6 +210,7 @@ add_library(rwcpp_core OBJECT
     src/particles.cpp
     src/explosions.cpp
     src/terrain.cpp
+    src/curved_slope.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

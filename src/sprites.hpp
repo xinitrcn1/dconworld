@@ -57,6 +57,14 @@ namespace sprites {
         bool is_circle = false;
         float circle_jag = 0.f;
         uint32_t circle_seed = 0;
+        // with is_quad: no element, the four corners in their colours only
+        // (two TriangleMesh triangles 0 1 2 and 0 2 3; a single triangle has
+        // corner 3 = corner 2)
+        bool untextured = false;
+        // the Watcher's halo (WeaverGlow): spr.pos its centre, color its
+        // colour, halo[0] its strength, halo[1], halo[2] the flicker (n11, n12)
+        bool is_halo = false;
+        float halo[3] = {0.f, 0.f, 0.f};
     };
     // a strip's vertex: its position and colour with alpha
     struct strip_vertex {
@@ -130,6 +138,24 @@ namespace sprites {
         }
         out.push_back(c);
     }
+    // two untextured TriangleMesh triangles (0 1 2, 0 2 3) as one quad,
+    // each corner in its colour (pass corner 3 = corner 2 for one triangle)
+    inline void add_flat_quad(std::vector<draw_cmd>& out, rw::vec2 const (&corners)[4], rw::vec4 const (&colors)[4]) {
+        draw_cmd c;
+        c.is_quad = true;
+        c.untextured = true;
+        c.vertex_colors = true;
+        for (int i = 0; i < 4; ++i) {
+            c.quad[i] = corners[i];
+            c.vcol[i] = colors[i];
+        }
+        out.push_back(c);
+    }
+    inline void add_flat_quad(std::vector<draw_cmd>& out, rw::vec2 const (&corners)[4], rw::vec3 color) {
+        rw::vec4 const c{color.x, color.y, color.z, 1.f};
+        add_flat_quad(out, corners, {c, c, c, c});
+    }
+
     // TriangleMesh.MakeLongMesh: triangles (k, k + 1, k + 2) over the vertices
     inline void long_mesh(std::vector<draw_cmd>& out, rw::vec2 const* v, size_t n, rw::vec3 color) {
         for (size_t k = 0; k + 2 < n; ++k) {

@@ -561,6 +561,9 @@ namespace rain {
                 vel += custom::deg_to_vec(mathf::lerp(90.f, 270.f, rng.value())) * rng.value() * 5.f * inside;
             };
             rooms::for_each_creature(state, room.id, [&](dcon::creature_id cr) {
+                // (an iterator is no creature: the rain doesn't stun or kill it)
+                if (creature::type_of(w, cr) == creature::type::oracle)
+                    return;
                 auto const p = creature::player_of(state, cr);
                 // (a slugcat in a pipe or eaten is out of the rain)
                 if (p && (w.creature_get_away(cr) != 0 || w.player_get_eaten(p)))

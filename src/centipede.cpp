@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "centipede.hpp"
+#include "ve_utils.hpp"
 #include "dens.hpp"
 #include "rooms.hpp"
 #include "centipede_graphics.hpp"
@@ -187,7 +188,6 @@ namespace centipede {
                 p.see_around_corners = 10;
                 p.frames_to_remember = -1;
                 p.ghost_dismissal_range = 20;
-                p.discard_dead_always = true;
                 p.prey_max = 5;
                 p.persistance_bias = 1.f;
                 p.sure_to_get = 5.f;
@@ -211,8 +211,10 @@ namespace centipede {
             auto const st = creature::static_relationship(state, c, r.who);
             if (st.type == creature::rel::ignores || !creature::live(state, r.who))
                 return st;
+            // a corpse is food, whatever its size (not vanilla: dead prey
+            // isn't ignored, DIVERGENCES)
             if (creature::dead(state, r.who))
-                return relationship{};
+                return st.type == creature::rel::eats ? relationship{creature::rel::eats, st.intensity} : relationship{};
             float const mine = total_mass(state, c);
             float const theirs = creature::mass_of(state, r.who);
             if (st.type != creature::rel::eats || theirs >= mine)
@@ -252,6 +254,16 @@ namespace centipede {
             && (!r || float(r->state) > mathf::lerp(210.f, 30.f, pl(state, c).size) * w.creature_get_health(c)))
                 return true;
             if (r)
+                return r->rel.type == creature::rel::eats;
+            return creature::static_relationship(state, c, t).type == creature::rel::eats;
+        }
+
+        // not vanilla (DIVERGENCES): a corpse it eats is grabbed and taken
+        // into its den, where it is eaten (dens.hpp)
+        bool want_to_carry(sys::game_state const& state, dcon::creature_id c, dcon::creature_id t) {
+            if (!creature::live(state, t) || !creature::dead(state, t))
+                return false;
+            if (auto const* r = tracker::find(state, c, t))
                 return r->rel.type == creature::rel::eats;
             return creature::static_relationship(state, c, t).type == creature::rel::eats;
         }
@@ -392,7 +404,7 @@ namespace centipede {
                 release(state, c, g);
                 return;
             }
-            if (rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(g))).value() < 0.025f && (!want_to_shock(state, c, p) || !consious(state, c) || grasped(state, c, 1 - g))) {
+            if (rw::random(state.seed, state.tick, rw::ids(uint32_t(c.value), uint32_t(g))).value() < 0.025f && ((!want_to_shock(state, c, p) && !want_to_carry(state, c, p)) || !consious(state, c) || grasped(state, c, 1 - g))) {
                 release(state, c, g);
                 return;
             }
@@ -593,6 +605,12 @@ namespace centipede {
             }
             if (utility < 0.1f || (behavior == centipede_behavior::hunt && !prey))
                 behavior = centipede_behavior::idle;
+            // carrying a corpse it eats: home with it, unless fleeing (not
+            // vanilla, DIVERGENCES)
+            if (behavior != centipede_behavior::flee)
+                for (int g = 0; g < 2; ++g)
+                    if (auto const p = grasped(state, c, g); p && want_to_carry(state, c, p))
+                        behavior = centipede_behavior::escape_rain;
             w.creature_set_current_utility(c, utility);
             w.creature_set_behavior(c, uint8_t(behavior));
             // (no realized migration in CentipedeAI: the abstract roll, now and then)
@@ -760,11 +778,18 @@ namespace centipede {
             float const started = w.centipede_data_get_wings_started_up(d);
             bool const dir = pl(state, c).body_direction;
             bool const idling = aqua && world::centipede_behavior(w.creature_get_behavior(c)) == centipede_behavior::idle;
+            // every segment's wing beat (ve::sin over them all)
+            static thread_local std::vector<float> beat;
+            beat.resize(n);
             for (uint32_t i = 0; i < n; ++i) {
                 float t = float(i) / float(n - 1);
                 if (!dir)
                     t = 1.f - t;
-                float const s = std::sin((wave - t * mathf::lerp(12.f, 28.f, size)) * mathf::pi * 0.11f);
+                beat[i] = (wave - t * mathf::lerp(12.f, 28.f, size)) * mathf::pi * 0.11f;
+            }
+            ve::transform(beat.data(), n, [](ve::fp_vector v) { return ve::sin(v); });
+            for (uint32_t i = 0; i < n; ++i) {
+                float const s = beat[i];
                 auto const k = chunk(state, c, i);
                 vec2& vel = w.body_chunk_get_vel(k);
                 vel *= 0.9f;
@@ -1329,7 +1354,7 @@ namespace centipede {
         tracker::see(state, c, room, p, make_hooks(hx));
         if (creature::type_of(w, p) != creature::type::centipede)
             annoying_collision(state, c, p);
-        if (!want_to_shock(state, c, p))
+        if (!want_to_shock(state, c, p) && !want_to_carry(state, c, p))
             return;
         for (int g = 0; g < 2; ++g) {
             if (i != (g == 0 ? 0 : n - 1) || grasped(state, c, g))

@@ -50,6 +50,21 @@ namespace player {
     // travelling a pipe (its vessel; the body stays in the room it left)
     inline bool in_shortcut(sys::game_state const& state, dcon::player_id p) noexcept { return state.world.creature_get_away(creature_of(state, p)) != 0; }
 
+    // Food. SlugcatStats.SlugcatFoodMeter: the pips of the meter and how
+    // many hibernating takes (foodToHibernate)
+    int32_t max_food_pips(slugcat_name n) noexcept;
+    int32_t hibernate_food_pips(slugcat_name n) noexcept;
+    // what it has eaten in quarter pips (foodInStomach * 4 + quarterFoodPoints)
+    int32_t food_quarters(sys::game_state const& state, dcon::player_id p) noexcept;
+    // Player.AddFood / AddQuarterFood in quarter pips (4: one pip; negative
+    // takes food away), kept within [0, the meter]. For any slugcat, NPCs too
+    void add_food(sys::game_state& state, dcon::player_id p, int32_t quarter_pips);
+    // Hunger (not vanilla): every slugcat loses a quarter pip every
+    // hunger_interval ticks, its own 3-4 minutes rolled from its creature;
+    // hunger_update runs in Player.Update
+    uint32_t hunger_interval(sys::game_state const& state, dcon::player_id p) noexcept;
+    void hunger_update(sys::game_state& state, dcon::player_id p);
+
     dcon::physical_object_id body(sys::game_state const& state, dcon::player_id p) noexcept;
     // bodyChunks[i] of the player's body
     dcon::body_chunk_id body_chunk(sys::game_state const& state, dcon::player_id p, uint32_t i) noexcept;

@@ -38,6 +38,16 @@
 #include "lantern_mouse.hpp"
 #include "loach.hpp"
 #include "moth_grub.hpp"
+#include "angler.hpp"
+#include "batfly.hpp"
+#include "big_spider.hpp"
+#include "drill_crab.hpp"
+#include "frog.hpp"
+#include "moth.hpp"
+#include "inspector.hpp"
+#include "big_eel.hpp"
+#include "spider.hpp"
+#include "stowaway.hpp"
 #include "overseer.hpp"
 #include "snail.hpp"
 #include "sky_whale.hpp"
@@ -203,6 +213,43 @@ namespace selftest {
                     break;
                 case creature::type::moth_grub:
                     ok = moth_grub::spawn_spot(room, tile);
+                    break;
+                case creature::type::angler:
+                    ok = angler::spawn_spot(room, tile);
+                    break;
+                case creature::type::spider:
+                    ok = spider::spawn_spot(room, tile);
+                    break;
+                case creature::type::big_spider:
+                    ok = big_spider::spawn_spot(room, tile);
+                    d.variety = uint8_t(rng.range(0, 3));
+                    break;
+                case creature::type::stowaway:
+                    ok = stowaway::spawn_spot(room, tile);
+                    break;
+                case creature::type::drill_crab:
+                    // (tower crabs need big rooms: the fuzz keeps to drill crabs)
+                    ok = drill_crab::spawn_spot(room, tile);
+                    d.variety = 0;
+                    break;
+                case creature::type::batfly:
+                    ok = batfly::spawn_spot(room, tile);
+                    break;
+                case creature::type::frog:
+                    ok = frog::spawn_spot(room, tile);
+                    break;
+                case creature::type::oracle:
+                    // (the tools never spawn oracles)
+                    break;
+                case creature::type::inspector:
+                    ok = inspector::spawn_spot(room, tile);
+                    break;
+                case creature::type::big_eel:
+                    ok = big_eel::spawn_spot(room, tile);
+                    break;
+                case creature::type::moth:
+                    ok = moth::spawn_spot(room, tile);
+                    d.variety = uint8_t(rng.range(0, 2));
                     break;
                 case creature::type::overseer:
                     ok = overseer::spawn_spot(room, tile);

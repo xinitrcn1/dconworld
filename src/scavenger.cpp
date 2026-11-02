@@ -9,6 +9,7 @@
 #include "dens.hpp"
 #include "items.hpp"
 #include "migrate.hpp"
+#include "offscreen.hpp"
 #include "pathing.hpp"
 #include "physics.hpp"
 #include "rooms.hpp"
@@ -1381,7 +1382,8 @@ namespace scavenger {
                 num = 0.f;
             }
             float const travel = 0.08f + mathf::inverse_lerp(0.5f, 1.f, a.scared) * 0.2f;
-            if (num < travel && migrate::want_to(state, c)) {
+            // (one living off screen heading back to the den travels there)
+            if (num < travel && (migrate::want_to(state, c) || offscreen::heading_home(state, c))) {
                 b = behavior::travel;
                 num = travel;
             }
@@ -1438,8 +1440,11 @@ namespace scavenger {
                 }
                 hear_noises(state, c, room);
             }
-            // the abstract AI's roll for a trip to another room
-            if (rng.value() < 0.002f)
+            // the abstract AI's roll for a trip to another room (living off
+            // screen: ScavengerAbstractAI's squad destination and Migrate)
+            if (offscreen::homed(state, c))
+                offscreen::scavenger_tick(state, c, room, p.bravery * p.energy);
+            else if (rng.value() < 0.002f)
                 migrate::abstract_behavior(state, c, room);
             if (--a.arrange_inventory_counter < 0) {
                 bool const f = arrange_inventory(state, c);
@@ -1480,8 +1485,12 @@ namespace scavenger {
                 break;
             case behavior::travel:
                 a.run_speed_goal = 0.2f + p.energy * 0.6f + a.agitation * 0.2f;
-                if (auto const e = migrate::travel_tile(state, c, room))
+                if (offscreen::heading_home(state, c)) {
+                    if (auto const e = dens::home_tile(state, c, room))
+                        dest = *e;
+                } else if (auto const e = migrate::travel_tile(state, c, room)) {
                     dest = *e;
+                }
                 break;
             case behavior::attack:
                 a.run_speed_goal = 1.f;

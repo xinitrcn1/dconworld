@@ -648,6 +648,7 @@ int main(int argc, char* argv[]) {
                 else if (k == "puffball") t = world::item_type::puff_ball;
                 else if (k == "eggbugegg") t = world::item_type::egg_bug_egg;
                 else if (k == "fireegg") t = world::item_type::fire_egg;
+                else if (k == "dartmaggot") t = world::item_type::dart_maggot;
                 else if (k != "rock") std::fprintf(stderr, "unknown item %s, a rock instead\n", kind);
                 spawn_items.push_back({vec2{x, y}, t, pearl});
             }
@@ -1147,7 +1148,10 @@ int main(int argc, char* argv[]) {
                     SDL_GetMouseState(&mx, &my);
                     vec2 const at = render::screen_to_room(r, a.cam, mx, my);
                     items::create(gs, a.room, at, world::item_type(next));
-                    if (++next >= uint8_t(world::item_type::count))
+                    // (a dart maggot is only ever spat)
+                    if (++next == uint8_t(world::item_type::dart_maggot))
+                        ++next;
+                    if (next >= uint8_t(world::item_type::count))
                         next = uint8_t(world::item_type::rock);
                     break;
                 }

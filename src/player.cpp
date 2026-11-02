@@ -2,6 +2,7 @@
 #include <type_traits>
 
 #include "player.hpp"
+#include "curved_slope.hpp"
 #include "explosions.hpp"
 #include "piggyback.hpp"
 #include "rooms.hpp"
@@ -19,6 +20,7 @@
 #include "shortcuts.hpp"
 #include "tube_worm.hpp"
 #include "deer.hpp"
+#include "pathing.hpp"
 
 // Port notes
 // - Code is kept structurally close to Player.cs so it can be diffed against
@@ -358,7 +360,9 @@ namespace player {
             ivec2 last_contact(int i) const { return state.world.body_chunk_get_last_contact_point(c[i]); }
             int32_t on_slope(int i) const { return state.world.body_chunk_get_on_slope(c[i]); }
             // terrainCurveNormal is always zero without TerrainManager rooms
-            bool has_terrain_curve(int) const { return false; }
+            // BodyChunk.terrainCurveNormal != default
+            bool has_terrain_curve(int i) const { return state.world.body_chunk_get_terrain_curve_normal(c[i]) != vec2{0.f, 0.f}; }
+            vec2 terrain_curve_normal(int i) const { return state.world.body_chunk_get_terrain_curve_normal(c[i]); }
             float submersion(int i) const { return physics::submersion(state, room, c[i]); }
             float object_submersion() const { return physics::object_submersion(state, room, o); }
             bool solid(int i, int32_t x, int32_t y) const { return physics::is_tile_solid(state, room, c[i], x, y); }
@@ -663,6 +667,8 @@ namespace player {
         // eaten by the rot: destroyed in vanilla, nothing left to update
         if (p.eaten())
             return;
+        // hunger (not vanilla): a quarter pip less every 3-4 minutes
+        hunger_update(state, id);
 
         // aerobic level decay (exhaustion only applies to malnourished cats)
         p.exhausted() = false;
@@ -1152,7 +1158,7 @@ namespace player {
             }
         }
 
-        // Player.GravitateToOpening (used while swimming)
+        // Player.GravitateToOpening (swimming and in zero gravity)
         void gravitate_to_opening(ctx& x) {
             auto const& in = x.in(0);
             float const g = x.eff_gravity();
@@ -1287,6 +1293,11 @@ namespace player {
             } else if (x.in(0).y == -1 && x.in(1).y != -1) {
                 p.standing() = false;
             }
+            // gravity came back while holding a pole in zero gravity
+            if (x.eff_gravity() > 0.f && p.animation() == animation_index::zero_g_pole_grab) {
+                p.body_mode() = body_mode_index::climbing_on_beam;
+                p.animation() = x.tile(x.pos(0)).horizontal_beam() ? animation_index::hang_from_beam : animation_index::climb_on_beam;
+            }
             if (p.go_into_corridor_climb() > 2 && !p.corridor_drop()) {
                 p.body_mode() = body_mode_index::corridor_climb;
                 p.animation() = p.corridor_turn_dir().has_value() ? animation_index::corridor_turn : animation_index::none;
@@ -1322,6 +1333,13 @@ namespace player {
                     }
                 }
             }
+            // no gravity: the ZeroG body mode, swimming through the air or
+            // holding a pole (no Remix: in water too)
+            if (x.eff_gravity() == 0.f && p.body_mode() != body_mode_index::corridor_climb && p.animation() != animation_index::vine_grab) {
+                p.body_mode() = body_mode_index::zero_g;
+                if (p.animation() != animation_index::zero_g_swim && p.animation() != animation_index::zero_g_pole_grab)
+                    p.animation() = x.tile(x.pos(0)).horizontal_beam() || x.tile(x.pos(0)).vertical_beam() ? animation_index::zero_g_pole_grab : animation_index::zero_g_swim;
+            }
 
             // in a rain deer's antlers (Player.playerInAntlers, deer.cpp)
             if (deer::ridden(x.state, p.id))
@@ -1339,26 +1357,34 @@ namespace player {
                     p.animation() = animation_index::none;
             }
 
-            // grabbing a climbable vine (zero gravity vines aren't ported)
+            // grabbing a climbable vine
             if (p.vine_grab_delay() > 0)
                 --p.vine_grab_delay();
-            if (p.animation() != animation_index::vine_grab && p.vine_grab_delay() == 0 && x.eff_gravity() > 0.f
-            && (p.want_to_grab() > 0 || x.in(0).y > 0)) {
-                int32_t const n = custom::int_clamp(int32_t(rw::distance(x.last_pos(0), x.pos(0)) / 5.f), 1, 10);
-                for (int32_t l = 0; l < n; ++l) {
-                    vec2 const at = rw::lerp(x.last_pos(0), x.pos(0), n > 1 ? float(l) / float(n - 1) : 0.f);
-                    if (auto const vp = rot::vines::overlap(x.state, x.room.id, at, x.rad(0)); vp.has_value()) {
-                        // (a pole plant's stalk makes no sound of its own)
-                        if (!vp->mimic)
-                            x.sound(sound::sound_id::grab_corruption_tube);
-                        p.animation() = animation_index::vine_grab;
-                        x.state.world.player_set_vine(p.id, vp->vine);
-                        x.state.world.player_set_vine_mimic(p.id, vp->mimic);
-                        x.state.world.player_set_vine_whisker(p.id, vp->whisker);
-                        p.vine_float_pos() = vp->float_pos;
-                        p.want_to_grab() = 0;
-                        break;
+            if (p.animation() != animation_index::vine_grab && p.vine_grab_delay() == 0) {
+                auto const grab = [&](rot::vines::position const& vp) {
+                    // (a pole plant's stalk makes no sound of its own)
+                    if (!vp.mimic)
+                        x.sound(sound::sound_id::grab_corruption_tube);
+                    p.animation() = animation_index::vine_grab;
+                    x.state.world.player_set_vine(p.id, vp.vine);
+                    x.state.world.player_set_vine_mimic(p.id, vp.mimic);
+                    x.state.world.player_set_vine_whisker(p.id, vp.whisker);
+                    p.vine_float_pos() = vp.float_pos;
+                    p.want_to_grab() = 0;
+                };
+                if (x.eff_gravity() > 0.f && (p.want_to_grab() > 0 || x.in(0).y > 0)) {
+                    int32_t const n = custom::int_clamp(int32_t(rw::distance(x.last_pos(0), x.pos(0)) / 5.f), 1, 10);
+                    for (int32_t l = 0; l < n; ++l) {
+                        vec2 const at = rw::lerp(x.last_pos(0), x.pos(0), n > 1 ? float(l) / float(n - 1) : 0.f);
+                        if (auto const vp = rot::vines::overlap(x.state, x.room.id, at, x.rad(0)); vp.has_value()) {
+                            grab(*vp);
+                            break;
+                        }
                     }
+                } else if ((x.in(0).x != 0 || x.in(0).y != 0) && x.eff_gravity() == 0.f) {
+                    // in zero gravity: any direction held, where the body is
+                    if (auto const vp = rot::vines::overlap(x.state, x.room.id, x.pos(0), x.rad(0)); vp.has_value())
+                        grab(*vp);
                 }
             }
             if (p.animation() == animation_index::vine_grab
@@ -1805,10 +1831,15 @@ namespace player {
                 } else if (vertical) {
                     if (x.pos(0).y > x.pos(1).y) {
                         braced = x.solid(1, 0, -1);
-                    } else if (in.jmp && !x.in(1).jmp && x.pos(0).y < x.pos(1).y && in.y > 0) {
-                        p.corridor_turn_dir() = ivec2{0, 1};
-                        p.corridor_turn_counter() = 0;
-                        p.can_corridor_jump() = 0;
+                    } else {
+                        // head down in zero gravity: braced against the floor above
+                        if (g == 0.f)
+                            braced = x.solid(1, 0, 1);
+                        if (in.jmp && !x.in(1).jmp && x.pos(0).y < x.pos(1).y && in.y > 0) {
+                            p.corridor_turn_dir() = ivec2{0, 1};
+                            p.corridor_turn_counter() = 0;
+                            p.can_corridor_jump() = 0;
+                        }
                     }
                 } else if (horizontal) {
                     if (in.jmp && !x.in(1).jmp && in.x != 0 && (x.pos(0).x < x.pos(1).x) == (in.x > 0)) {
@@ -1824,7 +1855,35 @@ namespace player {
                 else if (p.can_corridor_jump() > 0)
                     --p.can_corridor_jump();
 
-                // corridor boosts (zero gravity variants not ported)
+                // corridor boosts. In zero gravity: pushing off the corridor's
+                // end the feet are braced against, else a weak push along it
+                // (the water drips and sounds aren't ported)
+                if (in.jmp && !x.in(1).jmp && p.slow_movement_stun() < 1 && g == 0.f) {
+                    vec2 push{0.f, 0.f};
+                    if (vertical && x.solid(1, 0, int32_t(mathf::sign(x.pos(1).y - x.pos(0).y))))
+                        push = vec2{0.f, -mathf::sign(x.pos(1).y - x.pos(0).y)};
+                    else if (horizontal && x.solid(1, int32_t(mathf::sign(x.pos(1).x - x.pos(0).x)), 0))
+                        push = vec2{-mathf::sign(x.pos(1).x - x.pos(0).x), 0.f};
+                    if (push.x != 0.f || push.y != 0.f) {
+                        x.pos(0) += push * 12.f;
+                        x.pos(1) += push * 12.f;
+                        x.vel(0) += push * 7.f;
+                        x.vel(1) += push * 7.f;
+                        p.horizontal_corridor_slide_counter() = 25;
+                        p.slow_movement_stun() = 5;
+                    } else {
+                        if (horizontal && in.x != 0 && in.y == 0)
+                            push.x = float(in.x);
+                        else if (vertical && in.y != 0 && in.x == 0)
+                            push.y = float(in.y);
+                        if (push.x != 0.f || push.y != 0.f) {
+                            x.vel(0) += push * 6.f;
+                            x.vel(1) += push * 4.f;
+                            p.horizontal_corridor_slide_counter() = 15;
+                            p.slow_movement_stun() = 15;
+                        }
+                    }
+                }
                 if (in.jmp && !x.in(1).jmp && p.slow_movement_stun() < 1 && g > 0.f && p.vertical_corridor_slide_counter() < 1) {
                     if (vertical && in.y > -1 && x.pos(0).y > x.pos(1).y) {
                         x.vel(0).y += 15.f;
@@ -1961,6 +2020,13 @@ namespace player {
             } else if (p.body_mode() == body_mode_index::swimming) {
                 gravitate_to_opening(x);
                 x.go_through_floors(true);
+            } else if (p.body_mode() == body_mode_index::zero_g) {
+                gravitate_to_opening(x);
+                x.go_through_floors(true);
+                if (x.eff_gravity() > 0.f) {
+                    p.body_mode() = body_mode_index::default_;
+                    p.animation() = animation_index::none;
+                }
             }
         }
     }
@@ -2578,7 +2644,14 @@ namespace player {
                     if (x.contact(n).y == 0)
                         x.vel(n).x *= x.surface_friction();
                 // slide into a one tile hole in the floor
-                if (in.y < 0 && in.down_diagonal == 0 && in.x == 0 && p.roll_counter() > 8 && x.tile_pos(x.pos(0)).y == x.tile_pos(x.pos(1)).y) {
+                // (with curved slopes in the room: both chunks well above them, on upward normals)
+                vec2 n0{0.f, 0.f}, n1{0.f, 0.f};
+                bool const curves = curved_slope::any(x.state, x.room.id);
+                float const h0 = curves ? x.pos(0).y - curved_slope::snap_to_terrain(x.state, x.room.id, x.pos(0), x.rad(0), n0).y : 0.f;
+                float const h1 = curves ? x.pos(1).y - curved_slope::snap_to_terrain(x.state, x.room.id, x.pos(1), x.rad(1), n1).y : 0.f;
+                bool const above = curves && h0 > 11.f && h1 > 12.f;
+                if (in.y < 0 && in.down_diagonal == 0 && in.x == 0 && p.roll_counter() > 8
+                    && (x.tile_pos(x.pos(0)).y == x.tile_pos(x.pos(1)).y || above) && (!curves || (above && n0.y > 0.f && n1.y > 0.f))) {
                     ivec2 const tp = x.tile_pos(x.pos(0));
                     if (!x.tile(tp + ivec2{0, -1}).solid() && x.tile(tp + ivec2{-1, -1}).solid() && x.tile(tp + ivec2{1, -1}).solid()) {
                         x.pos(0) = x.mid(x.pos(0)) + vec2{0.f, -20.f};
@@ -2715,6 +2788,186 @@ namespace player {
                 vec2 const perp = custom::perpendicular_vector(vines::vine_dir(x.state, vp));
                 ivec2 const gd = p.zero_g_pole_grab_dir();
                 x.vel(0) += perp * 0.2f * float(std::fabs(perp.x) > std::fabs(perp.y) ? gd.x : gd.y);
+                if (g == 0.f) {
+                    // in zero gravity the body lines up along the vine: the
+                    // feet pulled to the closer of the points a tile either side
+                    float const step = 20.f / vines::total_length(x.state, vp);
+                    vines::position before = vp, after = vp;
+                    before.float_pos = mathf::clamp(vp.float_pos - step, 0.f, 1.f);
+                    after.float_pos = mathf::clamp(vp.float_pos + step, 0.f, 1.f);
+                    vec2 const a = vines::on_vine_pos(x.state, before);
+                    vec2 const b = vines::on_vine_pos(x.state, after);
+                    vec2 const to = rw::distance(x.pos(1), a) < rw::distance(x.pos(1), b) ? a : b;
+                    vec2 const pull = rw::clamp_magnitude(to - x.pos(1), 5.f) / 20.f;
+                    x.vel(0) -= pull;
+                    x.vel(1) += pull;
+                }
+                break;
+            }
+            case animation_index::zero_g_swim: {
+                // floating through zero gravity (Coral circuits aren't
+                // ported: no circuit swim resistance or circuit jump meter;
+                // neither are Blink and the regain footing sound)
+                p.dynamic_run_speed()[0] = 0.f;
+                p.dynamic_run_speed()[1] = 0.f;
+                p.body_mode() = body_mode_index::zero_g;
+                p.standing() = false;
+                for (int i = 0; i < 2; ++i)
+                    if (x.contact(i) != ivec2{0, 0})
+                        p.can_jump() = 12;
+                // something to push against: a surface touched, a pole, or a
+                // solid tile within half a tile
+                bool grip = p.can_jump() > 0;
+                if (!grip && (x.tile(x.pos(0)).vertical_beam() || x.tile(x.pos(0)).horizontal_beam()))
+                    grip = true;
+                for (int k = 0; k < 9 && !grip; ++k)
+                    if (x.tile(x.pos(0) + rw::to_vec2(custom::eight_directions_and_zero[k]) * 10.f).solid())
+                        grip = true;
+                p.swim_cycle() += 4.f / custom::lerp_map(rw::magnitude(x.vel(0)), 0.f, 2.f, 120.f, 60.f);
+                ivec2 const iv = in.zero_g_gamepad_int_vec();
+                if (iv.x != 0 || iv.y != 0) {
+                    p.swim_cycle() += 1.f / mathf::lerp(2.f, 6.f, x.rng.value());
+                    vec2 const dir = swim_dir(x, false);
+                    if (grip)
+                        x.vel(0) += dir * 0.2f;
+                    else
+                        x.vel(0) += dir * custom::lerp_map(rw::distance(x.vel(0), x.vel(1)), 1.f, 4.f, 0.1f,
+                            custom::lerp_map(rw::magnitude(x.vel(0) + x.vel(1)), 4.f, 8.f, 0.15f, 0.1f));
+                    x.vel(1) -= dir * 0.1f;
+                    // brushing a pole slows (vanilla looks at the main
+                    // chunk's own tile, five times over)
+                    if (x.tile(x.pos(0)).any_beam()) {
+                        x.vel(0) *= 0.8f;
+                        x.vel(0) += dir * 0.2f;
+                    }
+                    if (p.can_jump() > 0 && p.want_to_jump() > 0) {
+                        // pushing off the closest surface to the direction held
+                        vec2 wall{0.f, 0.f};
+                        for (int k = 1; k >= 0 && wall.x == 0.f && wall.y == 0.f; --k) {
+                            ivec2 const tp = x.tile_pos(x.pos(k));
+                            for (auto const e : custom::eight_directions_diagonals_last) {
+                                vec2 const ev = rw::to_vec2(e);
+                                if (x.tile(tp - e).solid() && ((wall.x == 0.f && wall.y == 0.f) || rw::distance(dir, ev) < rw::distance(wall, dir)))
+                                    wall = ev;
+                            }
+                        }
+                        if (wall.x != 0.f || wall.y != 0.f) {
+                            wall = rw::normalized(wall);
+                            vec2 push = rw::lerp(dir, wall, 0.5f);
+                            push = rw::lerp(push, custom::dir_vec(x.pos(1), x.pos(0)), 0.25f);
+                            x.vel(0) = rw::clamp_magnitude(x.vel(0) + push * 5.4f, 5.4f);
+                            x.vel(1) = rw::clamp_magnitude(x.vel(1) + push * 5.f, 5.f);
+                            x.vel(0) += wall;
+                            x.sound(sound::sound_id::slugcat_normal_jump);
+                            p.can_jump() = 0;
+                            p.want_to_jump() = 0;
+                        }
+                    } else if ((iv.x != 0 || (iv.y != 0 && mathf::sign(float(iv.y)) != mathf::sign(x.vel(0).y)))
+                    && x.tile(x.pos(0)).horizontal_beam() && (in1.zero_g_gamepad_int_vec().x == 0 || !x.tile(x.last_pos(0)).horizontal_beam())) {
+                        // catching a horizontal pole floating by
+                        p.animation() = animation_index::zero_g_pole_grab;
+                        p.standing() = false;
+                    } else if ((iv.y != 0 || (iv.x != 0 && mathf::sign(float(iv.x)) != mathf::sign(x.vel(0).x)))
+                    && x.tile(x.pos(0)).vertical_beam() && (in1.zero_g_gamepad_int_vec().y == 0 || !x.tile(x.last_pos(0)).vertical_beam())) {
+                        p.animation() = animation_index::zero_g_pole_grab;
+                        p.standing() = true;
+                    }
+                }
+                if (p.swim_cycle() > 4.f)
+                    p.swim_cycle() = 0.f;
+                break;
+            }
+            case animation_index::zero_g_pole_grab: {
+                // holding a pole in zero gravity: along it, lined up with it
+                // (standing: a vertical one), the climbing sound not ported
+                p.dynamic_run_speed()[0] = 0.f;
+                p.dynamic_run_speed()[1] = 0.f;
+                p.body_mode() = body_mode_index::zero_g;
+                x.vel(0) *= custom::lerp_map(rw::magnitude(x.vel(0)), 2.f, 5.f, 0.7f, 0.3f);
+                bool off_pole = false;
+                ivec2 const iv = in.zero_g_gamepad_int_vec();
+                if (iv.x != 0)
+                    p.zero_g_pole_grab_dir().x = iv.x;
+                if (iv.y != 0)
+                    p.zero_g_pole_grab_dir().y = iv.y;
+                ivec2 const gd = p.zero_g_pole_grab_dir();
+                auto const here = x.tile(x.pos(0));
+                bool holding = true;
+                if (!here.horizontal_beam() && !here.vertical_beam()) {
+                    p.standing() = false;
+                    p.animation() = animation_index::zero_g_swim;
+                    holding = false;
+                } else if (!here.horizontal_beam() && here.vertical_beam()) {
+                    p.standing() = true;
+                } else if (here.horizontal_beam() && !here.vertical_beam()) {
+                    p.standing() = false;
+                } else if (iv.x != 0 && iv.y == 0) {
+                    p.standing() = false;
+                } else if (iv.x == 0 && iv.y != 0) {
+                    p.standing() = true;
+                }
+                if (!holding)
+                    break;
+                auto const narrow = [&](vec2 v) { return pathing::narrow_space(x.room, x.tile_pos(v)); };
+                if (p.standing()) {
+                    if (narrow(x.pos(0) + vec2{0.f, float(iv.y) * 20.f}))
+                        x.vel(0).x += (x.mid(x.pos(0)).x - x.pos(0).x) * 0.1f;
+                    else
+                        x.vel(0).x += (x.mid(x.pos(0)).x + 5.f * float(gd.x) - x.pos(0).x) * 0.1f;
+                    if (iv.y != 0) {
+                        if (x.tile(x.pos(0) + vec2{0.f, float(iv.y) * 10.f}).vertical_beam()) {
+                            x.vel(0).y += float(iv.y) * 1.05f * p.stats().pole_climb_speed_fac;
+                            if (++p.animation_frame() > 20)
+                                p.animation_frame() = 0;
+                        } else {
+                            off_pole = true;
+                        }
+                    }
+                    if (!off_pole && x.tile(x.pos(1)).vertical_beam()) {
+                        x.vel(1) *= 0.7f;
+                        x.vel(1).x += (x.mid(x.pos(1)).x - 5.f * float(gd.x) - x.pos(1).x) * 0.1f;
+                    }
+                } else {
+                    if (narrow(x.pos(0) + vec2{float(iv.x) * 20.f, 0.f}))
+                        x.vel(0).y += (x.mid(x.pos(0)).y - x.pos(0).y) * 0.1f;
+                    else
+                        x.vel(0).y += (x.mid(x.pos(0)).y + 5.f * float(gd.y) - x.pos(0).y) * 0.1f;
+                    if (iv.x != 0) {
+                        if (x.tile(x.pos(0) + vec2{float(iv.x) * 10.f, 0.f}).horizontal_beam()) {
+                            x.vel(0).x += float(iv.x) * 1.05f * p.stats().pole_climb_speed_fac;
+                            if (++p.animation_frame() > 20)
+                                p.animation_frame() = 0;
+                        } else {
+                            off_pole = true;
+                        }
+                    }
+                    if (!off_pole && x.tile(x.pos(1)).horizontal_beam()) {
+                        x.vel(1) *= 0.7f;
+                        x.vel(1).y += (x.mid(x.pos(1)).y - 5.f * float(gd.y) - x.pos(1).y) * 0.1f;
+                    }
+                }
+                if (in.jmp && !in1.jmp) {
+                    // letting go: a push the way held, mostly along the pole
+                    if (iv.x != 0 || iv.y != 0) {
+                        vec2 push = swim_dir(x, true);
+                        if (!off_pole && (!here.horizontal_beam() || !here.vertical_beam())) {
+                            if (p.standing() && iv.x == 0)
+                                push.y *= 0.1f;
+                            else if (!p.standing() && iv.y == 0)
+                                push.x *= 0.1f;
+                        }
+                        x.vel(0) = rw::clamp_magnitude(x.vel(0) + push * 5.4f, 5.4f);
+                        x.vel(1) = rw::clamp_magnitude(x.vel(1) + push * 5.f, 5.f);
+                        x.sound(sound::sound_id::slugcat_from_horizontal_pole_jump);
+                    }
+                    p.standing() = false;
+                    p.animation() = animation_index::zero_g_swim;
+                }
+                // into a corridor
+                if (narrow(x.pos(0)) && narrow(x.pos(0) + rw::to_vec2(iv) * 20.f)) {
+                    p.body_mode() = body_mode_index::corridor_climb;
+                    p.animation() = animation_index::none;
+                }
                 break;
             }
             case animation_index::grappling_swing:
@@ -2731,7 +2984,7 @@ namespace player {
                 p.can_jump() = 5;
                 break;
             default:
-                // zero gravity is not ported
+                // (the rest have no animation code)
                 break;
             }
         }
@@ -2962,6 +3215,9 @@ namespace player {
                 }
                 x.vel(0).x += float(x.on_slope(1)) * 1.8f * k;
                 x.vel(1).x += float(x.on_slope(1)) * 1.2f * k;
+            } else if (x.has_terrain_curve(1)) {
+                x.vel(0).x += x.terrain_curve_normal(1).x * 2.f * k;
+                x.vel(1).x += x.terrain_curve_normal(1).x * 3.f * k;
             }
         }
 
@@ -3062,8 +3318,10 @@ namespace player {
             auto const a = p.animation();
             auto const m = p.body_mode();
             bool const holding_on = a == animation_index::hang_from_beam || a == animation_index::climb_on_beam || m == body_mode_index::wall_climb
-                || m == body_mode_index::swimming;
-            if (pressed && !p.pyro_jumpped() && p.can_jump() <= 0 && x.in(0).y >= 0 && x.consious() && !piggyback::riding(x.state, p.id) && m != body_mode_index::crawl
+                || m == body_mode_index::swimming || a == animation_index::zero_g_pole_grab;
+            // in zero gravity it can burst downwards too
+            bool const weightless = m == body_mode_index::zero_g || x.gravity() <= 0.1f;
+            if (pressed && !p.pyro_jumpped() && p.can_jump() <= 0 && (x.in(0).y >= 0 || weightless) && x.consious() && !piggyback::riding(x.state, p.id) && m != body_mode_index::crawl
                 && m != body_mode_index::corridor_climb && m != body_mode_index::climb_into_shortcut && !holding_on) {
                 p.pyro_jumpped() = 1;
                 p.no_grab_counter() = 5;
@@ -3071,36 +3329,52 @@ namespace player {
                 // (not vanilla: it blows the piggyback stacks close by apart,
                 // its own too)
                 piggyback::scatter(x.state, x.room.id, x.pos(0), pyro_scatter);
-                // (zero gravity isn't ported)
                 int32_t const ix = x.in(0).x;
-                if (ix != 0) {
-                    x.vel(0).y = mathf::min(x.vel(0).y, 0.f) + 8.f;
-                    x.vel(1).y = mathf::min(x.vel(1).y, 0.f) + 7.f;
-                    p.jump_boost() = 6.f;
-                }
-                if (ix == 0 || x.in(0).y == 1) {
-                    bool const hot = p.pyro_jump_counter() >= pyro_stun;
-                    x.vel(0).y = hot ? 16.f : 11.f;
-                    x.vel(1).y = hot ? 15.f : 10.f;
-                    p.jump_boost() = hot ? 10.f : 8.f;
-                }
-                if (x.in(0).y == 1) {
-                    x.vel(0).x = 10.f * float(ix);
-                    x.vel(1).x = 8.f * float(ix);
+                if (m == body_mode_index::zero_g || x.eff_gravity() == 0.f || x.gravity() == 0.f) {
+                    // weightless: a straight burst the way held, or a random way
+                    float dx = float(x.in(0).x);
+                    float dy = float(x.in(0).y);
+                    auto& r = p_random(x);
+                    while (dx == 0.f && dy == 0.f) {
+                        dx = r.value() <= 0.33f ? 0.f : (r.value() <= 0.5f ? 1.f : -1.f);
+                        dy = r.value() <= 0.33f ? 0.f : (r.value() <= 0.5f ? 1.f : -1.f);
+                    }
+                    x.vel(0) = vec2{9.f * dx, 9.f * dy};
+                    x.vel(1) = vec2{8.f * dx, 8.f * dy};
+                    p.pyro_jump_cooldown() = 150.f;
+                    ++p.pyro_jump_counter();
                 } else {
-                    x.vel(0).x = 15.f * float(ix);
-                    x.vel(1).x = 13.f * float(ix);
+                    if (ix != 0) {
+                        x.vel(0).y = mathf::min(x.vel(0).y, 0.f) + 8.f;
+                        x.vel(1).y = mathf::min(x.vel(1).y, 0.f) + 7.f;
+                        p.jump_boost() = 6.f;
+                    }
+                    if (ix == 0 || x.in(0).y == 1) {
+                        bool const hot = p.pyro_jump_counter() >= pyro_stun;
+                        x.vel(0).y = hot ? 16.f : 11.f;
+                        x.vel(1).y = hot ? 15.f : 10.f;
+                        p.jump_boost() = hot ? 10.f : 8.f;
+                    }
+                    if (x.in(0).y == 1) {
+                        x.vel(0).x = 10.f * float(ix);
+                        x.vel(1).x = 8.f * float(ix);
+                    } else {
+                        x.vel(0).x = 15.f * float(ix);
+                        x.vel(1).x = 13.f * float(ix);
+                    }
+                    p.animation() = animation_index::flip;
+                    ++p.pyro_jump_counter();
+                    p.pyro_jump_cooldown() = 150.f;
+                    p.body_mode() = body_mode_index::default_;
                 }
-                p.animation() = animation_index::flip;
-                ++p.pyro_jump_counter();
-                p.pyro_jump_cooldown() = 150.f;
-                p.body_mode() = body_mode_index::default_;
                 if (p.pyro_jump_counter() >= pyro_stun)
                     stun_impl(p, 60 * (p.pyro_jump_counter() - (pyro_stun - 1)));
                 if (p.pyro_jump_counter() >= pyro_capacity)
                     pyro_death(x);
             }
-            if (p.can_jump() > 0 || !x.consious() || p.stun() > 0 || holding_on)
+            bool const light = m == body_mode_index::zero_g || x.eff_gravity() <= 0.5f || x.gravity() <= 0.5f;
+            if (p.can_jump() > 0 || !x.consious() || p.stun() > 0 || holding_on
+            || (light && (p.want_to_jump() == 0 || !x.in(0).pckp) && (p.want_to_jump() == 0 || !x.in(0).spec)))
                 p.pyro_jumpped() = 0;
         }
 
@@ -3170,5 +3444,84 @@ namespace player {
                     p.slow_movement_stun() = 10;
             }
         }
+    }
+}
+
+// Food (PlayerState.foodInStomach and quarterFoodPoints as one count of
+// quarter pips) and hunger, which isn't vanilla: a quarter pip less every
+// 3-4 minutes
+namespace player {
+    int32_t max_food_pips(slugcat_name n) noexcept {
+        // SlugcatStats.SlugcatFoodMeter .x
+        switch (n) {
+        case slugcat_name::yellow: return 5;
+        case slugcat_name::red: return 9;
+        case slugcat_name::gourmand: return 11;
+        case slugcat_name::artificer: return 9;
+        case slugcat_name::rivulet: return 6;
+        case slugcat_name::spear: return 10;
+        case slugcat_name::saint: return 5;
+        case slugcat_name::inv: return 12;
+        case slugcat_name::slugpup: return 3;
+        default: return 7; // Survivor, the Watcher
+        }
+    }
+
+    int32_t hibernate_food_pips(slugcat_name n) noexcept {
+        // SlugcatStats.SlugcatFoodMeter .y (foodToHibernate)
+        switch (n) {
+        case slugcat_name::yellow: return 3;
+        case slugcat_name::red: return 6;
+        case slugcat_name::gourmand: return 7;
+        case slugcat_name::artificer: return 6;
+        case slugcat_name::rivulet: return 5;
+        case slugcat_name::spear: return 5;
+        case slugcat_name::saint: return 4;
+        case slugcat_name::inv: return 12;
+        case slugcat_name::slugpup: return 2;
+        default: return 4;
+        }
+    }
+
+    int32_t food_quarters(sys::game_state const& state, dcon::player_id p) noexcept {
+        return state.world.player_get_food(p) * 4 + state.world.player_get_quarter_food(p);
+    }
+
+    void add_food(sys::game_state& state, dcon::player_id p, int32_t quarter_pips) {
+        // Player.AddFood / AddQuarterFood: full pips and quarters, nothing
+        // over the meter (a full meter has no quarters); never below empty
+        auto& w = state.world;
+        int32_t const most = max_food_pips(w.player_get_stats(p).name) * 4;
+        int32_t const q = rw::custom::int_clamp(food_quarters(state, p) + quarter_pips, 0, most);
+        w.player_set_food(p, q / 4);
+        w.player_set_quarter_food(p, q % 4);
+    }
+
+    namespace {
+        // the slugcat's own hunger period (3-4 minutes) and where in it it
+        // starts, rolled from its creature id (tick 0: the same every time)
+        struct hunger_timing {
+            uint32_t interval;
+            uint32_t phase;
+        };
+        hunger_timing hunger_of(sys::game_state const& state, dcon::player_id p) noexcept {
+            uint32_t const minute = 60u * state.ticks_per_second;
+            auto rng = rw::random_salted(state.seed, 0, uint32_t(creature_of(state, p).value), 0x4855u);
+            uint32_t const interval = 3u * minute + uint32_t(rng.range(0, int32_t(minute) + 1));
+            uint32_t const phase = uint32_t(rng.range(0, int32_t(interval)));
+            return hunger_timing{interval, phase};
+        }
+    }
+
+    uint32_t hunger_interval(sys::game_state const& state, dcon::player_id p) noexcept {
+        return hunger_of(state, p).interval;
+    }
+
+    void hunger_update(sys::game_state& state, dcon::player_id p) {
+        if (::player::dead(state, p))
+            return;
+        auto const h = hunger_of(state, p);
+        if (h.interval > 0 && (state.tick + h.phase) % h.interval == 0)
+            add_food(state, p, -1);
     }
 }

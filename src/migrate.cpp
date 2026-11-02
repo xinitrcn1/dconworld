@@ -6,6 +6,7 @@
 #include "migrate.hpp"
 #include "dens.hpp"
 #include "gates.hpp"
+#include "offscreen.hpp"
 #include "warps.hpp"
 #include "pathing.hpp"
 #include "rooms.hpp"
@@ -27,6 +28,7 @@ namespace migrate {
                 return 50;
             switch (t) {
             case tmpl::small_centipede: return 1000;
+            case tmpl::angler: return 100; // InitAngler abstractedLaziness
             case tmpl::centipede:
             case tmpl::centiwing:
             case tmpl::red_centipede:
@@ -436,7 +438,8 @@ namespace migrate {
 
     void abstract_behavior(sys::game_state& state, dcon::creature_id c, room_view const& room) {
         auto& w = state.world;
-        if (want_to(state, c))
+        // (one living off screen moves as its offscreen AI has it, offscreen.hpp)
+        if (want_to(state, c) || offscreen::homed(state, c))
             return;
         auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
         auto const t = creature::template_of(state, c);

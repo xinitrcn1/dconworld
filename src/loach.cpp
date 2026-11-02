@@ -1337,8 +1337,9 @@ namespace loach {
             if (here.x > 10 && here.x < x.room.width - 11)
                 ++a.time_in_this_room;
             a.focus = dcon::creature_id{};
-            // the forced prey gone: forgotten
-            if (a.target && (!creature::live(x.state, a.target) || creature::dead(x.state, a.target)))
+            // the forced prey gone: forgotten (dead, it is still food: not
+            // vanilla, DIVERGENCES)
+            if (a.target && !creature::live(x.state, a.target))
                 a.target = dcon::creature_id{};
             tracker::hooks const h = make_hooks(x);
             tracker::update(x.state, x.c, x.room, here, tracker_params(), h);
@@ -1770,11 +1771,11 @@ namespace loach {
             ++dens::stats().prey_taken;
             if (auto const pp = creature::player_of(x.state, t)) {
                 items::release_all(x.state, pp);
-                creature::kill(x.state, t, creature::tmpl::loach);
+                creature::kill(x.state, t, creature::template_of(x.state, x.c));
                 w.player_set_eaten(pp, 1);
                 return;
             }
-            creature::kill(x.state, t, creature::tmpl::loach);
+            creature::kill(x.state, t, creature::template_of(x.state, x.c));
             ++dens::stats().creatures_eaten;
             x.state.defer(x.room.id, [t](sys::game_state& st) {
                 if (st.world.creature_is_valid(t))
@@ -1807,7 +1808,7 @@ namespace loach {
                 e.progression += 0.0125f;
                 auto const o = creature::body_of(x.state, t);
                 if (prog <= 0.5f && e.progression > 0.5f) {
-                    creature::kill(x.state, t, creature::tmpl::loach);
+                    creature::kill(x.state, t, creature::template_of(x.state, x.c));
                     w.physical_object_for_each_chunk_connection_as_owner(o, [&](dcon::chunk_connection_id k) {
                         w.chunk_connection_set_type(k, physics::connection_type::pull);
                     });

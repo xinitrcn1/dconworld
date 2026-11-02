@@ -17,7 +17,12 @@
 // hits it makes the thrower its prey too (Loach.Violence, through
 // `weapon_hit`). While its interest lasts it hunts the prey (and now and
 // then lunges: StartLurch), its tentacles reaching for it within their
-// 150 px. The RotLoach eats slugcats outright and reaches 250 px.
+// 150 px. The RotLoach (the Rot Behemoth of the world files: RotLoach,
+// RotBehemoth, Behemoth, BigRot) is a Loach with the rot: its own template
+// (CreatureTemplate RotLoach, a Loach descendant whose relationships eat
+// slugcats, lizards, centipedes, scavengers, drop bugs and spiders, and
+// whom those fear), tentacles reaching 250 px, and the rot's eyes and
+// growths on its body and tentacles (loach_graphics).
 // It flees what it fears, goes home before the rain and travels the
 // rooms' pipes on trips (migrate.hpp). docs/DIVERGENCES.md lists what's
 // left out.
