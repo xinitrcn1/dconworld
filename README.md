@@ -34,20 +34,23 @@ pass `-j2` yourself) and optimises at `-O2` (`RelWithDebInfo` by default).
 ./build/rwcpp --room sl_a02      # any room by name
 ./build/rwcpp --root <StreamingAssets> [--root <more>...]
 ./build/rwcpp --slugcat rivulet  # any slugcat, Downpour and Watcher included
-./build/rwcpp --selftest         # scripted movement/item/gate/fight/travel tests (no game data needed)
-./build/rwcpp --fuzz 600         # a creature of each kind in every room on top of the world files' creatures,
+(cd build && ctest)              # ve_utils on each SIMD target and the scenarios (~30 s); configure with
+                                 # -DRWCPP_DATA_TESTS=ON to add the fuzz, bench and NPC soak below (slow,
+                                 # on game/ or -DRWCPP_GAME_ROOTS=<a;b>), `ctest -L data` for just those
+./build/tests/rwcpp_selftest     # scripted movement/item/gate/fight/travel tests (no game data needed)
+./build/tests/rwcpp_check --fuzz 600   # a creature of each kind in every room on top of the world files' creatures,
                                  # the rain half way, slugcats with random input in 128 rooms at a time
                                  # (the whole world ticking), then every room exit pipe; the fights
                                  # (who killed whom) and the trips (rooms, gates, warps) are counted
-./build/rwcpp --bench 200        # ms per tick of the whole world, one thread and every thread: no creatures,
+./build/tests/rwcpp_check --bench 200   # ms per tick of the whole world, one thread and every thread: no creatures,
                                  # one of each kind per room, the world files' den population
-./build/rwcpp --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
+./build/tests/rwcpp_check --bench 200 --bench-mode dens --slugcat watcher   # one of them, for a campaign
 ./build/rwcpp --rain-in 600      # every region's rain comes in 15 seconds (--no-dens: no den creatures)
 ./build/rwcpp --creature Scavenger,600,300   # any creature by its world file name: BigNeedleWorm SmallNeedleWorm
                                  # PoleMimic TentaclePlant JetFish Scavenger Deer MirosBird and the older kinds
-./build/rwcpp --npc-trip hi_s05 uw_s04 --slugcat survivor   # one NPC slugcat from shelter to shelter, pass or fail
+./build/tests/rwcpp_check --npc-trip hi_s05 uw_s04 --slugcat survivor   # one NPC slugcat from shelter to shelter, pass or fail
 ./build/rwcpp --npc-human-complete hi_s05 uw_s04   # watch it; where it fails you take over, your way is logged
-./build/rwcpp --npc-soak 3000    # the world with its NPC slugcats (--npcs <share> of the shelters)
+./build/tests/rwcpp_check --npc-soak 3000   # the world with its NPC slugcats (--npcs <share> of the shelters)
 ./build/rwcpp --audio-check      # load the sound effects, loops and ambient clips, decode whole songs, report
 ./build/rwcpp --audio-dump a.wav --room su_a22 --ticks 400   # mix what is heard into a WAV, headless
 ```
@@ -213,8 +216,8 @@ tick, viewed or not, with full physics and AI for every creature in it.
 The outcome doesn't depend on the thread count or the scheduling: rooms
 don't see each other while they update, every random roll comes from the
 room's or the object's own generator, and the transactions apply in a fixed
-order. `--selftest` runs a scenario on one thread and on every thread and
-compares a hash of every body chunk; `--bench` does the same for the whole
+order. `rwcpp_selftest` runs a scenario on one thread and on every thread and
+compares a hash of every body chunk; `rwcpp_check --bench` does the same for the whole
 world.
 
 Graphics modules (centipede, dropwig, squidcada, lizard with its
@@ -228,7 +231,7 @@ music only come from viewed rooms. The slugcat's room is always viewed, so
 its graphics (which hold the hands items hang from) always run. The water
 surface runs in every room with water.
 
-`--bench N` times N ticks of the whole world on one thread and on every
+`rwcpp_check --bench N` times N ticks of the whole world on one thread and on every
 thread, three times: without creatures, with a creature of each kind in every
 room, and with the world files' population (made in their dens; 1000 ticks
 of warm up first, by when every one that wants to is out). On a 6 core Xeon
@@ -463,7 +466,9 @@ come.
 | `src/render.*` | renderer in an SDL3 window: rooms through anthiel's level shader, slugcat sprites, geometry overlay, VGA font HUD |
 | `src/gpu.*` | the Vulkan 1.3 layer under it: textures, the pipelines of `src/shaders/`, a frame drawn offscreen (read back, copied for the effects, blitted to the swapchain) |
 | `src/shaders/` | GLSL, compiled to SPIR-V C sources at build time |
-| `src/selftest.*` | scripted movement scenarios, the thread count determinism check, the fuzzer and the bench |
+| `src/startup.*` | finding the game data, loading the world, the shared command line options (`--slugcat`, `--npc-*`) |
+| `src/ve_utils.hpp` | sin, cos, atan2, acos, exp, log, pow over `ve::fp_vector` (SVML-style, <= 2 ulp) |
+| `tests/` | ctest: `ve.cpp` (ve_utils on every SIMD target), `selftest.cpp` (scripted scenarios, the thread count determinism check), `tools.cpp` (`rwcpp_check`: the fuzzer, the bench, the NPC soak and trip) |
 | `og/` | decompiled game source used as the reference (not tracked) |
 
 ## Status
@@ -934,7 +939,7 @@ never feed back into the simulation (the world hash is unchanged); the little
 state the loops need (a squidcada's current loop, the daddy's digestion
 volume, a gate's, a warp point's, the Watcher's camouflage sound) is cosmetic.
 The audio side (`audio::upkeep`, `audio::fade`, no device needed, tested by
-`--selftest`) reconciles its voices once per new tick: matched by owner, a
+`rwcpp_selftest`) reconciles its voices once per new tick: matched by owner, a
 loop follows its request; one whose owner didn't ask again (turned it off,
 volume 0, died, was destroyed, left the room) fades out, over its
 `fadeOutOnDestroyFrames` or a 60 ms declick (vanilla cuts it); another sound
@@ -996,7 +1001,7 @@ as a soft circle gliding along the pipe and lighting nearby pipe tiles instead
 of vanilla's tile by tile blink. In-room pipes spit the slugcat out at the
 other end; room exits follow `world_<region>.txt` connections (merged across
 region files, gates included) to the destination's matching exit. Every one
-of the 1414 connected room exits is exercised by `--fuzz`. Creatures travel
+of the 1414 connected room exits is exercised by `rwcpp_check --fuzz`. Creatures travel
 pipes the same way on their way home and on their trips (dens.hpp,
 migrate.hpp, see Rain, dens and the world's creatures and Fights and
 travel), shown only while they squeeze in and come out. The slugcat shares

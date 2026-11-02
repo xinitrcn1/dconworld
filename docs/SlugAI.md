@@ -317,7 +317,8 @@ the tools for tracing them, and what is known not to work yet.
 | `src/pathing.cpp`, `src/pathing.hpp`, `src/pathing_types.hpp` | `movement::slugcat`: the slugcat's path fields, its jumps (`pathing::jump`, `step_kind`), `slugcat_step`, `slugcat_reach_from` |
 | `src/dcon_generated.txt` | the `slugcat_npc` object; `player::npc` points at it (none for a controlled player). `player` is bounded at 4096 |
 | `src/simulation.cpp` | NPCs update with their room after the controlled players, their input from `npc::think`; their vessels travel serially like the players'; only controlled players make a room "viewed" |
-| `src/selftest.cpp` | the NPC scenarios, `--npc-soak`, `--npc-trip`, the measurement harness |
+| `tests/selftest.cpp` | the NPC scenarios, the measurement harness |
+| `tests/tools.cpp` | `rwcpp_check`: `--npc-soak`, `--npc-trip` |
 
 An NPC is an ordinary `player` (Player.cs' state) with an ordinary slugcat
 `creature`, so everything else treats it as a slugcat: lizards hunt it, the
@@ -331,7 +332,7 @@ controlled player.
 static data (the routes). Everything an NPC needs from another room (its
 pack leader's target) is copied serially in `update_world`. Every roll
 comes from the slugcat creature's own generator, so the world comes out the
-same on any thread count (the selftest's determinism run has NPCs in it).
+same on any thread count (rwcpp_selftest's determinism run has NPCs in it).
 
 Arriving in a room through a pipe moves the creature's trip on
 (`migrate::arrived`); a warp has done that already (`placed_in_room`),
@@ -414,7 +415,7 @@ the most and are a last resort.
 ### Reaches (measured)
 
 Every reach comes from running the Player.cs port in a test room
-(`--selftest --npc-measure` runs the harness in its current form), and
+(`rwcpp_selftest --npc-measure` runs the harness in its current form), and
 from experiments in the real rooms where a test room disagreed
 (`--npc-exp`). Tiles are counted from where the jump leaves, `dy` up:
 
@@ -511,12 +512,16 @@ again; after three of those the target is dropped.
 
 ## Tracing and debugging
 
+`--npc-trip` and `--npc-soak` are `build/tests/rwcpp_check`'s, the scenarios
+`build/tests/rwcpp_selftest`; `--npc-human-complete` is the game's (`rwcpp`).
+The tracing options work with any of them.
+
 | option | with | what |
 | --- | --- | --- |
 | `--npc-trip <from> <to> [ticks]` | | one NPC (`--slugcat`, else random; `--npc-seed`) from shelter to shelter, no creatures, the rain timers frozen (`game_state::rain_frozen`). Prints each room it enters; fails when it dies, falls out of a room (the port doesn't kill for that, the game does), finds no way, gets stuck, or runs out of time |
 | `--npc-soak [ticks]` | `--npcs` | the world with its NPCs: ms per tick, shelters reached, regions crossed, moves used, deaths and who killed them |
 | `--npc-human-complete <from> <to>` | `--npc-human-log`, `--script` | watch the NPC; when it fails, drive it yourself from the pipe it came in by, logged, to the pipe it was heading for (below) |
-| `--npc-trace <room\|*>[,every]` | trip, human-complete, selftest, soak (there: every NPC in the room, one line each) | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
+| `--npc-trace <room\|*>[,every]` | trip, human-complete, rwcpp_selftest, soak (there: every NPC in the room, one line each) | input, `can_jump`/`want_to_jump`, facing, move timer, describe, the step taken, aim, goal, best distance, stuck, body mode, animation, head and feet every few ticks while in that room |
 | `--npc-route <r1,r2,...>` | trip | `ok`/`NO` for each room of a route: can the way out be walked from the way in |
 | `--npc-maps` | route | for each `NO` room: its poles and a map, `f` reachable from the way in, `o` can reach the way out, `B` both. The gap between `f` and `o` is the missing move |
 | `--npc-room <room>` | soak | the room's poles, pipes (type, ends), map (`.` walkable) |
@@ -527,7 +532,7 @@ again; after three of those the target is dropped.
 | `--npc-unreachable` | soak | for every NPC with no shelter in reach: its room and the rooms its search reaches (the first three: their route data) |
 | `--npc-list` | soak | every NPC at the end |
 | `--npc-guess` | trip, human-complete | set off even with no walkable way known (a guessed trip, retargeting on the way; getting stuck or finding no way doesn't fail it, it learns from it) |
-| `--npc-measure` | `--selftest` | the movement measurement harness instead of the tests |
+| `--npc-measure` | `rwcpp_selftest` | the movement measurement harness instead of the tests |
 | `--npc-exp <room,x,y,S,script>` | trip | standing on tile x,y, the script (`--script`'s letters, `X` throw and `P` pick up included) played, every tick printed, the highest the feet got, where spears stuck; `S+` puts a spear at its feet first |
 | `--npc-exp <room,x,y,mode,dir[,turn]>` | trip | a scripted jump off the pole at x climbed to y in a real room: 0 off its side, 1 from its tip, 2 into a wall and off it, 3 off, back to the wall behind and off it, 4 from the tip into a wall and back, 5 off the side into a wall and back |
 
@@ -574,7 +579,7 @@ measure it, add it to the graph; then `--npc-trace` the trip through it.
 Survivor, no creatures, the rain frozen:
 
 ```sh
-./build/rwcpp --root game/mergedmods --root game --npc-trip hi_s05 uw_s04 --slugcat survivor
+./build/tests/rwcpp_check --root game/mergedmods --root game --npc-trip hi_s05 uw_s04 --slugcat survivor
 ```
 
 The route (from the user): HI_S05 → HI_A10 → HI_C11 → GATE_HI_CC → CC_A16 →

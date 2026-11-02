@@ -22,3 +22,6 @@
 !src/shaders/*
 !tools/
 !tools/*.py
+!tests/
+!tests/*.cpp
+!tests/*.hpp

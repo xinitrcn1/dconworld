@@ -9,26 +9,15 @@
 
 #include "dcon_generated.hpp"
 #include "math.hpp"
+#include "ve_utils.hpp"
 
 namespace keyed_random {
-    // ve::int_vector has no shifts; the logical right shift per target
-    template<int N>
-    inline ve::int_vector shift_right(ve::int_vector v) noexcept {
-#if defined(__AVX512BW__)
-        return ve::int_vector{_mm512_srli_epi32(v.value, N)};
-#elif defined(__AVX2__)
-        return ve::int_vector{_mm256_srli_epi32(v.value, N)};
-#else
-        // (SSE, and ve_avx's int_vector, are 128 bits wide)
-        return ve::int_vector{_mm_srli_epi32(v.value, N)};
-#endif
-    }
     inline ve::int_vector mix(ve::int_vector x) noexcept {
-        x = x ^ shift_right<16>(x);
+        x = x ^ ve::shift_right<16>(x);
         x = x * ve::int_vector{int32_t(0x7FEB352Du)};
-        x = x ^ shift_right<15>(x);
+        x = x ^ ve::shift_right<15>(x);
         x = x * ve::int_vector{int32_t(0x846CA68Bu)};
-        x = x ^ shift_right<16>(x);
+        x = x ^ ve::shift_right<16>(x);
         return x;
     }
     // rw::keyed::key for each lane's id
@@ -42,6 +31,6 @@ namespace keyed_random {
     }
     // rw::keyed::to_value: [0, 1]
     inline ve::fp_vector to_value(ve::int_vector bits) noexcept {
-        return ve::to_float(shift_right<8>(bits)) * (1.f / 16777215.f);
+        return ve::to_float(ve::shift_right<8>(bits)) * (1.f / 16777215.f);
     }
 }

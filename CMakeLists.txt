@@ -87,8 +87,10 @@ endforeach()
 add_library(rwcpp_shaders STATIC ${SHADER_SOURCES})
 target_include_directories(rwcpp_shaders PUBLIC "${SHADER_OUT}")
 
-add_executable(rwcpp
-    src/main.cpp
+# everything but main(): the game and the test executables (tests/) link it.
+# OBJECT, not STATIC: no archive copying the (large, -g) objects
+add_library(rwcpp_core OBJECT
+    src/startup.cpp
     src/dcon.cpp
     src/layered_fs.cpp
     src/parsers.cpp
@@ -98,7 +100,6 @@ add_executable(rwcpp
     src/player_graphics.cpp
     src/render.cpp
     src/gpu.cpp
-    src/selftest.cpp
     src/shortcuts.cpp
     src/items.cpp
     src/outposts.cpp
@@ -191,10 +192,10 @@ add_executable(rwcpp
     "${GENERATED_DIR}/dcon_generated_ids.hpp"
     "${GENERATED_DIR}/parser_defs_generated.hpp"
 )
-target_include_directories(rwcpp PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_include_directories(rwcpp_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
 # generated code is treated like a third party header (no warnings)
-target_include_directories(rwcpp SYSTEM PRIVATE "${GENERATED_DIR}")
-target_link_libraries(rwcpp PRIVATE
+target_include_directories(rwcpp_core SYSTEM PUBLIC "${GENERATED_DIR}")
+target_link_libraries(rwcpp_core PUBLIC
     dependency_DataContainer
     dependency_tbb
     dependency_glm
@@ -205,13 +206,25 @@ target_link_libraries(rwcpp PRIVATE
     Vulkan::Vulkan
     rwcpp_shaders
 )
-target_compile_options(rwcpp PRIVATE -Wall -Wextra -Wno-unused-parameter -fno-rtti -fno-exceptions)
+target_compile_options(rwcpp_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_options(rwcpp_core PUBLIC -fno-rtti -fno-exceptions)
 # dcon's ve:: vectors take their width from the target (SSE 4 lanes, AVX2 8,
 # AVX-512 16): build for this machine's. GCC contracts a * b + c into FMAs
-# there (docs/DIVERGENCES.md)
+# there (docs/DIVERGENCES.md). PUBLIC: the data container's layout follows
+# the width, so whatever links the core must be built the same
 option(RWCPP_NATIVE "build for the host CPU (-march=native)" ON)
 if(RWCPP_NATIVE)
-    target_compile_options(rwcpp PRIVATE -march=native)
+    target_compile_options(rwcpp_core PUBLIC -march=native)
+endif()
+
+add_executable(rwcpp src/main.cpp)
+target_link_libraries(rwcpp PRIVATE rwcpp_core)
+target_compile_options(rwcpp PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+option(RWCPP_TESTS "build the ctest suite (tests/)" ON)
+if(RWCPP_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # our own assets (HUD font, slugcat atlas) are looked up next to the executable

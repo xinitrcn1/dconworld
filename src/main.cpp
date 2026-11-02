@@ -38,27 +38,13 @@
 #include "dens.hpp"
 #include "warps.hpp"
 #include "reports.hpp"
-#include "selftest.hpp"
+#include "startup.hpp"
 #include "shortcuts.hpp"
 #include "simulation.hpp"
 #include "world.hpp"
 
 namespace {
     using rw::vec2;
-
-    std::string find_streaming_assets() {
-        if (char const* env = std::getenv("RW_ROOT"); env != nullptr && *env != '\0')
-            return env;
-        std::string const home = std::getenv("HOME") != nullptr ? std::getenv("HOME") : "";
-        for (auto const& base : {home + "/.local/share/Steam/steamapps/common/Rain World",
-                 home + "/.steam/steam/steamapps/common/Rain World",
-                 home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Rain World"}) {
-            auto const sa = base + "/RainWorld_Data/StreamingAssets";
-            if (std::filesystem::exists(sa + "/world/regions.txt"))
-                return sa;
-        }
-        return {};
-    }
 
     void print_usage(char const* argv0) {
         std::printf(
@@ -68,42 +54,21 @@ namespace {
             "  --room <name>       start in this room (default su_a22)\n"
             "  --slugcat <name>    survivor | monk | hunter | gourmand | artificer | rivulet |\n"
             "                      spearmaster | saint | sofanthiel | watcher (or white/yellow/red)\n"
-            "  --selftest          run the scripted movement tests and exit\n"
-            "  --fuzz [ticks]      soak test the slugcat in every room and exit\n"
-            "  --bench [ticks]     time the whole world on one thread and on every thread, and\n"
-            "                      exit: without creatures, one of each kind in every room, the\n"
-            "                      world files' den population\n"
-            "  --bench-mode <m>    only one of them: none, each, dens\n"
             "  --rain-in <ticks>   every region's rain comes in that many ticks\n"
             "  --no-dens           no world file creatures in their dens\n"
             "  --no-friendly-fire  a slugcat's thrown weapons pass through slugcats (NPCs included)\n"
             "  --npcs <share>      the share of shelters with a group of NPC slugcats (0..1, default 0.25)\n"
             "  --no-npcs           no NPC slugcats\n"
-            "  --npc-trip <from> <to> [ticks]  one NPC slugcat (--slugcat, else random; --npc-seed) from\n"
-            "                      shelter to shelter, no creatures, the rain frozen: pass or fail, then exit\n"
-            "  --npc-seed <n>      the --npc-trip slugcat's rolls\n"
+            "  --npc-seed <n>      the --npc-human-complete slugcat's rolls\n"
             "  --npc-human-complete <from> <to>  watch an NPC slugcat go from shelter to shelter (no creatures,\n"
             "                      the rain frozen); when it dies or gets stuck it is back at the pipe it came\n"
             "                      in by and you drive it, your input logged, until you enter the pipe it\n"
             "                      was heading for (then it exits; Tab held while watching: faster).\n"
             "                      --npc-human-log <file>: where the log goes; with --script, no window:\n"
             "                      the script replayed as what you'd do (does a recorded way work?)\n"
-            "  NPC tracing and debugging (docs/SlugAI.md), with --npc-trip, --npc-soak or --selftest:\n"
-            "  --npc-trace <room|*>[,every]  the NPC's state, input and move every few ticks in that room\n"
-            "  --npc-route <r1,r2,...>  whether each room of a route can be walked from the way in to the way out\n"
-            "  --npc-maps          with --npc-route, a reachability map of each room that can't\n"
-            "  --npc-room <room>   dump a room's poles, pipes and walkable tiles (--npc-soak)\n"
-            "  --npc-goal <exit>   with --npc-room, mark what reaches that exit; --npc-box <x0,y0,x1,y1>\n"
-            "                      lists the walkable tiles there with their distance to it\n"
-            "  --npc-edges <room,x0,y0,x1,y1>  the jumps leaving those tiles (--npc-soak)\n"
-            "  --npc-dead-ends     the exits no other exit can be walked to from (--npc-soak)\n"
-            "  --npc-unreachable   why the first NPCs with no shelter in reach have none (--npc-soak)\n"
-            "  --npc-list          every NPC at the end of --npc-soak\n"
-            "  --npc-guess         --npc-trip even when no walkable way is known (a guessed trip)\n"
-            "  --npc-measure       with --selftest: the movement measurement instead of the tests\n"
-            "  --npc-exp <room,x,y,mode,dir[,turn]>  with --npc-trip: a scripted jump off a pole\n"
-            "  --npc-soak [ticks]  the world with its NPC slugcats (--npcs) for that many ticks, headless:\n"
-            "                      how they get on and what they cost, then exit\n"
+            "  --npc-trace <room|*>[,every]  with --npc-human-complete: the NPC's state, input and move\n"
+            "                      every few ticks in that room (the other --npc-* debugging options:\n"
+            "                      rwcpp_check --help, docs/SlugAI.md)\n"
             "  --audio-check       load the sound effects, decode a song, report and exit\n"
             "  --audio-dump <wav>  no window: run --ticks ticks (and --script) mixing what is heard into a WAV,\n"
             "                      report its loudness and the loops' lifetimes\n"
@@ -158,75 +123,6 @@ namespace {
             "          F7 the rain of the region in 30 seconds, M play a song of the region\n"
             "          (again for another one), Ctrl+M stop the music, Esc quit\n",
             argv0);
-    }
-
-    // a comma separated list
-    std::vector<std::string> split(std::string const& s) {
-        std::vector<std::string> out;
-        size_t pos = 0;
-        while (pos <= s.size()) {
-            size_t const end = std::min(s.find(',', pos), s.size());
-            if (end > pos)
-                out.push_back(s.substr(pos, end - pos));
-            pos = end + 1;
-        }
-        return out;
-    }
-
-    // the NPC slugcats' tracing and debugging options (npc::debug_options);
-    // false: not one of them
-    template<typename Next>
-    bool npc_debug_option(std::string const& a, Next&& next) {
-        auto& d = npc::debug();
-        auto const ints = [](std::string const& s) {
-            std::vector<int32_t> v;
-            for (auto const& x : split(s))
-                v.push_back(std::atoi(x.c_str()));
-            return v;
-        };
-        if (a == "--npc-trace") {
-            auto const parts = split(next());
-            d.trace_room = parts.empty() ? "*" : parts[0];
-            if (parts.size() > 1)
-                d.trace_every = std::max(1, std::atoi(parts[1].c_str()));
-        } else if (a == "--npc-route") {
-            d.route = split(next());
-        } else if (a == "--npc-maps") {
-            d.maps = true;
-        } else if (a == "--npc-room") {
-            d.room = next();
-        } else if (a == "--npc-goal") {
-            d.goal = std::atoi(next().c_str());
-        } else if (a == "--npc-box") {
-            auto const v = ints(next());
-            d.box = v.size() == 4;
-            if (d.box) {
-                d.box_lo = rw::ivec2{v[0], v[1]};
-                d.box_hi = rw::ivec2{v[2], v[3]};
-            }
-        } else if (a == "--npc-edges") {
-            auto const parts = split(next());
-            if (parts.size() == 5) {
-                d.edges_room = parts[0];
-                d.edges_lo = rw::ivec2{std::atoi(parts[1].c_str()), std::atoi(parts[2].c_str())};
-                d.edges_hi = rw::ivec2{std::atoi(parts[3].c_str()), std::atoi(parts[4].c_str())};
-            }
-        } else if (a == "--npc-dead-ends") {
-            d.dead_ends = true;
-        } else if (a == "--npc-unreachable") {
-            d.unreachable = true;
-        } else if (a == "--npc-list") {
-            d.list = true;
-        } else if (a == "--npc-guess") {
-            d.guess = true;
-        } else if (a == "--npc-measure") {
-            d.measure = true;
-        } else if (a == "--npc-exp") {
-            d.experiment = next();
-        } else {
-            return false;
-        }
-        return true;
     }
 
     // --npc-human-complete: an NPC slugcat on its way; when it dies, falls
@@ -384,23 +280,6 @@ namespace {
         }
     };
 
-    player::slugcat_name parse_slugcat(std::string n) {
-        for (auto& c : n)
-            c = char(std::tolower(static_cast<unsigned char>(c)));
-        if (n == "white") return player::slugcat_name::white;
-        if (n == "yellow") return player::slugcat_name::yellow;
-        if (n == "red") return player::slugcat_name::red;
-        if (n == "inv") return player::slugcat_name::inv;
-        for (uint32_t i = 0; i < uint32_t(player::slugcat_name::count); ++i) {
-            std::string name = player::to_string(player::slugcat_name(i));
-            for (auto& c : name)
-                c = char(std::tolower(static_cast<unsigned char>(c)));
-            if (name == n)
-                return player::slugcat_name(i);
-        }
-        return player::slugcat_name::white;
-    }
-
     struct app {
         sys::game_state& gs;
         std::vector<dcon::player_id> players; // co-op slots, [0] is the keyboard
@@ -428,7 +307,7 @@ namespace {
             camera_index = 0;
             auto const cams = camera_positions();
             vec2 const first = cams.empty() ? vec2{0.f, 0.f} : cams[0];
-            spawn = selftest::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
+            spawn = world::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
             for (size_t i = 0; i < players.size(); ++i) {
                 player::reset(gs, players[i], rid, spawn + vec2{float(i) * 20.f, 0.f});
                 player_graphics::reset(gs, players[i]);
@@ -444,7 +323,7 @@ namespace {
                 camera_index = 0;
                 auto const cams = camera_positions();
                 vec2 const first = cams.empty() ? vec2{0.f, 0.f} : cams[0];
-                spawn = selftest::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
+                spawn = world::find_spawn(view(), first + vec2{gs.screen_width / 2.f, gs.screen_height / 2.f});
                 log_room();
             }
         }
@@ -636,18 +515,11 @@ int main(int argc, char* argv[]) {
     };
     std::vector<item_spawn> spawn_items;
     bool weaver = false;
-    bool selftest_mode = false;
     bool audio_check = false;
     std::string audio_dump;
-    int32_t fuzz_ticks = -1;
-    int32_t bench_ticks = -1;
-    int32_t npc_soak_ticks = -1;
-    std::string npc_trip_from, npc_trip_to;
     std::string human_from, human_to, human_log;
-    uint32_t npc_trip_ticks = 40 * 60 * 10;
     uint32_t npc_seed = 1;
     bool slugcat_given = false;
-    std::string bench_mode;
     int32_t rain_in = -1;
     bool no_dens = false;
     bool friendly_fire = true;
@@ -663,28 +535,13 @@ int main(int argc, char* argv[]) {
         } else if (a == "--room") {
             start_room = next();
         } else if (a == "--slugcat") {
-            slugcat = parse_slugcat(next());
+            slugcat = startup::parse_slugcat(next());
             slugcat_given = true;
         } else if (a == "--audio-check") {
             audio_check = true;
         } else if (a == "--audio-dump") {
             audio_dump = next();
-        } else if (a == "--selftest") {
-            selftest_mode = true;
-        } else if (a == "--fuzz") {
-            fuzz_ticks = 400;
-            if (i + 1 < argc && argv[i + 1][0] != '-')
-                fuzz_ticks = std::atoi(argv[++i]);
-        } else if (a == "--bench") {
-            bench_ticks = 200;
-            if (i + 1 < argc && argv[i + 1][0] != '-')
-                bench_ticks = std::atoi(argv[++i]);
-        } else if (a == "--npc-trip") {
-            npc_trip_from = next();
-            npc_trip_to = next();
-            if (i + 1 < argc && argv[i + 1][0] != '-')
-                npc_trip_ticks = uint32_t(std::atoi(argv[++i]));
-        } else if (a.starts_with("--npc-") && npc_debug_option(a, next)) {
+        } else if (a.starts_with("--npc-") && startup::npc_debug_option(a, next)) {
         } else if (a == "--npc-human-complete") {
             human_from = next();
             human_to = next();
@@ -692,12 +549,6 @@ int main(int argc, char* argv[]) {
             human_log = next();
         } else if (a == "--npc-seed") {
             npc_seed = uint32_t(std::atoi(next().c_str()));
-        } else if (a == "--npc-soak") {
-            npc_soak_ticks = 6000;
-            if (i + 1 < argc && argv[i + 1][0] != '-')
-                npc_soak_ticks = std::atoi(argv[++i]);
-        } else if (a == "--bench-mode") {
-            bench_mode = next();
         } else if (a == "--rain-in") {
             rain_in = std::atoi(next().c_str());
         } else if (a == "--no-dens") {
@@ -808,11 +659,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (selftest_mode)
-        return selftest::run();
-
     if (roots.empty()) {
-        auto const sa = find_streaming_assets();
+        auto const sa = startup::find_streaming_assets();
         if (sa.empty()) {
             reports::add_log("can't find Rain World's StreamingAssets, pass --root or set RW_ROOT");
             return 1;
@@ -820,50 +668,14 @@ int main(int argc, char* argv[]) {
         roots.push_back(sa);
     }
     // vanilla rolls item spawns with UnityEngine.Random: a played world gets
-    // its seed from the clock; the checks, the bench, screenshots and dumps
-    // keep the fixed one to stay reproducible
-    bool const clock_seed = screenshot.empty() && audio_dump.empty() && !audio_check && fuzz_ticks < 0 && bench_ticks < 0 && npc_soak_ticks < 0
-        && npc_trip_from.empty();
-    auto const load_world = [&](bool log) {
-        auto ptr = sys::make_game_state();
-        auto& g = *ptr;
-        // the world's seed, once, before anything rolls
-        if (clock_seed)
-            g.seed ^= uint32_t(SDL_GetTicksNS() * 2654435761ull) | 1u;
-        // our own assets (HUD font) come before so the game data can be overriden
-        if (char const* base = SDL_GetBasePath(); base != nullptr)
-            g.fs.add_root(std::string{base} + "assets");
-        for (auto const& r : roots) {
-            if (log)
-                reports::add_log("root: " + r);
-            g.fs.add_root(r);
-        }
-        g.fs.generate_unpopulated_tree();
-        parsers::error_handler err;
-        world::load(g, err);
-        if (log && !err.accumulated_errors.empty())
-            reports::add_log("errors:\n" + err.accumulated_errors);
-        if (log && !err.accumulated_warnings.empty())
-            reports::add_log("warnings:\n" + err.accumulated_warnings);
-        if (err.fatal || g.world.room_size() == 0)
-            reports::error_fatal("no rooms loaded");
-        return ptr;
-    };
-    if (bench_ticks >= 0) {
-        bool first = true;
-        return selftest::bench([&] {
-            auto ptr = load_world(first);
-            ptr->story_slugcat = slugcat;
-            first = false;
-            return ptr;
-        }, uint32_t(bench_ticks), bench_mode);
-    }
-    auto const gs_ptr = load_world(true);
+    // its seed from the clock; the checks, screenshots and dumps keep the
+    // fixed one to stay reproducible
+    bool const clock_seed = screenshot.empty() && audio_dump.empty() && !audio_check;
+    auto const gs_ptr = startup::load_world(roots, clock_seed, true);
     auto& gs = *gs_ptr;
     gs.spawn_dens = !no_dens;
     gs.friendly_fire = friendly_fire;
-    // (not for the fuzz: it drives slugcats of its own)
-    gs.npc_shelter_chance = fuzz_ticks >= 0 ? 0.f : npc_chance;
+    gs.npc_shelter_chance = npc_chance;
     // --npc-human-complete: the trip test's world (no creatures, no other
     // NPCs, the rain standing still)
     bool const human_run = !human_from.empty();
@@ -876,14 +688,6 @@ int main(int argc, char* argv[]) {
     // the campaign: what the rooms spawn (and the pearls' tint) follows its timeline
     gs.story_slugcat = slugcat;
 
-    if (!npc_trip_from.empty())
-        return selftest::npc_trip(gs, npc_trip_from, npc_trip_to, npc_trip_ticks, slugcat_given ? slugcat : player::slugcat_name::count, npc_seed);
-    if (npc_soak_ticks >= 0)
-        return selftest::npc_soak(gs, uint32_t(npc_soak_ticks));
-    if (fuzz_ticks >= 0) {
-        simulation::populate(gs);
-        return selftest::fuzz(gs, uint32_t(fuzz_ticks));
-    }
     if (audio_check) {
         auto sound = audio::create(gs);
         // the check needs no device

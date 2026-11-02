@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -81,6 +82,28 @@ namespace world {
             }
         }
         return r;
+    }
+
+    rw::vec2 find_spawn(world::room_view const& room, rw::vec2 near) {
+        float best = std::numeric_limits<float>::max();
+        rw::vec2 result{room.pixel_width() / 2.f, room.pixel_height() / 2.f};
+        for (int32_t y = 1; y < room.height - 2; ++y) {
+            for (int32_t x = 1; x < room.width - 1; ++x) {
+                auto const t = room.get_tile(x, y);
+                auto const below = room.get_terrain(x, y - 1);
+                if (t.t != terrain::air || t.shortcut != 0 || (below != terrain::solid && below != terrain::floor))
+                    continue;
+                if (room.get_terrain(x, y + 1) != terrain::air || room.get_terrain(x, y + 2) != terrain::air)
+                    continue;
+                rw::vec2 const p = world::room_view::middle_of_tile(x, y);
+                float const d = rw::distance(p, near);
+                if (d < best) {
+                    best = d;
+                    result = rw::vec2{p.x, p.y - 10.f + 8.f};
+                }
+            }
+        }
+        return result;
     }
 
     room_view get_room_view(sys::game_state const& s, dcon::room_id rid) noexcept {

@@ -90,6 +90,10 @@ namespace world {
 
     room_view get_room_view(sys::game_state const& s, dcon::room_id rid) noexcept;
 
+    // a sensible place to drop a slugcat in a room (feet position): the air
+    // tile with ground below and two free tiles above closest to `near`
+    rw::vec2 find_spawn(room_view const& room, rw::vec2 near);
+
     // Parses level file contents (the "<room>.txt" file) and adds the room to
     // the data container. Returns an invalid id (errors reported) on failure.
     dcon::room_id add_room(sys::game_state& s, std::string_view name, dcon::region_id region, std::string_view contents, parsers::error_handler& err);

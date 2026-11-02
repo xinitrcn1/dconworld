@@ -1,5 +1,8 @@
 #pragma once
 
+// what the test executables share (tests/CMakeLists.txt): rwcpp_selftest
+// runs `run`, rwcpp_check the world soaks and the bench
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -15,7 +18,9 @@
 
 namespace selftest {
     // Scripted movement scenarios in synthetic rooms; returns process exit code
+    // (tests/selftest.cpp)
     int run();
+    // the rest, on the game's world: tests/tools.cpp
     // Random input soak test: a creature of each kind in every room (the
     // centipede and leech variants in turn), then
     // slugcats in every room (a batch of rooms at a time, the whole world
@@ -59,6 +64,4 @@ namespace selftest {
     // one creature of each kind in the room, placed with rolls seeded by the
     // room's index (the fuzz's and the bench's world)
     world_creatures spawn_creatures(sys::game_state& gs, dcon::room_id rid);
-    // A sensible place to drop the slugcat in a room (feet position)
-    rw::vec2 find_spawn(world::room_view const& room, rw::vec2 near);
 }

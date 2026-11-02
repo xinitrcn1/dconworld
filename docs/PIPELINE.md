@@ -40,7 +40,7 @@ serial    the rooms' deferred transactions, merging their outputs, warps, partic
 
 ## Measurements
 
-All numbers are from `--bench`, on 6 cores with AVX-512, built with
+All numbers are from `rwcpp_check --bench`, on 6 cores with AVX-512, built with
 `-march=native` (FMA on). Baseline: commit `049b23a` built with the same
 flags. Single-thread runs vary by about ±15% from run to run on this machine,
 so compare several runs, and compare the world hash: while no divergence is
@@ -270,7 +270,7 @@ decides what the rot grabs.
    id>)` (or the vector `keyed_random`), never a stream kept between calls.
    The order inside the pass then doesn't matter.
 5. **Measure:** the stage lasts as long as its longest workload. Compare the
-   hash and several runs of `--bench` before and after.
+   hash and several runs of `rwcpp_check --bench` before and after.
 
 ## Next candidates
 
