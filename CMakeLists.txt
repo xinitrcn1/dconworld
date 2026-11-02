@@ -62,9 +62,9 @@ file(MAKE_DIRECTORY "${SHADER_OUT}")
 set(SHADERS
     flat.vert flat.frag
     room.vert room.frag
-    decal.vert decal.frag
+    decal.vert decal.frag dynamic_level.frag
     light.vert light.frag
-    sand.vert sand.frag sandstorm.frag spores.frag
+    sand.vert sand.frag sandstorm.frag spores.frag background.frag
     warp.vert warp_tear.frag warp_screen.frag water.frag
     rope.vert rope.frag
     circle.vert circle.frag
@@ -100,6 +100,7 @@ add_library(rwcpp_core OBJECT
     src/player.cpp
     src/player_graphics.cpp
     src/render.cpp
+    src/background_scene.cpp
     src/hud.cpp
     src/gpu.cpp
     src/shortcuts.cpp
@@ -107,6 +108,7 @@ add_library(rwcpp_core OBJECT
     src/outposts.cpp
     src/item_graphics.cpp
     src/gates.cpp
+    src/gate_graphics.cpp
     src/piggyback.cpp
     src/simulation.cpp
     src/rain.cpp
@@ -211,6 +213,7 @@ add_library(rwcpp_core OBJECT
     src/explosions.cpp
     src/terrain.cpp
     src/curved_slope.cpp
+    src/room_decor.cpp
     src/audio.cpp
     src/sound_ids.cpp
     src/codecs.cpp

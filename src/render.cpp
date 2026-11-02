@@ -15,6 +15,7 @@
 #include "render.hpp"
 #include "rooms.hpp"
 #include "unity_assets.hpp"
+#include "background_scene.hpp"
 #include "centipede.hpp"
 #include "centipede_graphics.hpp"
 #include "leech.hpp"
@@ -60,6 +61,7 @@
 #include "daddy.hpp"
 #include "daddy_graphics.hpp"
 #include "gates.hpp"
+#include "gate_graphics.hpp"
 #include "items.hpp"
 #include "item_graphics.hpp"
 #include "outposts.hpp"
@@ -69,6 +71,7 @@
 #include "rot.hpp"
 #include "warps.hpp"
 #include "particles.hpp"
+#include "room_decor.hpp"
 #include "water.hpp"
 #include "terrain.hpp"
 #include "shortcuts.hpp"
@@ -191,8 +194,14 @@ namespace render {
             glm::vec3 shine;
             float lit;
             glm::vec2 screen;
+            glm::vec2 view_pos;
+            int32_t index;     // palette layer
+            int32_t cam_count; // camera images (0: no level)
+            float night_time;
+            float pad;
+            glm::vec4 cams[16]; // their bottom lefts, two per vec4
         };
-        static_assert(offsetof(water_uniforms, time) == 76 && offsetof(water_uniforms, screen) == 112);
+        static_assert(offsetof(water_uniforms, time) == 76 && offsetof(water_uniforms, screen) == 112 && offsetof(water_uniforms, cams) == 144);
         struct rope_uniforms {
             glm::mat4 proj;
             uint32_t first; // the draw's first point in the storage buffer
@@ -229,7 +238,7 @@ namespace render {
             int32_t light_count;
             int32_t terrain_rows;
             float water_level;
-            float pad;
+            float waves;         // TerrainWaves (the sand's ripples)
             glm::vec4 mud;       // rgb: colour, a: 1 drawing mud (draw_mud)
             glm::vec4 mud_black; // the palette's black
             glm::vec4 later[max_later_cameras / 2];
@@ -534,7 +543,7 @@ namespace render {
                 reports::add_log("can't read the Unity data in " + r.unity_dir + ", game sprites are drawn as plain shapes");
                 return;
             }
-            char const* const names[] = {"rainWorld", "rainworldmsc", "uiSprites", "uispritesmsc", "outpostSkulls"};
+            char const* const names[] = {"rainWorld", "rainworldmsc", "uiSprites", "uispritesmsc", "outpostSkulls", "regionGate", "shelterGate"};
             std::vector<unity::image> images;
             std::vector<std::string> sheets;
             int width = 2, height = 2; // a white corner for untextured shapes
@@ -3627,6 +3636,12 @@ namespace render {
             collect_placed_lights(r, s, room, f, out);
             collect_fixtures(r, s, room, f, darkness, out);
             collect_object_lights(r, s, room, f, alpha, darkness, out);
+            // the gate's lamps and heater light (gate_graphics.cpp)
+            static std::vector<gate_graphics::light> gate_lights;
+            gate_lights.clear();
+            gate_graphics::lights(s, room.id, gate_lights);
+            for (auto const& l : gate_lights)
+                out.source(l.pos, l.rad, l.alpha * mathf::lerp(1.f, darkness, l.darkness_factor), l.color, 1, l.flat, false);
             return out;
         }
 
@@ -3742,10 +3757,79 @@ namespace render {
             if (x1 <= x0)
                 return;
             constexpr float step = 4.f;
-            constexpr float front_depth = 6.f / 30.f;
             auto const enc = [](float v) { return uint8_t(mathf::clamp01(v * 0.5f + 0.5f) * 255.f + 0.5f); };
+            // TerrainCurve's depths: the front at the room's TerrainDepth, the
+            // back 35 layers deep and pulled towards the vanishing point (the
+            // middle of the view, two thirds up) like TerrainCurve.ApplyDepth
+            // (Custom.ApplyDepthOnVector): the back edge slides past the level
+            // a little slower than the front as the view moves, and the level
+            // geometry nearer than the sand at a pixel stands out of it. The
+            // front stays where it is (rwcpp's creatures walk on it)
+            constexpr float max_depth = 35.f;
+            float const front_depth = w.room_get_terrain_depth(room.id) / 30.f;
+            vec2 const vanish{f.view_pos.x + view_w * 0.5f, f.view_pos.y + view_h * (2.f / 3.f)};
+            auto const apply_depth = [&](vec2 p, float depth) {
+                return vanish + (p - vanish) * (1.f / (1.f + (depth - 6.f) * 0.0025f));
+            };
             r.batch.clear();
             float top = bottom;
+            // rwcpp's far dunes behind the back edge, the furthest first (the
+            // nearer cover them): each the sand's own line smoothed, raised
+            // behind its back edge with dunes of its own, seen from the
+            // vanishing point at `rate` (it slides by at that fraction of the
+            // view's speed) and sunk `haze` into the fog (the vertex alpha's
+            // complement, see sand.frag), past the 30 layers so all of the
+            // level stays in front
+            {
+                struct far_layer {
+                    float rate, haze, depth, rise, relief, seed;
+                };
+                constexpr far_layer far_layers[3] = {
+                    {0.45f, 0.84f, 90.f / 30.f, 90.f, 70.f, 3.1f},
+                    {0.62f, 0.68f, 65.f / 30.f, 55.f, 50.f, 1.7f},
+                    {0.80f, 0.52f, 48.f / 30.f, 28.f, 34.f, 0.4f},
+                };
+                constexpr float far_step = 8.f;
+                for (auto const& l : far_layers) {
+                    // the layer's own x under the view's x
+                    auto const layer_x = [&](float x) { return vanish.x + (x - vanish.x) / l.rate; };
+                    auto const height = [&](float x) {
+                        float const lx = layer_x(x);
+                        float h = 0.f;
+                        for (int k = -2; k <= 2; ++k)
+                            h += ::terrain::sand_height(*sand, lx + float(k) * 160.f);
+                        h *= 0.2f;
+                        float const sx = lx + l.seed * 977.f;
+                        float const dune = std::sin(sx * 0.0041f + l.seed) * 0.5f + std::sin(sx * 0.0093f + 4.1f * l.seed) * 0.3f
+                            + (1.f - std::fabs(std::sin(sx * 0.0023f + 0.7f))) * 0.4f - 0.2f;
+                        float const ly = h + mathf::max(::terrain::sand_back(*sand, lx), 0.f) + l.rise + l.relief * dune;
+                        return vanish.y + (ly - vanish.y) * l.rate;
+                    };
+                    uint8_t const a = uint8_t(mathf::clamp01(1.f - l.haze) * 255.f + 0.5f);
+                    auto const normal_at = [&](float xx) {
+                        float const slope = (height(xx + 4.f) - height(xx - 4.f)) / 8.f;
+                        vec2 const n = rw::normalized(vec2{-slope, 1.f});
+                        return rgba(enc(n.x), enc(n.y), 128, a);
+                    };
+                    for (float x = x0; x < x1; x += far_step) {
+                        float const xb = mathf::min(x + far_step, x1);
+                        float const lxa = layer_x(x), lxb = layer_x(xb);
+                        if (lxb < sand->left || lxa > sand->right)
+                            continue;
+                        // never under the sand in front (it would show where
+                        // that is out of view above)
+                        auto const near_line = [&](float xx) { return ::terrain::sand_height(*sand, xx) + 0.5f * mathf::max(::terrain::sand_back(*sand, xx), 0.f); };
+                        float const ya = mathf::max(height(x), near_line(x)), yb = mathf::max(height(xb), near_line(xb));
+                        if (ya <= bottom && yb <= bottom)
+                            continue;
+                        uint32_t const na = normal_at(x), nb = normal_at(xb);
+                        vertex const ta{x, ya, na, lxa, l.depth}, tb{xb, yb, nb, lxb, l.depth};
+                        vertex const ba{x, bottom, na, lxa, l.depth}, bb{xb, bottom, nb, lxb, l.depth};
+                        r.batch.insert(r.batch.end(), {ta, tb, bb, ta, bb, ba});
+                        top = mathf::max(top, mathf::max(ya, yb));
+                    }
+                }
+            }
             for (float x = x0; x < x1; x += step) {
                 float const xb = mathf::min(x + step, x1);
                 float const ha = ::terrain::sand_height(*sand, x), hb = ::terrain::sand_height(*sand, xb);
@@ -3759,10 +3843,13 @@ namespace render {
                 vertex const fa{x, ha, na, 0.f, front_depth}, fb{xb, hb, nb, 0.f, front_depth};
                 vertex const ba{x, bottom, na, -(ha - bottom), front_depth}, bb{xb, bottom, nb, -(hb - bottom), front_depth};
                 r.batch.insert(r.batch.end(), {fa, fb, bb, fa, bb, ba});
-                // the top going back
-                float const da = mathf::min(::terrain::sand_back(*sand, x), 40.f), db = mathf::min(::terrain::sand_back(*sand, xb), 40.f);
-                float const ta = ha + da * 0.5f + 4.f, tb = hb + db * 0.5f + 4.f;
-                vertex const ka{x, ta, na, 1.f, front_depth + 0.4f * da / 40.f}, kb{xb, tb, nb, 1.f, front_depth + 0.4f * db / 40.f};
+                // the top going back: TerrainCurve's backPoints (the handles'
+                // backHeight above the front) 35 layers deep (seen from below
+                // it would fold under the front: kept just above it)
+                float const da = mathf::max(::terrain::sand_back(*sand, x), 0.f), db = mathf::max(::terrain::sand_back(*sand, xb), 0.f);
+                vec2 const pa = apply_depth(vec2{x, ha + da}, max_depth), pb = apply_depth(vec2{xb, hb + db}, max_depth);
+                float const ta = mathf::max(pa.y, ha + 1.f), tb = mathf::max(pb.y, hb + 1.f);
+                vertex const ka{pa.x, ta, na, 1.f, max_depth / 30.f}, kb{pb.x, tb, nb, 1.f, max_depth / 30.f};
                 r.batch.insert(r.batch.end(), {fa, fb, kb, fa, kb, ka});
                 top = mathf::max(top, mathf::max(ta, tb));
             }
@@ -3783,6 +3870,7 @@ namespace render {
             u.edge_radius = w.room_get_terrain_edge_radius(room.id);
             u.sky_fade = w.room_get_terrain_sky_fade(room.id);
             u.water_level = room.water ? room.float_water_level : -1.0e9f;
+            u.waves = w.room_get_terrain_waves(room.id);
             auto const* tp = room_terrain_palette(r, s, room.id);
             u.terrain_rows = tp ? tp->rows : 0;
             // TerrainCurve.UpdateLightInfo: the non-flat lights near the sand,
@@ -4148,6 +4236,11 @@ namespace render {
                 case particles::kind::sand_puff:
                     // (the Spores shader: draw_sand_puffs)
                     break;
+                case particles::kind::bottom_bubble:
+                    // (LizardBubble5 sprites: room_decor::bubble_cmds; a ring without the atlas)
+                    if (r.game_texture == 0)
+                        p.circle(pos, mathf::lerp(pt.saturation, pt.hue, alpha) * pt.size * 3.f, to_rgba(pt.color, 0.6f));
+                    break;
                 }
             }
         }
@@ -4155,8 +4248,10 @@ namespace render {
         // the water: its body (the scene behind refracted and tinted, see
         // water.frag) from the front edge down, then the top of the surface
         // as a band of rows going back, shaded by their slope
-        // `sun`: vanilla's _light (1 full sun, -1 none)
-        void draw_water(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds, float sun) {
+        // `f`: the level frame (its camera images and palette: the caustics
+        // follow the level's shadows; the sun and the coming rain aren't read,
+        // so the water keeps its look through the cycle)
+        void draw_water(state& r, sys::game_state const& s, world::room_view const& room, float alpha, camera const& cam, glm::mat4 const& proj, float seconds, level_frame const& f) {
             if (!room.water)
                 return;
             auto const* surf = water::surface(s, room.id);
@@ -4179,15 +4274,15 @@ namespace render {
             float const top_clip = cam.pos.y + view_h + 40.f;
             // the palette's water colours (its rain variant with the night
             // toggle, like the level), and how much of the room's light
-            // reaches it: the palette's darkness, the clouds and the coming
-            // rain dim the shine and the caustics
+            // reaches it: the palette's darkness dims the shine and the
+            // caustics (not _light: the coming rain would wash them out)
             float const night = r.night_time;
             rw::vec3 const shallow = palette_pixel(r, s, room.id, 4, 7, night);
             rw::vec3 const deep = palette_pixel(r, s, room.id, 5, 7, night);
             rw::vec3 const top1 = palette_pixel(r, s, room.id, 6, 7, night);
             rw::vec3 const top2 = palette_pixel(r, s, room.id, 7, 7, night);
             rw::vec3 const shine = palette_pixel(r, s, room.id, 8, 7, night);
-            float const lit = (1.f - palette_darkness(r, s, room.id)) * mathf::inverse_lerp(-1.f, 1.f, sun);
+            float const lit = 1.f - palette_darkness(r, s, room.id);
             constexpr float step = 4.f;
             int const n = int((x1 - x0) / step) + 1;
             auto const hgt = [&](float x, float z) { return water::height(s, *surf, x, z, alpha); };
@@ -4214,7 +4309,29 @@ namespace render {
             u.deep = deep;
             u.shine = shine;
             u.lit = lit;
-            gpu::draw(*r.gpu, gpu::pipeline::water, &u, sizeof(u), {scene}, 0, r.batch.size());
+            u.view_pos = glm::vec2{cam.pos.x, cam.pos.y};
+            u.index = f.palette;
+            u.night_time = night;
+            // the camera images behind it (the caustics sink into the level's shade)
+            bool const has_level = f.cams != nullptr && !f.cams->empty() && r.room_texture != 0 && r.palette_texarray != 0;
+            if (has_level) {
+                u.cam_count = int32_t(std::min<size_t>(f.cams->size(), 32));
+                for (int32_t i = 0; i < u.cam_count; ++i) {
+                    vec2 const o = (*f.cams)[size_t(i)];
+                    glm::vec4& v = u.cams[i / 2];
+                    if (i % 2 == 0) {
+                        v.x = o.x;
+                        v.y = o.y;
+                    } else {
+                        v.z = o.x;
+                        v.w = o.y;
+                    }
+                }
+            }
+            if (has_level)
+                gpu::draw(*r.gpu, gpu::pipeline::water, &u, sizeof(u), {scene, r.room_texture, r.palette_texarray}, 0, r.batch.size());
+            else
+                gpu::draw(*r.gpu, gpu::pipeline::water, &u, sizeof(u), {scene}, 0, r.batch.size());
 
             if (level - 60.f > top_clip)
                 return;
@@ -4259,12 +4376,56 @@ namespace render {
             draw_flat_range(r, proj, 0, 0, r.batch.size());
         }
 
-        // RegionGateGraphics, minimal: each door is a slab sliding down from
-        // above its opening while closing
-        void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room) {
+        // a gate_graphics ColoredSprite2 sprite as a mode 3 sprite instance
+        // (sprite.frag looks its texels up in the palette colours it carries)
+        void pull_colored_sprite2(state& r, gate_graphics::cmd const& c) {
+            game_frame const* f = find_game_frame(r, c.c.spr.element);
+            if (f == nullptr)
+                return;
+            float const tw = float(r.game_width), th = float(r.game_height);
+            float const u0 = f->x / tw, u1 = (f->x + f->w) / tw;
+            float const v_top = f->y / th, v_bottom = (f->y + f->h) / th;
+            auto const& sp = c.c.spr;
+            float const x0 = -sp.anchor.x * f->source_w + f->trim_x;
+            float const y0 = -sp.anchor.y * f->source_h + (f->source_h - f->trim_y - f->h);
+            gpu::sprite_instance const si{{sp.pos.x, sp.pos.y, sp.rotation, 0.f},
+                {x0 * sp.scale.x, y0 * sp.scale.y, (x0 + f->w) * sp.scale.x, (y0 + f->h) * sp.scale.y}, {u0, v_top, u1, v_bottom},
+                {to_rgba(c.pal_near[0]), to_rgba(c.pal_near[1]), to_rgba(c.pal_near[2]), 0u},
+                {3u, to_rgba(c.pal_far[0]), to_rgba(c.pal_far[1]), to_rgba(c.pal_far[2])}};
+            pull_sprite(r, si);
+        }
+
+        // RegionGateGraphics (gate_graphics.cpp) through the game's atlas;
+        // without its sprites each door is a slab sliding down from above
+        // its opening while closing
+        void build_gate_doors(state& r, sys::game_state const& s, world::room_view const& room, float alpha) {
             auto const g = gates::gate_of(s, room.id);
             if (!g)
                 return;
+            if (r.game_texture != 0 && find_game_frame(r, gate_graphics::probe_element) != nullptr) {
+                static std::vector<gate_graphics::cmd> cmds;
+                static std::vector<sprites::draw_cmd> run;
+                cmds.clear();
+                run.clear();
+                rw::vec2 heater{60.f, 32.f};
+                if (game_frame const* hf = find_game_frame(r, "RegionGate_Heater"))
+                    heater = rw::vec2{hf->source_w, hf->source_h};
+                gate_graphics::build(s, room, alpha, room_palette(r, s, room.id), heater, cmds);
+                for (auto const& c : cmds) {
+                    if (!c.colored2) {
+                        run.push_back(c.c);
+                        continue;
+                    }
+                    if (!run.empty()) {
+                        emit_game_cmds(r, run);
+                        run.clear();
+                    }
+                    pull_colored_sprite2(r, c);
+                }
+                if (!run.empty())
+                    emit_game_cmds(r, run);
+                return;
+            }
             painter p{r.batch};
             rw::vec3 const closed = s.world.gate_get_door_closed(g);
             float const bottom = float(gates::door_bottom_y) * 20.f;
@@ -4410,8 +4571,25 @@ namespace render {
 
         float const seconds = float(std::fmod(double(SDL_GetTicks()) / 1000.0, 1000.0));
         if (textured_room) {
+            // the room's sky scene (AboveCloudsView), behind the level: its
+            // sky pixels leave the scene showing
+            background_scene::frame_params bp;
+            bp.proj = proj;
+            bp.cam = cam;
+            bp.view_w = view_w;
+            bp.view_h = view_h;
+            bp.palette = lf.palette;
+            bp.night_time = lf.night_time;
+            bp.rain = lf.rain;
+            background_scene::draw(r, s, room, bp);
             draw_cameras(0);
+            // the Rot Islands are level pixels (room_decor.hpp)
+            room_decor::step(s, room.id);
+            room_decor::draw_rot_islands(*r.gpu, s, room.id, alpha,
+                room_decor::level_params{lf.proj, lf.screen, lf.view_pos, lf.zoom, lf.light_dir, lf.palette, lf.effect_colors, lf.night_time, lf.rain, lf.light,
+                    &cams, r.room_texture, r.palette_texarray, r.effects_texture});
         } else {
+            room_decor::step(s, room.id);
             draw_geometry();
         }
         // the warps bend the level behind them, under the creatures
@@ -4447,6 +4625,19 @@ namespace render {
         draw_flat([&] { build_rot(r, s, room, alpha, false); });
         draw_game([&] { build_outposts(r, s, room); });
         draw_game([&] { build_items(r, s, room, alpha, true); });
+        // KarmaFlowerPatch's flowers (the Items container)
+        if (atlas) {
+            draw_game([&] {
+                static std::vector<sprites::draw_cmd> cmds;
+                static std::vector<sprites::strip_vertex> strip;
+                cmds.clear();
+                strip.clear();
+                game_frame const* ring = find_game_frame(r, "FoodCircleA");
+                room_decor::flower_cmds(s, room.id, alpha, cam.pos + vec2{700.f, 533.3334f}, palette_black(r, s, room.id), palette_texel(r, s, room.id, 1, 7),
+                    ring ? vec2{ring->source_w, ring->source_h} : vec2{1.f, 1.f}, cmds, strip);
+                emit_game_cmds(r, cmds, &strip);
+            });
+        }
         r.batch.clear();
         clear_pulled(r);
         bool const sprites = r.slugcat_texture != 0;
@@ -4461,7 +4652,7 @@ namespace render {
         if (atlas)
             build_seed_cobs(r, s, room, alpha);
         build_items(r, s, room, alpha, false);
-        build_gate_doors(r, s, room);
+        build_gate_doors(r, s, room, alpha);
         upload(r);
         // (the ropes and circles among them: daddy long legs' tubes and bulbs)
         pulled_upload pu = upload_pulled(r);
@@ -4479,10 +4670,13 @@ namespace render {
         // the frame's lights (the sand reads them too)
         light_list const lights = collect_lights(r, s, room, lf, alpha);
         if (textured_room) {
-            // the sand, behind the sprites but lit with the level
-            draw_sand(r, s, room, lf, lights);
+            // the level's front layers and the decals (vanilla's Foreground
+            // container), then the sand over them (its Sand container): the
+            // decals stay on the level standing out of the sand
             draw_cameras(1);
             draw_decals(r, s, room, lf);
+            // the sand, behind the sprites but lit with the level
+            draw_sand(r, s, room, lf, lights);
             if (r.show_geometry)
                 draw_geometry();
         }
@@ -4509,7 +4703,17 @@ namespace render {
             build_particles(r, s, room, alpha);
             build_shortcut_glow(r, s, room, alpha);
         });
-        draw_water(r, s, room, alpha, cam, proj, seconds, lf.light);
+        // the floor bubbles' sprites (Bubble), coloured as the water shader
+        // turns their marker colour: RoomPalette.waterColor1
+        if (atlas) {
+            draw_game([&] {
+                static std::vector<sprites::draw_cmd> cmds;
+                cmds.clear();
+                room_decor::bubble_cmds(s, room.id, alpha, palette_texel(r, s, room.id, 4, 7), cmds);
+                emit_game_cmds(r, cmds);
+            });
+        }
+        draw_water(r, s, room, alpha, cam, proj, seconds, lf);
         if (textured_room) {
             draw_lights(r, lights, lf, true);
             // the sandstorm (vanilla's Water container)

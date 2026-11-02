@@ -900,6 +900,8 @@ namespace world {
             dc.room_set_terrain_grain(rid, t.terrain_grain.value_or(0.f));
             dc.room_set_terrain_edge_radius(rid, t.terrain_edge_radius.value_or(200.f));
             dc.room_set_terrain_sky_fade(rid, t.terrain_sky_fade.value_or(0.f));
+            dc.room_set_terrain_depth(rid, t.terrain_depth.value_or(0.f));
+            dc.room_set_terrain_waves(rid, t.terrain_waves.value_or(0.f));
             dc.room_set_room_specific_script_active(rid, t.room_specific_script_active.value_or(false));
             dc.room_set_wet_terrain(rid, t.wet_terrain.value_or(false));
 

@@ -2962,16 +2962,7 @@ namespace npc {
             return player::input_package{};
         // this tick's rolls of its brain
         auto rng = rw::random(state.seed, state.tick, uint32_t(c.value));
-        // fell out of the room's bottom: dead (Creature.Update; the port
-        // doesn't kill a slugcat for it otherwise, and down there it would
-        // wait under the room for good)
-        if (room.default_water_level < 0 && !player::in_shortcut(state, p)) {
-            float const limit = w.player_get_body_mode(p) == player::body_mode_index::wall_climb ? -250.f : -500.f;
-            if (w.body_chunk_get_pos(player::body_chunk(state, p, 0)).y < limit) {
-                player::die(state, p);
-                return player::input_package{};
-            }
-        }
+        // (fell out of the room's bottom: eaten by the death pit, creature.cpp)
         auto& nav = w.slugcat_npc_get_nav(n);
         // a new room: its trip moves on (a warp did that already), what it
         // knew of the last room is gone

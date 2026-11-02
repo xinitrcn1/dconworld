@@ -132,7 +132,17 @@ namespace sys {
         float mean = 0.f;        // the sandstorm's resting level
         float amplitude = 0.f;   // and its dunes
         float phase = 0.f;
+        // the per tile layer over the height map (terrain.hpp): a tile
+        // buried deep enough is written into the room's tiles as solid (the
+        // sand's packed part: pathing, physics and the creatures' tile checks
+        // stand on it), the partly covered tiles over it stay air and the
+        // height map collides them (the volatile top layer)
+        std::vector<uint8_t> tiles; // width * height, sand_tile_* bits
+        int32_t tiles_w = 0;
     };
+    inline constexpr uint8_t sand_tile_convertible = 1; // air in the level: sand may fill it
+    inline constexpr uint8_t sand_tile_solid = 2;       // filled: solid in the room's tiles now
+    inline constexpr uint8_t sand_tile_volatile = 4;    // the loose top layer: partly covered
     // RippleRing: expanding rings of the ripple layer (warp hints, the
     // Watcher's ability)
     struct ripple_ring {

@@ -25,6 +25,13 @@ namespace terrain {
         // the sandstorm's dunes and how gently it reshapes them
         constexpr float dune_length = 520.f;
         constexpr float storm_rate = 0.0007f;
+        // the per tile layer: a tile turns solid once the sand is this far
+        // over its top across its whole width, and back to air once its top
+        // is uncovered (the hysteresis keeps footprints from flipping tiles)
+        constexpr float pack_depth = 8.f;
+        constexpr float unpack_depth = 0.f;
+        // how often (ticks) a room checks its sand tiles against the surface
+        constexpr uint32_t retile_period = 10;
 
         sand_t* find(sys::game_state& state, dcon::room_id room) {
             if (!state.has_runtime(room))
@@ -110,6 +117,84 @@ namespace terrain {
             return true;
         }
 
+        // the lowest surface over a tile column's 20 px
+        float lowest_over(sand_t const& s, int32_t tx) {
+            float const a = float(tx) * 20.f, b = a + 20.f;
+            int32_t const n = int32_t(s.h.size());
+            int32_t const i0 = rw::custom::int_clamp(int32_t(std::floor((a - s.x0) / s.spacing)), 0, n - 1);
+            int32_t const i1 = rw::custom::int_clamp(int32_t(std::ceil((b - s.x0) / s.spacing)), 0, n - 1);
+            float m = s.h[size_t(i0)];
+            for (int32_t i = i0 + 1; i <= i1; ++i)
+                m = mathf::min(m, s.h[size_t(i)]);
+            return m;
+        }
+
+        // The per tile layer against the surface: the buried tiles solid in
+        // the room's tiles, the uncovered ones back to air, the partly
+        // covered ones marked volatile. Pipes opening into the sand stay
+        // open (their tiles and the ones around them never fill), and only
+        // tiles that are air in the level ever change. Bumps the room's
+        // geometry_version when a tile changed (the path fields rebuild)
+        void retile(sys::game_state& state, dcon::room_id room, sand_t& s, bool first) {
+            auto& w = state.world;
+            int32_t const width = w.room_get_width(room);
+            int32_t const height = w.room_get_height(room);
+            auto const base = w.room_get_first_tile(room).id.index();
+            auto tile_at = [&](int32_t x, int32_t y) -> world::packed_tile& {
+                return w.tile_get_bits(dcon::tile_id{dcon::tile_id::value_base_t(base + y * width + x)});
+            };
+            if (first) {
+                s.tiles_w = width;
+                s.tiles.assign(size_t(width) * size_t(height), 0);
+                for (int32_t y = 0; y < height; ++y)
+                    for (int32_t x = 0; x < width; ++x) {
+                        auto const& t = tile_at(x, y);
+                        if (t.t() != world::terrain::air || t.shortcut() != 0)
+                            continue;
+                        bool near_pipe = false;
+                        for (int32_t dx = -1; dx <= 1 && !near_pipe; ++dx)
+                            for (int32_t dy = -1; dy <= 1 && !near_pipe; ++dy) {
+                                int32_t const nx = x + dx, ny = y + dy;
+                                if (nx < 0 || ny < 0 || nx >= width || ny >= height)
+                                    continue;
+                                auto const& n = tile_at(nx, ny);
+                                near_pipe = n.t() == world::terrain::shortcut_entrance || n.shortcut() != 0;
+                            }
+                        if (!near_pipe)
+                            s.tiles[size_t(y * width + x)] = sys::sand_tile_convertible;
+                    }
+            }
+            bool changed = false;
+            for (int32_t x = 0; x < width; ++x) {
+                // (only columns the handles' span covers whole)
+                bool const covered = float(x) * 20.f >= s.left && float(x + 1) * 20.f <= s.right;
+                float const low = covered ? lowest_over(s, x) : -1e9f;
+                float const high = covered ? mathf::max(sand_height(s, float(x) * 20.f), mathf::max(sand_height(s, float(x) * 20.f + 10.f), sand_height(s, float(x + 1) * 20.f))) : -1e9f;
+                for (int32_t y = 0; y < height; ++y) {
+                    uint8_t& st = s.tiles[size_t(y * width + x)];
+                    if ((st & sys::sand_tile_convertible) == 0)
+                        continue;
+                    float const top = float(y + 1) * 20.f;
+                    bool solid = (st & sys::sand_tile_solid) != 0;
+                    if (!solid && low >= top + pack_depth)
+                        solid = true;
+                    else if (solid && low < top + unpack_depth)
+                        solid = false;
+                    bool const loose = !solid && high > float(y) * 20.f;
+                    uint8_t const want = uint8_t(sys::sand_tile_convertible | (solid ? sys::sand_tile_solid : 0) | (loose ? sys::sand_tile_volatile : 0));
+                    if (want == st)
+                        continue;
+                    if (((want ^ st) & sys::sand_tile_solid) != 0) {
+                        tile_at(x, y).set_terrain(solid ? world::terrain::solid : world::terrain::air);
+                        changed = true;
+                    }
+                    st = want;
+                }
+            }
+            if (changed)
+                ++w.room_get_geometry_version(room);
+        }
+
         int32_t index_of(sand_t const& s, float x) {
             return rw::custom::int_clamp(int32_t(std::lround((x - s.x0) / s.spacing)), 0, int32_t(s.h.size()) - 1);
         }
@@ -153,6 +238,8 @@ namespace terrain {
             // remembered as "no sand here"
             slot = sand_t{};
             slot.room = room;
+        } else {
+            retile(state, room, slot, true);
         }
         return slot.h.empty() ? nullptr : &slot;
     }
@@ -218,6 +305,9 @@ namespace terrain {
                     s.h[i + 1] += m;
                 }
             }
+            // the per tile layer follows the reshaped surface (staggered over the rooms)
+            if ((state.tick + uint32_t(room.id.index())) % retile_period == 0)
+                retile(state, room.id, s, false);
             if (sandstorm(state, room.id)) {
                 // the wind drifts the dunes along, smoothing them towards its own shape
                 s.phase += 0.0004f;

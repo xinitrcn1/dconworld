@@ -212,6 +212,7 @@ namespace parsers {
         set(terrain_edge_radius, o.terrain_edge_radius);
         set(terrain_sky_fade, o.terrain_sky_fade);
         set(terrain_depth, o.terrain_depth);
+        set(terrain_waves, o.terrain_waves);
         // RoomSettings.InheritAmbientSounds: the overlay's own sounds, then
         // the ones of this (its parent) it doesn't overwrite (same sample
         // and type)

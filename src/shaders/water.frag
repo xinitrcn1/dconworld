@@ -5,10 +5,17 @@
 // Everything is built from hashed value noise, domain warped and drifting,
 // so the pattern never visibly repeats; the shimmer and caustics weaken with
 // depth but never fade out, down to the floor of the deepest pools.
+//
+// The caustics follow the level behind the water, not the weather: where the
+// camera image is shaded (its red channel's sun bit off) they sink by as much
+// as the palette darkens that pixel (its shade row against its lit row), so
+// the room's shadows obscure them. Neither the sun nor the coming rain
+// (`_light`) reaches them: the water looks the same through the cycle.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "warp_common.glsl"
+#include "level_common.glsl"
 
 layout(location = 0) in vec2 v_local;          // x: room x, y: depth below the surface (pixels)
 layout(location = 0) out vec4 frag_color;
@@ -21,10 +28,18 @@ layout(set = 0, binding = 0, std140) uniform water_uniforms {
     vec3 u_deep;      // RoomPalette.waterColor2
     float u_zoom;
     vec3 u_shine;     // RoomPalette.waterShineColor
-    float u_lit;      // the room's sunlight here (its darkness, the clouds, the coming rain): the caustics' strength
+    float u_lit;      // 1 - the palette's darkness: the caustics' strength
     vec2 u_screen;
+    vec2 u_view_pos;  // the view's bottom left, room pixels
+    int u_index;      // palette layer
+    int u_cam_count;  // camera images (0: no level, the caustics everywhere)
+    float u_night_time;
+    float u_pad;
+    vec4 u_cams[16];  // their bottom lefts, two per vec4
 };
 layout(set = 0, binding = 1) uniform sampler2D u_scene;
+layout(set = 0, binding = 2) uniform sampler2DArray u_level;   // the room's camera images
+layout(set = 0, binding = 3) uniform sampler2DArray u_palette;
 
 // integer hash (no visible lattice, unlike the sin() hashes)
 float hash13(vec3 p) {
@@ -67,6 +82,43 @@ float fbm(vec3 p) {
     return v;
 }
 
+float luma(vec3 c) {
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// how much of the caustics the level behind lets through: 1 where it is
+// sunlit (or open sky), else its shaded colour's brightness against its lit
+// one (the palette's shade rows), out of the camera image the level shows
+// there (the last one covering it)
+float level_light(vec2 room) {
+    int cam = -1;
+    vec2 origin = vec2(0.0);
+    for (int i = 0; i < u_cam_count; ++i) {
+        vec4 o4 = u_cams[i / 2];
+        vec2 o = (i % 2) == 0 ? o4.xy : o4.zw;
+        vec2 d = room - o;
+        if (d.x >= 0.0 && d.y >= 0.0 && d.x < level_size.x && d.y < level_size.y) {
+            cam = i;
+            origin = o;
+        }
+    }
+    if (cam < 0)
+        return 1.0;
+    vec2 tc = (floor(room - origin) + 0.5) / level_size;
+    ivec3 t = ivec3(texture(u_level, vec3(tc.x, 1.0 - tc.y, float(cam))).rgb * 255.0 + 0.5);
+    level_px p = level_decode(t);
+    if (p.sky || p.sunlit)
+        return 1.0;
+    int column = p.floor_dark ? p.depth : 0;
+    vec3 lit = mix(level_pal(u_palette, u_index, column, p.palette_color + 3, false),
+                   level_pal(u_palette, u_index, column, p.palette_color + 3, true), u_night_time);
+    vec3 shade = mix(level_pal(u_palette, u_index, column, p.palette_color, false),
+                     level_pal(u_palette, u_index, column, p.palette_color, true), u_night_time);
+    float k = clamp(luma(shade) / max(luma(lit), 1e-3), 0.0, 1.0);
+    // (a shade as bright as the light still reads as shade)
+    return k * 0.8;
+}
+
 void main() {
     float depth = max(v_local.y, 0.0);
     vec2 world = vec2(v_local.x, -depth);
@@ -81,7 +133,7 @@ void main() {
     float near = exp(-depth / 160.0);
     float strength = mix(0.35, 1.0, near);
     vec2 bend = vec2(fbm(vec3(p * 2.0, t * 0.35)), fbm(vec3(p * 2.0 + vec2(9.1, 4.7), t * 0.33))) - 0.5;
-    vec2 offset = bend * 7.0 * strength * u_zoom;
+    vec2 offset = bend * 5.0 * strength * u_zoom;
     vec2 uv = clamp((warp_frag_coord(u_screen) + offset) / u_screen, vec2(0.001), vec2(0.999));
     vec3 scene = texture(u_scene, uv).rgb;
 
@@ -95,8 +147,9 @@ void main() {
     // caustics: bright creases of warped noise, dimmer but present all the way down
     float c = fbm(vec3(p * 4.5, t * 0.5));
     float crease = 1.0 - abs(c * 2.0 - 1.0);
-    float caustic = pow(crease, 9.0) * mix(0.45, 1.0, near);
-    col += u_shine * caustic * 0.35 * light * u_lit;
+    float caustic = pow(crease, 11.0) * mix(0.45, 1.0, near);
+    vec2 room = u_view_pos + warp_frag_coord(u_screen) / u_zoom;
+    col += u_shine * caustic * 0.2 * light * u_lit * level_light(room);
 
     float alpha = mix(0.62, 0.86, murk);
     frag_color = vec4(col, alpha);

@@ -140,6 +140,7 @@ namespace parsers {
         std::optional<float> terrain_edge_radius;
         std::optional<float> terrain_sky_fade;
         std::optional<float> terrain_depth;
+        std::optional<float> terrain_waves;
         // "AmbientSounds:", read by world.cpp (not the generated parser)
         std::vector<world::ambient_sound_desc> ambient_sounds;
 

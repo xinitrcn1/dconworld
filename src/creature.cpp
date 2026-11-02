@@ -823,17 +823,38 @@ namespace creature {
         // Creature.Update's death pit: the main chunk down at the bottom of
         // a room with no water below (pinned at -restrictInRoomRange by the
         // physics), not able to fly out (a flier only when stunned or dead):
-        // it dies and is destroyed. The destroying waits for the rooms'
-        // parallel pass (`state.defer`)
+        // it dies and is destroyed, a slugcat too (500 px under the room, 250
+        // climbing a wall). Not vanilla: a slugcat is eaten (dead and gone,
+        // like a long legs' meal: Player.PermaDie for every slugcat, not only
+        // in co-op), so no corpse is left under the room. Whatever holds it
+        // lets go a little above that (FORCE CREATURE RELEASE UNDER ROOM).
+        // The destroying waits for the rooms' parallel pass (`state.defer`)
         void death_pit(sys::game_state& state, dcon::creature_id c, world::room_view const& room) {
             auto& w = state.world;
-            if (room.default_water_level >= 0)
+            if (!w.creature_is_valid(c) || w.creature_get_away(c) != 0)
+                return;
+            auto const pl = is_slugcat(w, c) ? player_of(state, c) : dcon::player_id{};
+            if (pl && w.player_get_eaten(pl))
                 return;
             auto const k = chunk(state, c, 0);
-            if (w.body_chunk_get_pos(k).y >= -w.body_chunk_get_restrict_in_room_range(k) + 1.f)
+            float limit = -w.body_chunk_get_restrict_in_room_range(k) + 1.f;
+            if (pl)
+                limit = mathf::max(limit, w.player_get_body_mode(pl) == player::body_mode_index::wall_climb ? -250.f : -500.f);
+            float const y = w.body_chunk_get_pos(k).y;
+            bool const flier = can_fly(template_of(state, c));
+            if (y < limit + 10.f && !flier && held(state, c))
+                release_target(state, c, room.id);
+            if (room.default_water_level >= 0 || y >= limit)
                 return;
-            if (can_fly(template_of(state, c)) && w.creature_get_stun(c) <= 0 && !w.creature_get_dead(c))
+            if (flier && w.creature_get_stun(c) <= 0 && !w.creature_get_dead(c))
                 return;
+            if (pl) {
+                items::release_all(state, pl);
+                release_target(state, c, room.id);
+                die(state, c);
+                w.player_set_eaten(pl, 1);
+                return;
+            }
             die(state, c);
             state.defer(room.id, [c](sys::game_state& st) {
                 if (st.world.creature_is_valid(c))
@@ -1277,9 +1298,12 @@ namespace creature {
         bool const viewed = state.viewed(room.id);
         collide_slugcats(state, room);
         for (auto const t : all_types) {
-            // (the slugcats ran first, player.cpp, and collide in the others' turns)
-            if (t == type::slugcat)
+            // (the slugcats ran first, player.cpp, and collide in the others'
+            // turns; only their death pit is left)
+            if (t == type::slugcat) {
+                rooms::for_each_creature(state, room.id, t, [&](dcon::creature_id c) { death_pit(state, c, room); });
                 continue;
+            }
             rooms::for_each_creature(state, room.id, t, [&](dcon::creature_id c) { update(state, c, room, viewed); });
             // the room's LizardSpit flies after the lizards
             if (t == type::lizard)

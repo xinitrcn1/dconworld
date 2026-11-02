@@ -25,6 +25,12 @@ namespace particles {
         explosion_light, // Explosion.ExplosionLight: size the radius, alpha, colour, its life its lifeTime
         flare_light,     // a FlareBomb burning (its LightSource while `burning` runs 0..1): colour
         sand_puff,       // SandPuffSpawner.SandPuff: size its size (0..1); the colour is the terrain palette's dust (render.cpp)
+        // Bubble (bottomBubble): grows on the floor under water, then rises
+        // (Water.Update spawns one try a tick). size: fullSize; hue: size
+        // (0..1), saturation: lastSize; rot_vel: growthSpeed; counter: the
+        // mode (0 growing, 1 free, 2 trapped); disappear: age; z_rot_vel:
+        // initPop. Drawn with its sprite (room_decor.cpp)
+        bottom_bubble,
     };
 
     void spawn(sys::game_state& state, dcon::room_id room, kind k, rw::vec2 pos, rw::vec2 vel, float size, float seconds, rw::vec3 color, float alpha = 1.f);

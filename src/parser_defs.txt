@@ -95,7 +95,7 @@ room_template
     TerrainStainAmount                              skip        float           0.0
     TerrainStainHeight                              skip        float           0.0
     TerrainStainBrightness                          skip        float           0.0
-    TerrainWaves                                    skip        float           0.0
+    TerrainWaves                                    member      float           0.0
     TerrainGooHeight                                skip        float           0.0
     TerrainDepth                                    member      float           0.0
     TerrainLight                                    member        float           0.0

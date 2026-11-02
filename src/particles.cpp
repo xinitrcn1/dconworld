@@ -229,6 +229,32 @@ namespace particles {
                 }
             }
         }
+        // Water.Update: a try a tick at a random tile under the default water
+        // level; an air tile on solid ground grows a bubble (Bubble with
+        // bottomBubble) from the floor
+        if (room.water && room.default_water_level > 0) {
+            auto br = random(state, room.id, 0x0B0B0B0Bu);
+            int32_t const x = br.range(0, room.width);
+            int32_t const y = br.range(0, room.default_water_level);
+            if (room.get_tile(x, y).t == world::terrain::air && room.get_tile(x, y - 1).solid()) {
+                vec2 const at = room_view::middle_of_tile(x, y) + vec2{mathf::lerp(-10.f, 10.f, br.value()), -10.f};
+                size_t const before = (state.parallel ? state.runtime(room.id).particles : state.particles).size();
+                spawn(state, room.id, kind::bottom_bubble, at, vec2{0.f, 0.f}, mathf::lerp(0.5f, 1.5f, br.value()), 1.f, water_color, 1.f);
+                auto& out = state.parallel ? state.runtime(room.id).particles : state.particles;
+                if (out.size() > before) {
+                    auto& p = out.back();
+                    // Bubble's constructor: growing from size 0, no life countdown
+                    p.decay = 0.f;
+                    p.rot_vel = 1.f / mathf::lerp(5.f, 120.f, br.value());
+                    p.hue = 0.f;
+                    p.saturation = 0.f;
+                    p.counter = 0;
+                    p.disappear = 0;
+                    p.z_rot_vel = 0.f;
+                    p.scale = at;
+                }
+            }
+        }
         // Bubble: what a submerged slugcat breathes out (more when running out of air)
         if (room.water) {
             rooms::for_each_player(state, room.id, [&](dcon::player_id p) {
@@ -327,6 +353,72 @@ namespace particles {
             case kind::sand_puff:
                 p.pos += p.vel;
                 break;
+            case kind::bottom_bubble: {
+                // Bubble.Update (no viscosity, no inverted water). Its lastPos
+                // (where it was before last tick's move) is kept in `scale`
+                vec2 const prev = p.scale;
+                p.saturation = p.hue;
+                p.vel *= 0.8f;
+                if (p.counter == 0) {
+                    // Growing
+                    p.vel = vec2{0.f, 0.f};
+                    if (p.hue < 1.f && r.value() > 0.0125f) {
+                        p.hue = mathf::clamp(p.hue + p.rot_vel, 0.f, 1.f);
+                        p.pos.y += p.size * p.rot_vel * 10.f;
+                    } else if (r.value() < 0.05f) {
+                        p.counter = 1;
+                    }
+                } else if (p.counter == 2) {
+                    // Trapped under a ceiling: sliding about until it finds a way up or shrinks away
+                    p.vel.x += mathf::lerp(-0.2f, 0.2f, r.value());
+                    float const side = r.value() < 0.5f ? -1.f : 1.f;
+                    if (!view.get_tile(p.pos + vec2{20.f * side, 10.f}).solid())
+                        p.vel.x += side;
+                    p.pos.y = room_view::middle_of_tile(p.pos).y + 9.f;
+                    if (!view.get_tile(p.pos + vec2{0.f, 20.f}).solid())
+                        p.counter = 1;
+                    p.hue -= p.rot_vel;
+                    if (p.hue <= 0.f)
+                        p.life = 1.f;
+                } else {
+                    // Free
+                    if (p.hue == 0.f && p.z_rot_vel > 0.f) {
+                        p.hue = 1.f;
+                        p.z_rot_vel = 0.f;
+                    }
+                    p.vel += rw::custom::deg_to_vec(-90.f + 180.f * r.value()) * r.value() * 1.2f;
+                    ++p.disappear;
+                    if (float(p.disappear) > 600.f)
+                        p.life = 1.f;
+                    if (view.get_tile(p.pos).solid()) {
+                        if (!view.get_tile(prev).solid()) {
+                            ivec2 const tp = room_view::get_tile_position(p.pos);
+                            ivec2 const tl = room_view::get_tile_position(prev);
+                            if (tp.y == tl.y + 1) {
+                                p.counter = 2;
+                                p.vel.y = 0.f;
+                                p.pos.y = room_view::middle_of_tile(p.pos).y - 11.f;
+                            } else if (tp.x != tl.x) {
+                                p.pos.x = room_view::middle_of_tile(prev).x + (p.pos.x < prev.x ? -10.f : 10.f);
+                            }
+                        } else {
+                            p.life = 1.f;
+                        }
+                    }
+                }
+                // out of the water (PointSubmerged(pos, 10)): shrinks to nothing, then goes
+                if (!view.water || p.pos.y >= surface_y(state, view, p.pos.x) - 10.f) {
+                    if (p.hue == 0.f)
+                        p.life = 1.f;
+                    else
+                        p.hue = 0.f;
+                }
+                // CosmeticSprite.Update
+                p.scale = p.pos;
+                p.last_pos = p.pos;
+                p.pos += p.vel;
+                break;
+            }
             case kind::centipede_shell: {
                 // CentipedeShell.Update: tumbling, sinking slowly in water,
                 // bouncing off the terrain, then lying still until it fades

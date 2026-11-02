@@ -20,6 +20,10 @@ layout(location = 1) out vec2 v_uv;
 layout(location = 2) out vec2 v_local;       // the halo: room pixels from its centre
 layout(location = 3) flat out uint v_mode;
 layout(location = 4) flat out vec4 v_halo;   // strength, n11, n12
+// mode 3 (ColoredSprite2, the gates): the palette's rows 0..2 at the
+// sprite's depth (rgba.xyz) and at depth 1 (extra.yzw)
+layout(location = 5) flat out uvec4 v_pal_near;
+layout(location = 6) flat out uvec4 v_pal_far;
 
 // mode 0: the corners in bl, br, tr, bl, tr, tl order (0 tl, 1 tr, 2 br, 3 bl)
 const uint sprite_corner[6] = uint[6](3u, 2u, 1u, 3u, 1u, 0u);
@@ -36,8 +40,11 @@ void main() {
     vec4 p1 = uintBitsToFloat(words[base + 1u]);
     vec4 uv = uintBitsToFloat(words[base + 2u]);
     uvec4 rgba = words[base + 3u];
-    uint mode = words[base + 4u].x;
+    uvec4 extra = words[base + 4u];
+    uint mode = extra.x;
     v_mode = mode;
+    v_pal_near = rgba;
+    v_pal_far = extra;
     v_halo = vec4(0.0);
     v_local = vec2(0.0);
     vec2 pos;
@@ -51,7 +58,7 @@ void main() {
         gl_Position = u_proj * vec4(pos, 0.0, 1.0);
         return;
     }
-    if (mode == 0u) {
+    if (mode == 0u || mode == 3u) {
         c = sprite_corner[k];
         // corner c's local position: tl (x0, y1), tr (x1, y1), br (x1, y0), bl (x0, y0)
         float lx = (c == 0u || c == 3u) ? p1.x : p1.z;

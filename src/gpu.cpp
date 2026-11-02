@@ -16,6 +16,8 @@
 // generated from src/shaders at build time (cmake/spirv_to_c.cmake)
 #include "shaders/decal_frag.h"
 #include "shaders/decal_vert.h"
+#include "shaders/dynamic_level_frag.h"
+#include "shaders/background_frag.h"
 #include "shaders/light_frag.h"
 #include "shaders/light_vert.h"
 #include "shaders/sand_vert.h"
@@ -120,7 +122,7 @@ namespace gpu {
         VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
         VkPipelineLayout layout = VK_NULL_HANDLE;
         std::array<VkPipeline, size_t(pipeline::count)> pipelines{};
-        std::array<VkSampler, 3> samplers{};
+        std::array<VkSampler, 4> samplers{};
 
         std::vector<image> textures; // texture id - 1
         texture white_2d = 0, white_array = 0; // stand-ins for unbound slots
@@ -497,6 +499,8 @@ namespace gpu {
                 {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{sandstorm_frag_spv, sandstorm_frag_spv_size}},
                 {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{spores_frag_spv, spores_frag_spv_size}},
                 {spirv{sprite_vert_spv, sprite_vert_spv_size}, spirv{sprite_frag_spv, sprite_frag_spv_size}},
+                {spirv{decal_vert_spv, decal_vert_spv_size}, spirv{dynamic_level_frag_spv, dynamic_level_frag_spv_size}},
+                {spirv{sand_vert_spv, sand_vert_spv_size}, spirv{background_frag_spv, background_frag_spv_size}},
             }};
             for (size_t i = 0; i < sources.size(); ++i) {
                 VkShaderModule const vs = make_module(c, sources[i][0]);
@@ -524,9 +528,10 @@ namespace gpu {
                 // their coverage, the sprite mask render.cpp grabs for the
                 // level shaders (vanilla's GrabPass of the sprites)
                 bool const keeps_alpha = i == size_t(pipeline::room) || i == size_t(pipeline::decal) || i == size_t(pipeline::light)
-                    || i == size_t(pipeline::warp_tear) || i == size_t(pipeline::sand) || i == size_t(pipeline::sandstorm);
+                    || i == size_t(pipeline::warp_tear) || i == size_t(pipeline::sand) || i == size_t(pipeline::sandstorm)
+                    || i == size_t(pipeline::dynamic_level);
                 // (the sandstorm's colours come premultiplied: Blend One OneMinusSrcAlpha)
-                pi.pColorBlendState = i == size_t(pipeline::sandstorm) ? &cb_premul : keeps_alpha ? &cb_rgb : &cb;
+                pi.pColorBlendState = (i == size_t(pipeline::sandstorm) || i == size_t(pipeline::background)) ? &cb_premul : keeps_alpha ? &cb_rgb : &cb;
                 pi.pDynamicState = &ds;
                 pi.layout = c.layout;
                 check(vkCreateGraphicsPipelines(c.device, VK_NULL_HANDLE, 1, &pi, nullptr, &c.pipelines[i]), "vkCreateGraphicsPipelines");
@@ -547,6 +552,7 @@ namespace gpu {
             c.samplers[size_t(sampler::nearest_clamp)] = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             c.samplers[size_t(sampler::nearest_repeat)] = make_sampler(VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
             c.samplers[size_t(sampler::linear_clamp)] = make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            c.samplers[size_t(sampler::linear_repeat)] = make_sampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT);
         }
 
         // ---- device

@@ -70,6 +70,7 @@ namespace gpu {
         nearest_clamp,
         nearest_repeat,
         linear_clamp,
+        linear_repeat,
     };
 
     // one per vertex/fragment shader pair; the uniform block (set 0,
@@ -91,6 +92,8 @@ namespace gpu {
         sandstorm,   // sand.vert + sandstorm.frag, premultiplied alpha (1: cameras, 2: palettes, 3: surface mask, 4: the sprite mask)
         spores,      // sand.vert + spores.frag: the Spores shader's specks (1: cameras)
         sprite,      // sprite.vert/frag: sprite_instances, six vertices each (1: the atlas; no vertex input: draw_pulled)
+        dynamic_level, // decal.vert + dynamic_level.frag: the Watcher's DynamicLevelBlob/Wire meshes (1: cameras, 2: palettes, 3: effect colours)
+        background,  // sand.vert + background.frag: AboveCloudsView's sky scene (background_scene.cpp), premultiplied alpha (1: the illustration, 2: palettes, 3: cloudsTexture)
         count,
     };
 

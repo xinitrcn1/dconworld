@@ -212,6 +212,9 @@ object{
 	property{ name{terrain_grain} type{float} }
 	property{ name{terrain_edge_radius} type{float} }
 	property{ name{terrain_sky_fade} type{float} }
+	// TerrainDepth (the sand's front layer) and TerrainWaves (its ripples)
+	property{ name{terrain_depth} type{float} }
+	property{ name{terrain_waves} type{float} }
 	// the SurfaceSandstorm effect's amount (the Effects line)
 	property{ name{surface_sandstorm} type{float} }
 	// the ZeroG and BrokenZeroG effects' amounts (the Effects line, 0: none)

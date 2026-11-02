@@ -11,6 +11,17 @@
 // slump. During a sandstorm the wind slowly works the dunes back towards a
 // smooth train of sine dunes, undoing whatever was pressed into them.
 //
+// Over the height map sits a per tile layer (sand_field::tiles): a tile of
+// the level that is air and buried 8 px or more under the surface across its
+// whole width is written into the room's tiles as solid (the packed sand),
+// and back to air once the surface drops under its top. Pathing, the body
+// chunks' tile collisions and every creature's tile checks then stand on it
+// like any ground, the way vanilla's AImap sees TerrainCurve tiles (Sand /
+// Solid, and CurvedFloor over them). The partly covered tiles over it are
+// the volatile layer: air in the tiles, collided by the height map, pressed
+// and reshaped. Pipes opening into the sand never fill. The layer follows
+// the surface every 10 ticks; a change bumps the room's geometry_version.
+//
 // In a mud pit bodies sink slowly and everything drags.
 
 #include <cstdint>

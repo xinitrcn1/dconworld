@@ -16,6 +16,21 @@
 // The dunes: v_uv.x is vanilla's clr.r, below 0 the pixels down the front
 // face, 0..1 across the top going back; v_uv.y the depth (0..1 of the 30
 // layers); v_color.rg the surface normal's x and y.
+//
+// The far dunes (rwcpp's, v_color.a under 1: 1 - a is how far they've sunk
+// into the haze): bands of sand behind the sand's back edge, each sliding
+// with the view at its own slower rate (render.cpp's draw_sand), behind all
+// of the level (their depth is past the 30 layers). v_uv.x is their own x
+// (their texture slides with them), v_uv.y their depth. Lit like the top,
+// without the LightSources or the sprites' shadows, sinking into the fog
+// and the sky.
+//
+// The texture (rwcpp's: vanilla's _SandNormals isn't available): wind
+// ripples across the top, crowding towards the back and meandering along
+// the dune, wavy strata and streaks down the front face, soft clumps and a
+// fine grain everywhere, all as tilts of the normal and nudges of the
+// lightness the terrain palette is read at (so its colours stay the
+// palette's). TerrainWaves scales the ripples.
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "level_common.glsl"
@@ -47,7 +62,7 @@ layout(set = 0, binding = 0, std140) uniform sand_uniforms {
     int u_light_count;
     int u_terrain_rows;   // the terrain palette's rows (0: no terrain palette)
     float u_water_level;  // room pixels
-    float u_pad;
+    float u_waves;        // TerrainWaves
     vec4 u_mud;           // rgb: the mud's colour, a: 1 drawing mud
     vec4 u_mud_black;     // rgb: the palette's black
     vec4 u_later[16];
@@ -116,6 +131,11 @@ float white_noise(vec2 cell, float salt) {
     return level_hash(floor(cell) + vec2(salt * 1013.0, salt * 557.0));
 }
 
+// smooth value noise in [0, 1], one cell per unit
+float vn(vec2 p) {
+    return level_noise(p, 1.0);
+}
+
 void main() {
     vec2 room = v_room;
     vec2 tc = (floor(room) + 0.5 - u_cam_origin) / level_size;
@@ -129,6 +149,12 @@ void main() {
         discard;
     float e = v_uv.x;
     float dpth = v_uv.y;
+    // the far dunes: their own x for the texture, read as the top's middle
+    float far = u_mud.a < 0.5 ? 1.0 - v_color.a : 0.0;
+    bool is_far = far > 0.002;
+    vec2 pattern = is_far ? vec2(v_uv.x, room.y) : room;
+    if (is_far)
+        e = 0.5;
     // the level in front of it hides it
     ivec3 t = ivec3(texture(u_level, vec3(tc.x, 1.0 - tc.y, float(u_camera_index))).rgb * 255.0 + 0.5);
     level_px behind = level_decode(t);
@@ -136,8 +162,8 @@ void main() {
         discard;
 
     float edge = max(u_edge_radius, 1.0);
-    float noise = white_noise(room / 1.0, 1.0);
-    float noise2 = white_noise(room / 1.0, 2.0);
+    float noise = white_noise(pattern, 1.0);
+    float noise2 = white_noise(pattern, 2.0);
     float fade = clamp(1.0 - e / -edge, 0.0, 1.0);
 
     // the normal: the dune's, turned towards the viewer down the front face
@@ -150,7 +176,43 @@ void main() {
     vec3 bitangent = cross(normal, tangent);
     float grain_factor = clamp(dot(normalize(vec2(-u_light_dir.x, u_light_dir.y) + vec2(1e-6)), normal.xy) * (1.0 - abs(normal.z) * 0.5), 0.0, 1.0);
     grain_factor = pow(max((grain_factor - 1.0) / max(1.0 - u_terrain_light, 1e-3) + 1.0, 0.0), 0.2) * 0.8 + 0.2;
-    normal = normalize(normal + (tangent * pow(noise2 * 2.0 - 1.0, 3.0) + bitangent * pow(noise * 2.0 - 1.0, 3.0)) * u_terrain_grain * grain_factor * 0.5);
+    normal = normalize(normal + (tangent * pow(noise2 * 2.0 - 1.0, 3.0) + bitangent * pow(noise * 2.0 - 1.0, 3.0)) * u_terrain_grain * grain_factor * 0.5 * (1.0 - far));
+
+    // the sand's texture: a tilt along the bitangent (into the screen on the
+    // top, up on the front face) and a nudge of the lightness
+    float tone = 0.0;
+    if (u_mud.a < 0.5) {
+        float waves = 0.3 + 0.7 * clamp(u_waves, 0.0, 1.0);
+        float bump = 0.0;
+        if (is_far) {
+            // the far dunes: only long streaks along them (lines across
+            // would crawl, their y isn't their own)
+            bump = (vn(vec2(pattern.x * 0.02, 5.3)) - 0.5) * 0.25 * waves;
+        } else if (e >= 0.0) {
+            // ripples: lines along the dune, meandering, the gentle windward
+            // side then the steep lee, crowding and fading towards the back
+            float t01 = clamp(e, 0.0, 1.0);
+            float meander = (vn(vec2(pattern.x * 0.006, 3.7)) - 0.5) * 3.0 + sin(pattern.x * 0.021) * 0.35;
+            float phase = (t01 + 0.8 * t01 * t01) * 16.0 + meander;
+            float r = fract(phase);
+            float slope = r < 0.72 ? 1.0 / 0.72 : -1.0 / 0.28;
+            slope *= smoothstep(0.0, 0.08, r) * (1.0 - smoothstep(0.92, 1.0, r));
+            bump = slope * 0.16 * waves * (0.6 + 0.4 * vn(pattern * 0.05)) * (1.0 - 0.6 * t01);
+            tone = (r < 0.72 ? 0.02 : -0.03) * waves * (1.0 - t01);
+        } else {
+            // the front face: wavy strata and fine streaks of settled sand
+            float y = pattern.y + (vn(vec2(pattern.x * 0.01, 1.3)) - 0.5) * 18.0;
+            float st = vn(vec2(pattern.x * 0.004, y * 0.22));
+            float sk = vn(vec2(pattern.x * 0.03 + y * 0.05, y * 0.6));
+            bump = ((st - 0.5) * 0.35 + (sk - 0.5) * 0.15) * waves;
+            tone = (st - 0.5) * 0.08;
+        }
+        normal = normalize(normal + bitangent * bump);
+        // soft clumps and single grains
+        float grain = clamp(u_terrain_grain, 0.0, 1.0) * (1.0 - far);
+        tone += ((vn(pattern / 7.0) - 0.5) * 0.06 + (vn(pattern / 2.3) - 0.5) * 0.04) * (1.0 - far);
+        tone += (noise - 0.5) * 0.06 * grain;
+    }
 
     vec3 light_dir = normalize(vec3(-u_light_dir.x, u_light_dir.y, 2.0));
     float pixels_above_water = room.y - u_water_level + 100.0;
@@ -165,14 +227,14 @@ void main() {
     int layer = int(dpth * 30.0 - 1.0);
     vec2 cam_uv = (room - u_view_pos) / level_size;
     float shadow = level_cloud_shadow(cam_uv, max(layer, 0), u_rain, u_clouds_speed, u_light);
-    if (shadow != 1.0 && layer >= 5 && level_sprite_shadow(u_mask, cam_uv, layer, u_light_dir, u_view_pos, u_view_pos, u_zoom, u_screen))
+    if (shadow != 1.0 && layer >= 5 && !is_far && level_sprite_shadow(u_mask, cam_uv, layer, u_light_dir, u_view_pos, u_view_pos, u_zoom, u_screen))
         shadow = 1.0;
     sunlight *= 1.0 - shadow;
     sunlight *= pow(fade, 3.0);
     sunlight *= 1.0 - wetness;
 
     float ambient = (max(dot(normal, mesh_normal), 0.0) + max(normal.z * normal.z, 0.0) * 0.25) * fade;
-    float lightness = sunlight * 0.75 + ambient * 0.25;
+    float lightness = clamp(sunlight * 0.75 + ambient * 0.25 + tone, 0.0, 1.0);
     vec3 sun_color = surface_color(lightness, dpth, 1.0, behind);
     vec3 ambient_color = surface_color(lightness, dpth, 0.0, behind);
 
@@ -186,13 +248,19 @@ void main() {
     col = mix(col, pal(5, 7), clamp(-pixels_above_water / 10.0, 0.0, 1.0) * clamp(e, 0.0, 0.1));
     col += terrain_misc(0) * fade * clamp(noise2 * noise * 2.0 - 1.0, 0.0, 1.0) * u_terrain_grain * (specular * sunlight + ambient * 0.05);
     float fog_amount = level_fog_amount(u_palette, u_index, false);
-    col = mix(col, fog, clamp(e, 0.0, 1.0) * fog_amount);
-    col = mix(col, sky, clamp(e * 3.0 - 2.0, 0.0, 1.0) * u_sky_fade);
+    if (is_far) {
+        // the far dunes sink into the haze, the furthest the most
+        col = mix(col, mix(fog, sky, clamp(u_sky_fade, 0.0, 1.0) * 0.6), far);
+    } else {
+        col = mix(col, fog, clamp(e, 0.0, 1.0) * fog_amount);
+        // (half of vanilla's sky fade: the far dunes go on behind the back edge)
+        col = mix(col, sky, clamp(e * 3.0 - 2.0, 0.0, 1.0) * u_sky_fade * (u_mud.a > 0.5 ? 1.0 : 0.5));
+    }
 
     // the point LightSources
     vec3 tint = terrain_misc(1);
     vec3 added = vec3(0.0);
-    for (int j = 0; j < u_light_count; ++j) {
+    for (int j = 0; j < (is_far ? 0 : u_light_count); ++j) {
         vec3 incident = vec3(room, dpth) - vec3(u_light_params[j].xy, 7.0);
         float dist = max(length(incident), 1e-3);
         incident /= dist;
